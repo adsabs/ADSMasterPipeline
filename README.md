@@ -16,7 +16,6 @@ This pipeline is collecting results from the sub-ordinate pipelines (bibliograph
 
 ## Setup (recommended)
 
-    `$ cd adsmp/`
     `$ virtualenv python`
     `$ source python/bin/activate`
     `$ pip install -r requirements.txt`

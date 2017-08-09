@@ -36,13 +36,24 @@ def task_update_record(msg):
         task_delete_documents(msg.bibcode)
     elif status == 'active':
         type = app.get_msg_type(msg)
+        bibcodes = []
         
         # save into a database
-        record = app.update_storage(msg.bibcode, type, msg.toJSON())
-        logger.debug('Saved record: %s', record)
+        # passed msg may contain details on one bibcode or a list of bibcodes
+        if type == 'nonbib_records' or type == 'metrics_records':
+            for m in msg:
+                t = app.get_msg_type(m)
+                bibcodes.append(m.bibcode)
+                record = app.update_storage(m.bibcode, t, m.toJSON())
+                logger.debug('Saved record from list: %s', record)
+        else:
+            # here when record has a single bibcode
+            bibcodes.append(msg.bibcode)
+            record = app.update_storage(msg.bibcode, type, msg.toJSON())
+            logger.debug('Saved record: %s', record)
     
         # trigger futher processing
-        task_index_records.delay(record['bibcode'])
+        task_index_records.delay(bibcodes)
     else:
         logger.error('Received a message with unclear status: %s', msg)
 
