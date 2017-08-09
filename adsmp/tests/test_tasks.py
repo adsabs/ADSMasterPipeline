@@ -7,7 +7,7 @@ import unittest
 from adsmp import app, tasks
 from adsmp.models import Base
 from adsputils import get_date
-from adsmsg import DenormalizedRecord, FulltextUpdate
+from adsmsg import DenormalizedRecord, FulltextUpdate, NonBibRecord, NonBibRecordList, MetricsRecord, MetricsRecordList
 
 class TestWorkers(unittest.TestCase):
 
@@ -53,6 +53,46 @@ class TestWorkers(unittest.TestCase):
             tasks.task_update_record(FulltextUpdate(bibcode='2015ApJ...815..133S', body='INTRODUCTION'))
             self.assertTrue(next_task.called)
             self.assertTrue(next_task.call_args[0], ('2015ApJ...815..133S',))
+
+    def test_task_update_record_nonbib(self):
+        with patch('adsmp.tasks.task_index_records.delay') as next_task:
+            self.assertFalse(next_task.called)
+            tasks.task_update_record(NonBibRecord(bibcode='2015ApJ...815..133S'))
+            self.assertTrue(next_task.called)
+            self.assertTrue(next_task.call_args[0], ('2015ApJ...815..133S'))
+
+    def test_task_update_record_nonbib_list(self):
+        with patch('adsmp.tasks.task_index_records.delay') as next_task:
+            self.assertFalse(next_task.called)
+            recs = NonBibRecordList()
+            nonbib_data = {'bibcode': '2003ASPC..295..361M', 'refereed': False}
+            nonbib_data2 = {'bibcode': '3003ASPC..295..361Z', 'refereed': True}
+            rec = NonBibRecord(**nonbib_data)
+            rec2 = NonBibRecord(**nonbib_data2)
+            recs.nonbib_records.extend([rec._data, rec2._data])
+            tasks.task_update_record(recs)
+            self.assertTrue(next_task.called)
+            self.assertTrue(next_task.call_args[0], ('2015ApJ...815..133S', '3003ASPC..295..361Z'))
+
+    def test_task_update_record_metrics(self):
+        with patch('adsmp.tasks.task_index_records.delay') as next_task:
+            self.assertFalse(next_task.called)
+            tasks.task_update_record(MetricsRecord(bibcode='2015ApJ...815..133S'))
+            self.assertTrue(next_task.called)
+            self.assertTrue(next_task.call_args[0], ('2015ApJ...815..133S'))
+
+    def test_task_update_record_metrics_list(self):
+        with patch('adsmp.tasks.task_index_records.delay') as next_task:
+            self.assertFalse(next_task.called)
+            recs = MetricsRecordList()
+            metrics_data = {'bibcode': '2015ApJ...815..133S'}
+            metrics_data2 = {'bibcode': '3015ApJ...815..133Z'}
+            rec = MetricsRecord(**metrics_data)
+            rec2 = MetricsRecord(**metrics_data2)
+            recs.metrics_records.extend([rec._data, rec2._data])
+            tasks.task_update_record(recs)
+            self.assertTrue(next_task.called)
+            self.assertTrue(next_task.call_args[0], ('2015ApJ...815..133S', '3015ApJ...815..133Z'))
 
 
     def test_task_update_solr(self):

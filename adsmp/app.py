@@ -2,7 +2,7 @@
 from __future__ import absolute_import, unicode_literals
 from . import exceptions
 from .models import Records, ChangeLog, IdentifierMapping
-from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord
+from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session
 from sqlalchemy.orm import load_only as _load_only
@@ -20,7 +20,6 @@ class ADSMasterPipelineCelery(ADSCelery):
     
     def __init__(self, app_name, *args, **kwargs):
         ADSCelery.__init__(self, app_name, *args, **kwargs)
-        
         # this is used for bulk/efficient updates to metrics db
         self._metrics_engine = self._metrics_session = None
         if self._config.get('METRICS_SQLALCHEMY_URL', None):
@@ -200,8 +199,14 @@ class ADSMasterPipelineCelery(ADSCelery):
             return 'fulltext'
         elif isinstance(msg, NonBibRecord):
             return 'nonbib_data'
+        elif isinstance(msg, NonBibRecordList):
+            return 'nonbib_records'
         elif isinstance(msg, MetricsRecord):
             return 'metrics'
+        elif isinstance(msg, MetricsRecordList):
+            return 'metrics_records'
+
+
         else:
             raise exceptions.IgnorableException('Unkwnown type {0} submitted for update'.format(repr(msg)))
 

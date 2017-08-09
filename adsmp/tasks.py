@@ -40,8 +40,16 @@ def task_update_record(msg):
         
         # save into a database
         # passed msg may contain details on one bibcode or a list of bibcodes
-        if type == 'nonbib_records' or type == 'metrics_records':
-            for m in msg:
+        if type == 'nonbib_records':
+            for m in msg.nonbib_records:
+                m = NonBibRecord(m)
+                t = app.get_msg_type(m)
+                bibcodes.append(m.bibcode)
+                record = app.update_storage(m.bibcode, t, m.toJSON())
+                logger.debug('Saved record from list: %s', record)
+        elif type == 'metrics_records':
+            for m in msg.metrics_records:
+                m = MetricsRecord(m)
                 t = app.get_msg_type(m)
                 bibcodes.append(m.bibcode)
                 record = app.update_storage(m.bibcode, t, m.toJSON())
