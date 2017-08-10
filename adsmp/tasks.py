@@ -5,7 +5,7 @@ from adsmp import app as app_module
 from adsmp import solr_updater
 from kombu import Queue
 import math
-
+from adsmsg import MetricsRecord, NonBibRecord
 
 # ============================= INITIALIZATION ==================================== #
 
