@@ -107,8 +107,8 @@ def reindex(since=None, batch_size=None, force=False, update_solr=True, update_m
         since = get_date(since)
     
     
-    logger.info('Sending records changed since: {0}'.format(since.isoformat()))
-    ignored = sent = 0
+    logger.info('Sending records changed since: %s', since.isoformat())
+    sent = 0
     last_bibcode = None
     
     try:
@@ -119,10 +119,6 @@ def reindex(since=None, batch_size=None, force=False, update_solr=True, update_m
                 .filter(Records.updated >= since) \
                 .options(load_only(Records.bibcode, Records.updated, Records.processed)) \
                 .yield_per(100):
-                
-                if rec.processed and rec.processed < since:
-                    ignored += 1
-                    continue
                 
                 sent += 1
                 if sent % 1000 == 0:
@@ -146,7 +142,7 @@ def reindex(since=None, batch_size=None, force=False, update_solr=True, update_m
             tasks.task_index_records.delay([last_bibcode], force=force, update_solr=update_solr, update_metrics=update_metrics, 
                                            commit=force)
         
-        logger.info('Done processing %s records (%s were ignored)', sent+ignored, ignored)
+        logger.info('Done processing %s records', sent)
     except Exception, e:
         if previous_since:
             logger.error('Failed while submitting data to pipeline, resetting timestamp back to: %s', previous_since)

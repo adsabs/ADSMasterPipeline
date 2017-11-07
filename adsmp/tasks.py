@@ -128,14 +128,16 @@ def task_index_records(bibcodes, force=False, update_solr=True, update_metrics=T
     
         if is_complete or (force is True and bib_data_updated):
             
-            if force is False and all([bib_data_updated and bib_data_updated < processed,
+            if force is False and all([
+                   bib_data_updated and bib_data_updated < processed,
                    orcid_claims_updated and orcid_claims_updated < processed,
-                   nonbib_data_updated and nonbib_data_updated < processed]):
+                   nonbib_data_updated and nonbib_data_updated < processed
+                   ]):
                 logger.debug('Nothing to do for %s, it was already indexed/processed', bibcode)
                 continue
             
             if force:
-                logger.warn('Forced indexing of: %s (metadata=%s, orcid=%s, nonbib=%s, fulltext=%s, metrics=%s)' % \
+                logger.debug('Forced indexing of: %s (metadata=%s, orcid=%s, nonbib=%s, fulltext=%s, metrics=%s)' % \
                             (bibcode, bib_data_updated, orcid_claims_updated, nonbib_data_updated, fulltext_updated, \
                              metrics_updated))
 
