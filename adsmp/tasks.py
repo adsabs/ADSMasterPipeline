@@ -107,12 +107,17 @@ def task_index_records(bibcodes, force=False, update_solr=True, update_metrics=T
     trigger a solr_update (so it might happen that a document will get
     indexed twice; first with only metadata and later on incl fulltext)
 
+    This function also updates metrics and links data.  A full metrics record
+    comes from nonbib data pipeline in metrics record and it is written to 
+    metrics sql database.  A full links data record comes from data pipeline 
+    in nonbib_data and it is sent to links resolver's update endpoint.
     """
     
     if not (update_solr or update_metrics or update_links):
         raise Exception('Hmmm, I dont think I let you do NOTHING, sorry!')
 
     logger.debug('Running index-records for: %s', bibcodes)
+
     batch = []
     batch_insert = []
     batch_update = []
@@ -120,7 +125,7 @@ def task_index_records(bibcodes, force=False, update_solr=True, update_metrics=T
     links_data = []
     links_bibcodes = []
     links_url = app.conf.get('LINKS_RESOLVER_UPDATE_URL')
-    
+
     #check if we have complete record
     for bibcode in bibcodes:
         r = app.get_record(bibcode)
@@ -139,7 +144,18 @@ def task_index_records(bibcodes, force=False, update_solr=True, update_metrics=T
         processed = r.get('processed', adsputils.get_date(year_zero))
         if processed is None:
             processed = adsputils.get_date(year_zero)
-    
+
+        logger.info('update_links = %s , url = %s, nonbib record = %s ', update_links, links_url, r.get('nonbib_data'))
+        if update_links and 'nonbib_data' in r and links_url:
+            # handle data links issue, force arg does not apply
+            nb = json.loads(r.get('nonbib_data'))
+            if 'data_links_rows' in nb:
+                # send json version of DataLinksRow to update endpoint on links resolver
+                # need to optimize and not send one record at a time
+                tmp = {'bibcode': bibcode, 'data_links_rows': nb['data_links_rows']}
+                links_data.append(tmp)
+                links_bibcodes.append(bibcode)
+            
         is_complete = all([bib_data_updated, orcid_claims_updated, nonbib_data_updated])
     
         if is_complete or (force is True and bib_data_updated):
@@ -176,14 +192,6 @@ def task_index_records(bibcodes, force=False, update_solr=True, update_metrics=T
                     else:
                         batch_insert.append(m)
 
-            if update_links and 'nonbib' in r and links_url:
-                nb = json.loads(r['nonbib'])
-                if 'data_links_rows' in nb:
-                    # send json version of DataLinksRow to update endpoint on links resolver
-                    # need to optimize and not send one record at a time
-                    tmp = {'bibcode': bibcode, 'data_links_rows': nb['data_links_rows']}
-                    links_data.append(tmp)
-                    links_bibcodes.append(bibcode)
         else:
             # if forced and we have at least the bib data, index it
             if force is True:
