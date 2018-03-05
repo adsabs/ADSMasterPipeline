@@ -23,4 +23,5 @@ SOLR_URL_OLD = 'http://localhost:9984/solr/collection1/query'
 
 # url for the update endpoint of the links resolver microservice
 # new links data is sent to this url, the mircoservice updates its datastore
-LINKS_RESOLVER_UDPATE_URL = 'http://localhost:8080/update'
+# if None, updates are not sent
+LINKS_RESOLVER_UDPATE_URL = None  # 'http://localhost:8080/update'
