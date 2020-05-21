@@ -1,5 +1,6 @@
 
 from __future__ import absolute_import, unicode_literals
+import os
 import adsputils
 from adsmp import app as app_module
 from adsmp import solr_updater
@@ -8,7 +9,8 @@ from adsmsg.msg import Msg
 
 # ============================= INITIALIZATION ==================================== #
 
-app = app_module.ADSMasterPipelineCelery('master-pipeline')
+proj_home = os.path.realpath(os.path.join(os.path.dirname(__file__), '../'))
+app = app_module.ADSMasterPipelineCelery('master-pipeline', proj_home=proj_home, local_config=globals().get('local_config', {}))
 logger = app.logger
 
 app.conf.CELERY_QUEUES = (
@@ -48,7 +50,7 @@ def task_update_record(msg):
         else:
             bibcodes.append(msg.bibcode)
             logger.debug('Deleted %s, result: %s', type, app.update_storage(msg.bibcode, type, None))
-        
+
     elif status == 'active':
         # save into a database
         # passed msg may contain details on one bibcode or a list of bibcodes
@@ -80,7 +82,7 @@ def task_update_record(msg):
                 # that pipeline will eventually respond with a msg to task_update_record
                 logger.info('requesting affilation augmentation for %s', msg.bibcode)
                 app.request_aff_augment(msg.bibcode)
-    
+
     else:
         logger.error('Received a message with unclear status: %s', msg)
 
@@ -102,7 +104,7 @@ def task_index_records(bibcodes, force=False, update_solr=True, update_metrics=T
     """
     This task is (normally) called by the cronjob task
     (that one, quite obviously, is in turn started by cron)
-    
+
     Use code also called by task_rebuild_index,
     """
     reindex_records(bibcodes, force=force, update_solr=update_solr, update_metrics=update_metrics, update_links=update_links, commit=commit,
@@ -131,12 +133,12 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
 
     'fulltext' is not considered essential; but updates to fulltext will
     trigger a solr_update (so it might happen that a document will get
-    indexed twice; first with only metadata and later on incl fulltext) 
+    indexed twice; first with only metadata and later on incl fulltext)
     """
 
     if isinstance(bibcodes, basestring):
         bibcodes = [bibcodes]
-    
+
     if not (update_solr or update_metrics or update_links):
         raise Exception('Hmmm, I dont think I let you do NOTHING, sorry!')
 
@@ -147,15 +149,15 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
     links_data = []
     links_url = app.conf.get('LINKS_RESOLVER_UPDATE_URL')
 
-    
+
     #check if we have complete record
     for bibcode in bibcodes:
         r = app.get_record(bibcode)
-    
+
         if r is None:
             logger.error('The bibcode %s doesn\'t exist!', bibcode)
             continue
-    
+
 
         augments_updated = r.get('augments_updated', None)
         bib_data_updated = r.get('bib_data_updated', None)
@@ -165,16 +167,16 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
         orcid_claims_updated = r.get('orcid_claims_updated', None)
 
 
-    
+
         year_zero = '1972'
         processed = r.get('processed', adsputils.get_date(year_zero))
         if processed is None:
             processed = adsputils.get_date(year_zero)
-    
+
         is_complete = all([bib_data_updated, orcid_claims_updated, nonbib_data_updated])
-    
+
         if is_complete or (force is True and bib_data_updated):
-            
+
             if force is False and all([
                     augments_updated and augments_updated < processed,
                     bib_data_updated and bib_data_updated < processed,
@@ -183,7 +185,7 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
                    ]):
                 logger.debug('Nothing to do for %s, it was already indexed/processed', bibcode)
                 continue
-            
+
             if force:
                 logger.debug('Forced indexing of: %s (metadata=%s, orcid=%s, nonbib=%s, fulltext=%s, metrics=%s, augments=%s)' % \
                             (bibcode, bib_data_updated, orcid_claims_updated, nonbib_data_updated, fulltext_updated, \
@@ -203,7 +205,7 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
                 m = r.get('metrics', None)
                 if (m and ignore_checksums) or (m and r.get('metrics_checksum', None) != app.checksum(m)):
                     m['bibcode'] = bibcode
-                    logger.debug('Got metrics: %s', m) 
+                    logger.debug('Got metrics: %s', m)
                     if r.get('processed'):
                         batch_update.append(m)
                     else:
@@ -226,9 +228,9 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
                             (bibcode, bib_data_updated, orcid_claims_updated, nonbib_data_updated, fulltext_updated, \
                              metrics_updated, augments_updated))
     if batch or batch_insert or batch_update or links_data:
-        app.update_remote_targets(solr=batch, metrics=(batch_insert, batch_update), links=links_data, 
+        app.update_remote_targets(solr=batch, metrics=(batch_insert, batch_update), links=links_data,
                                   commit_solr=commit, solr_urls=solr_targets)
-    
+
 
 
 @app.task(queue='delete-records')

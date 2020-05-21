@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import os
 import adsputils
 import argparse
 import warnings
@@ -18,9 +19,18 @@ from adsmp import tasks, solr_updater, validate
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
-app = tasks.app
-logger = setup_logging('run.py')
+# ============================= INITIALIZATION ==================================== #
 
+from adsputils import setup_logging, load_config
+proj_home = os.path.realpath(os.path.dirname(__file__))
+config = load_config(proj_home=proj_home)
+logger = setup_logging('run.py', proj_home=proj_home,
+                        level=config.get('LOGGING_LEVEL', 'INFO'),
+                        attach_stdout=config.get('LOG_STDOUT', False))
+
+app = tasks.app
+
+# =============================== FUNCTIONS ======================================= #
 
 def _print_record(bibcode):
     with app.session_scope() as session:
@@ -182,7 +192,7 @@ def rebuild_collection(collection_name):
     if not rabbitmq.is_alive('master_pipeline'):
         logger.error('failed to connect to rabbitmq with PyRabbit to monitor queue')
         sys.exit(1)
-    
+
     now = get_date()
     if collection_name.startswith('http'):
         solr_urls = [collection_name]
@@ -193,7 +203,7 @@ def rebuild_collection(collection_name):
             parts = u.split('/')
             parts[-2] = collection_name
             solr_urls.append('/'.join(parts))
-    
+
     logger.info('Sending all records to: %s', ';'.join(solr_urls))
     sent = 0
 
@@ -222,7 +232,7 @@ def rebuild_collection(collection_name):
                                            update_metrics=False, update_links=False,
                                            ignore_checksums=True, solr_targets=solr_urls)
         _tasks.append(t)
-        
+
     logger.info('Done queueing bibcodes for rebuilding collection %s', (collection_name))
     # now wait for queue to empty
     queue_length = 1
@@ -231,7 +241,7 @@ def rebuild_collection(collection_name):
         stime = queue_length * 0.1
         logger.info('Waiting %s for rebuild-collection tasks to finish, queue_length %s, sent %s' % (stime, queue_length, sent))
         time.sleep(stime)
-        
+
     logger.info('Done rebuilding collection %s, sent %s records', (collection_name, sent))
 
 
@@ -333,7 +343,7 @@ if __name__ == '__main__':
                        default='collection2',
                        action='store',
                        help='name of solr collection, currently only used by rebuild collection')
-    parser.add_argument('-x', 
+    parser.add_argument('-x',
                         '--rebuild-collection',
                         action='store_true',
                         default=False,
@@ -399,7 +409,7 @@ if __name__ == '__main__':
                         # aff values omes from bib pipeline
 
                         app.request_aff_augment(bibcode)
-    
+
     elif args.rebuild_collection:
         rebuild_collection(args.solr_collection)
     elif args.reindex:

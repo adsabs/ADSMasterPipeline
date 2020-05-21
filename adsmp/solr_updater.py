@@ -1,11 +1,25 @@
+import os
 import requests
 import json
-from adsputils import setup_logging, date2solrstamp
+from adsputils import date2solrstamp
 import sys
 import time
 from collections import OrderedDict
 
-logger = setup_logging('solr_updater')
+# ============================= INITIALIZATION ==================================== #
+# - Use app logger:
+#import logging
+#logger = logging.getLogger('master-pipeline')
+# - Or individual logger for this file:
+from adsputils import setup_logging, load_config
+proj_home = os.path.realpath(os.path.join(os.path.dirname(__file__), '../'))
+config = load_config(proj_home=proj_home)
+logger = setup_logging(__name__, proj_home=proj_home,
+                        level=config.get('LOGGING_LEVEL', 'INFO'),
+                        attach_stdout=config.get('LOG_STDOUT', False))
+
+
+# =============================== FUNCTIONS ======================================= #
 
 
 def extract_metrics_pipeline(data, solrdoc):
@@ -71,7 +85,7 @@ def extract_data_pipeline(data, solrdoc):
 
 
 def extract_augments_pipeline(db_augments, solrdoc):
-    """retrieve expected agumented affiliation values 
+    """retrieve expected agumented affiliation values
 
     aff is a solr virtual field so it should never be set"""
     if db_augments is None or len(db_augments) == 0:
@@ -296,7 +310,7 @@ def transform_json_record(db_record):
             else:
                 if target is None:
                     continue
-                
+
                 out.update(db_record.get(field))
 
         elif field.startswith('#'):

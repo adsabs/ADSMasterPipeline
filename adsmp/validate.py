@@ -1,8 +1,7 @@
+import os
 import time
 import requests
 from difflib import SequenceMatcher
-
-from adsputils import load_config, setup_logging
 
 
 class Validate():
@@ -14,9 +13,16 @@ class Validate():
         self.ignore_fields = ignore_fields
         self.new_fields = new_fields
 
-        self.logger = setup_logging('validate','INFO')
-        self.config = {}
-        self.config.update(load_config())
+        # - Use app logger:
+        #import logging
+        #self.logger = logging.getLogger('master-pipeline')
+        # - Or individual logger for this file:
+        from adsputils import setup_logging, load_config
+        proj_home = os.path.realpath(os.path.join(os.path.dirname(__file__), '../'))
+        self.config = load_config(proj_home=proj_home)
+        self.logger = setup_logging(__name__, proj_home=proj_home,
+                                level=self.config.get('LOGGING_LEVEL', 'INFO'),
+                                attach_stdout=self.config.get('LOG_STDOUT', False))
 
     def compare_solr(self, bibcodelist=None,filename=None):
 
