@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python2
 # -*- coding: utf-8 -*-
 
 from adsmp import app, tasks
@@ -58,7 +58,6 @@ def main():
         for b in args.bibcodes:
             tasks.task_route_record.delay(b)
     
-
 
 if __name__ == '__main__':
     main()

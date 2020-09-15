@@ -72,7 +72,7 @@ def run():
         data['start'] = now
         write_lockfile(lockfile, data)
         
-        command = 'python run.py --rebuild-collection --solr-collection collection2 >> %s/logs/reindex.log' % (homedir)
+        command = 'python2 run.py --rebuild-collection --solr-collection collection2 >> %s/logs/reindex.log' % (homedir)
         retcode, stdout, stderr = execute(command, cwd=homedir)
 
         if retcode != 0:
@@ -146,7 +146,6 @@ def run():
         data['last-exception'] = str(e)
         write_lockfile(lockfile, data)    
 
-    
 
 def execute(command, **kwargs):
     p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE, **kwargs)
@@ -167,7 +166,7 @@ def write_lockfile(lockfile, data):
 def verify_collection2_size(data):
     if data['index'].get('numDocs', 0) <= 14150713:
         raise Exception('Too few documents in the new index: %s' % data['index'].get('numDocs', 0))
-    if data['index'].get('sizeInBytes', 0) / (1024*1024*1024.0) <= 146.0: # index size at least 146GB
+    if data['index'].get('sizeInBytes', 0) / (1024*1024*1024.0) <= 146.0:  # index size at least 146GB
         raise Exception('The index is suspiciously small: %s' % (data['index'].get('sizeInBytes', 0) / (1024*1024*1024.0)))
 
 

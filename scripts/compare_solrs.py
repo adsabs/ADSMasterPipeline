@@ -8,7 +8,7 @@ import argparse
 import json
 import cPickle as pickle
 
-# python compare_solrs.py --solr-endpoints http://adsqb.cfa.harvard.edu:9983/solr/BumblebeeETL/select http://adsqb.cfa.harvard.edu:9983/solr/collection1/select --bibcode stdin fields < testBibcodes.txt
+# python2 compare_solrs.py --solr-endpoints http://adsqb.cfa.harvard.edu:9983/solr/BumblebeeETL/select http://adsqb.cfa.harvard.edu:9983/solr/collection1/select --bibcode stdin fields < testBibcodes.txt
 
 from adsputils import setup_logging
 logger = setup_logging('compare-solr', level='DEBUG')
