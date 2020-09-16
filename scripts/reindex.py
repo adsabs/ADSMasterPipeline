@@ -2,7 +2,7 @@
 # it will automatically activate it (by swapping cores)
 
 import datetime
-import os 
+import os
 import sys
 import pickle
 import requests
@@ -54,9 +54,9 @@ def run():
 
         if set(cores['status'].keys()) != set(['collection1', 'collection2']):
             raise Exception('we dont have both cores available')
-        
+
         assert cores['status']['collection2']['dataDir'] != cores['status']['collection1']['dataDir']
-        
+
         logger.info('We are starting the indexing into collection2; once finished; we will automatically activate the new core')
 
         logger.info('First, we will delete all documents from collection2')
@@ -67,24 +67,24 @@ def run():
         cores = requests.get(cores_url + '?wt=json').json()
         if set(cores['status'].keys()) != set(['collection1', 'collection2']):
             raise Exception('We dont have both cores available')
-        
+
         now = time.time()
         data['start'] = now
         write_lockfile(lockfile, data)
-        
-        command = 'python run.py --rebuild-collection --solr-collection collection2 >> %s/logs/reindex.log' % (homedir)
+
+        command = 'python2 run.py --rebuild-collection --solr-collection collection2 >> %s/logs/reindex.log' % (homedir)
         retcode, stdout, stderr = execute(command, cwd=homedir)
 
         if retcode != 0:
             data['error'] = '%s failed with retcode=%s\nstderr:\n%s' % (command, retcode, stderr)
             logger.warn('stderr=%s' % (stderr))
             raise
-        
+
         logger.info('Successfully finished indexing in %s secs' % (time.time() - now))
 
         # wait for solr workers to complete final messages
         monitor_solr_writes()
-        
+
         # issue commit
         commit_time = datetime.datetime.utcnow()
         r = requests.get(update_url + '?commit=true&waitSearcher=false')
@@ -122,31 +122,31 @@ def run():
         logger.info('core info is: {}'.format(cores))
         verify_collection2_size(cores['status']['collection2'])
         logger.info('Successfully verified the collection')
-        
+
         # all is well; swap the cores!
         r = requests.get(cores_url + '?action=SWAP&core=collection2&other=collection1&wt=json')
         r.raise_for_status()
         logger.info('Swapped collection1 with collection2')
-        
+
         logger.info('Going to sleep for few secs...')
         time.sleep(5)
-        
+
         # verify the new core is loaded
         # new_cores = requests.get(cores_url + '?wt=json').json()
         # assert cores['status']['collection2']['dataDir'] == new_cores['status']['collection1']['dataDir']
         # logger.info('Verified the new collection is in place')
-        
-        
+
+
         logger.info('Deleting the lock; congratulations on your new solr collection!')
         os.remove(lockfile)
-        
+
     except Exception, e:
         logger.error('Failed; we will keep the process permanently locked: %s' % (e))
         sys.stderr.write('Failed. Please see logs for more details')
         data['last-exception'] = str(e)
-        write_lockfile(lockfile, data)    
+        write_lockfile(lockfile, data)
 
-    
+
 
 def execute(command, **kwargs):
     p = Popen(command, shell=True, stdout=PIPE, stderr=PIPE, **kwargs)
@@ -185,7 +185,7 @@ def str_to_datetime(s):
 
 def monitor_solr_writes():
     """detect when master pipeline workers have completed
-    
+
     we wait for the number of pending docs on collection2 to not change for 2 minutes
     docsPending is available from the mbeans
     """
@@ -216,6 +216,6 @@ def monitor_solr_writes():
                 time.sleep(30)
     logger.info('completed monitoring of docsPending on solr')
 
-    
+
 if __name__ == '__main__':
     run()
