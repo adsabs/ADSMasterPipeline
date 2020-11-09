@@ -16,6 +16,8 @@ logger = app.logger
 
 app.conf.CELERY_QUEUES = (
     Queue('update-record', app.exchange, routing_key='update-record'),
+    Queue('update-nonbib', app.exchange, routing_key='update-nonbib'),
+    Queue('update-bib', app.exchange, routing_key='update-bib'),
     Queue('index-records', app.exchange, routing_key='index-records'),
     Queue('rebuild-index', app.exchange, routing_key='rebuild-index'),
     Queue('delete-records', app.exchange, routing_key='delete-records'),
@@ -23,6 +25,16 @@ app.conf.CELERY_QUEUES = (
 
 
 # ============================= TASKS ============================================= #
+
+@app.task(queue='update-nonbib')
+def task_update_nonbib(msg):
+    task_update_record(msg)
+
+    
+@app.task(queue='update-bib')
+def task_update_bib(msg):
+    task_update_record(msg)
+
 
 @app.task(queue='update-record')
 def task_update_record(msg):
