@@ -1,12 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from mock import patch
-from mock import mock_open
 import mock
 import unittest
 import os
-import json
 import sys
 
 import adsputils
@@ -14,6 +11,7 @@ from adsmp import app, models
 from adsmp.models import Base, MetricsBase
 import testing.postgresql
 from sqlalchemy.exc import IntegrityError
+
 
 class TestAdsOrcidCelery(unittest.TestCase):
     """
@@ -48,18 +46,15 @@ class TestAdsOrcidCelery(unittest.TestCase):
         MetricsBase.metadata.bind = self.app._metrics_engine
         MetricsBase.metadata.create_all()
 
-    
     def tearDown(self):
         unittest.TestCase.tearDown(self)
         Base.metadata.drop_all()
         MetricsBase.metadata.drop_all()
         self.app.close_app()
 
-    
     def test_app(self):
         assert self.app._config.get('SQLALCHEMY_URL') == 'sqlite:///'
         assert self.app.conf.get('SQLALCHEMY_URL') == 'sqlite:///'
-
 
     def test_update_processed_timestamp(self):
         self.app.update_storage('abc', 'bib_data', {'bibcode': 'abc', 'hey': 1})
@@ -100,13 +95,12 @@ class TestAdsOrcidCelery(unittest.TestCase):
         self.assertTrue(r['processed'])
         self.assertEqual(r['status'], 'solr-failed')
 
-
-    def test_reindex(self):
+    def test_index_solr(self):
         self.app.update_storage('abc', 'bib_data', {'bibcode': 'abc', 'hey': 1})
         self.app.update_storage('foo', 'bib_data', {'bibcode': 'foo', 'hey': 1})
         
         with mock.patch('adsmp.solr_updater.update_solr', return_value=[200]):
-            failed = self.app.reindex([{'bibcode': 'abc'}, 
+            failed = self.app.index_solr([{'bibcode': 'abc'}, 
                                        {'bibcode': 'foo'}], 
                                       ['http://solr1'])
             self.assertTrue(len(failed) == 0)
@@ -121,7 +115,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with mock.patch('adsmp.solr_updater.update_solr') as us, \
                 mock.patch.object(self.app, 'update_processed_timestamp') as upt:
             us.side_effect = [[503], [200], [200]]
-            failed = self.app.reindex([{'bibcode': 'abc'}, 
+            failed = self.app.index_solr([{'bibcode': 'abc'}, 
                                        {'bibcode': 'foo'}], 
                                       ['http://solr1'])
             self.assertTrue(len(failed) == 0)
@@ -139,7 +133,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with mock.patch('adsmp.solr_updater.update_solr') as us, \
                 mock.patch.object(self.app, 'update_processed_timestamp') as upt:
             us.side_effect = [[503, 503], Exception('body failed'), 200, Exception('body failed'), 200]
-            failed = self.app.reindex([{'bibcode': 'abc', 'body': 'bad body'}, 
+            failed = self.app.index_solr([{'bibcode': 'abc', 'body': 'bad body'}, 
                                        {'bibcode': 'foo', 'body': 'bad body'}], 
                                       ['http://solr1'])
             self.assertEqual(us.call_count, 5)
@@ -160,7 +154,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             us.side_effect = [[503, 503], 
                               Exception('body failed'), Exception('body failed'), 
                               Exception('body failed'), Exception('body failed')]
-            failed = self.app.reindex([{'bibcode': 'abc', 'body': 'bad body'}, 
+            failed = self.app.index_solr([{'bibcode': 'abc', 'body': 'bad body'}, 
                                        {'bibcode': 'foo', 'body': 'bad body'}], 
                                       ['http://solr1'])
             self.assertEqual(us.call_count, 5)
@@ -171,7 +165,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with mock.patch('adsmp.solr_updater.update_solr') as us, \
                 mock.patch.object(self.app, 'update_processed_timestamp') as upt:
             us.side_effect = [[503, 503], Exception('body failed'), Exception('failed'), Exception('failed')]
-            failed = self.app.reindex([{'bibcode': 'abc', 'body': 'bad body'}, 
+            failed = self.app.index_solr([{'bibcode': 'abc', 'body': 'bad body'}, 
                                        {'bibcode': 'foo', 'body': 'good body'}], 
                                       ['http://solr1'])
             self.assertEqual(us.call_count, 4)
@@ -187,7 +181,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with mock.patch('adsmp.solr_updater.update_solr') as us, \
                 mock.patch.object(self.app, 'update_processed_timestamp') as upt:
             us.side_effect = [[503, 503], Exception('body failed'), [200]]
-            failed = self.app.reindex([{'bibcode': 'abc', 'body': 'bad body'}, 
+            failed = self.app.index_solr([{'bibcode': 'abc', 'body': 'bad body'}, 
                                        {'bibcode': 'foo', 'body': 'good body'}], 
                                       ['http://solr1'])
             self.assertEqual(us.call_count, 4)
@@ -199,21 +193,20 @@ class TestAdsOrcidCelery(unittest.TestCase):
                 call_dict = "{'body': 'good body', 'bibcode': 'foo'}"
             self.assertEqual(str(us.call_args_list[-1]), "call([%s], ['http://solr1'], commit=False, ignore_errors=False)" % call_dict)
 
-
     def test_update_metrics(self):
         self.app.update_storage('abc', 'metrics', {
                      'author_num': 1,
                      'bibcode': 'abc',
                     })
         self.app.update_storage('foo', 'metrics', {
-                    'bibcode': 'foo', 
-                    'citation_num': 6
+                    'bibcode': 'foo',
+                    'citation_num': 6,
+                    'author_num': 3,
                     })
         
-        batch_insert = [self.app.get_record('abc')['metrics']]
-        batch_update = [self.app.get_record('foo')['metrics']]
+        batch_metrics = [self.app.get_record('abc')['metrics'], self.app.get_record('foo')['metrics']]
         
-        bibc, errs = self.app.update_metrics_db(batch_insert, batch_update)
+        bibc, errs = self.app.update_metrics_db(batch_metrics)
         self.assertEqual(bibc, ['abc', 'foo'])
         
         for x in ['abc', 'foo']:
@@ -221,7 +214,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             self.assertFalse(r['processed'])
             self.assertTrue(r['metrics_processed'])
             self.assertFalse(r['solr_processed'])
-
+            
     def test_delete_metrics(self):
         """Makes sure we can delete a metrics record by bibcode"""
         self.app.update_storage('abc', 'metrics', {
@@ -229,7 +222,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
                      'bibcode': 'abc',
                     })
         r = self.app.get_record('abc')
-        self.app.update_metrics_db([r], [])
+        self.app.update_metrics_db([r])
         m = self.app.get_metrics('abc')
         self.assertTrue(m, 'intialized metrics data')
         self.app.metrics_delete_by_bibcode('abc')
@@ -301,75 +294,6 @@ class TestAdsOrcidCelery(unittest.TestCase):
             self.assertTrue(ref.target, 'def')
             
         self.assertTrue(self.app.get_changelog('abc'), [{'target': u'def', 'key': u'abc'}])
-
-    def test_solr_tweak(self):
-        """use hard coded string to verify app.tweaks is set from file"""
-        test_tweak = {
-            "docs": [
-                {
-                    "aff": [
-                        "Purdue University (United States)",
-                        "Purdue University (United States)",
-                        "Purdue University (United States)"
-                    ],
-                    "aff_abbrev": [
-                        "NA",
-                        "NA",
-                        "NA"
-                    ],
-                    "aff_canonical": [
-                        "Not Matched",
-                        "Not Matched",
-                        "Not Matched"
-                    ],
-                    "aff_facet_hier": [],
-                    "author": [
-                        "Mikhail, E. M.",
-                        "Kurtz, M. K.",
-                        "Stevenson, W. H."
-                    ],
-                    "bibcode": "1971SPIE...26..187M",
-                    "title": [
-                        "Metric Characteristics Of Holographic Imagery"
-                    ]
-                }
-                ]
-            }
-        if sys.version_info > (3,):
-            open_func = 'builtins.open'
-        else:
-            open_func = '__builtin__.open'
-        with patch(open_func,
-                   mock_open(read_data=json.dumps(test_tweak))):
-            self.app.load_tweak_file('foo')
-            self.assertTrue("1971SPIE...26..187M" in self.app.tweaks)
-            v = test_tweak['docs'][0]
-            v.pop('bibcode')
-            self.assertEqual(v,
-                             self.app.tweaks['1971SPIE...26..187M'])
-
-        # verify tweaks are merged into solr record
-        # reindex changed the passed dict
-        with mock.patch('adsmp.solr_updater.update_solr', return_value=[200]):
-            doc = {'bibcode': '1971SPIE...26..187M',
-                   'abstract': 'test abstract'}
-            failed = self.app.reindex([doc], ['http://solr1'])
-            self.assertTrue(len(failed) == 0)
-            self.assertTrue('abstract' in doc)
-            self.assertTrue('aff' in doc)
-            self.assertTrue('aff_abbrev' in doc)
-            self.assertTrue('aff_canonical' in doc)
-            self.assertTrue('aff_facet_hier' in doc)
-            self.assertTrue('title' in doc)
-            self.assertEqual('1971SPIE...26..187M', doc['bibcode'])
-
-    def test_read_tweak_files(self):
-        """validates code that processes directory of tweak files"""
-        with mock.patch('os.path.isdir', return_value=True), \
-             mock.patch('os.listdir', return_value=['foo.json', 'bar.txt']), \
-             mock.patch('adsmp.app.ADSMasterPipelineCelery.load_tweak_file') as m:
-            self.app.load_tweak_files()
-            m.assert_called_once_with('foo.json')
 
     def test_generate_links_for_resolver(self):
         only_nonbib = {'bibcode': 'asdf',

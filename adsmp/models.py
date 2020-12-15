@@ -19,11 +19,12 @@ MetricsBase = declarative_base()
 
 class UTCDateTime(types.TypeDecorator):
     impl = TIMESTAMP
+    
     def process_bind_param(self, value, engine):
         if isinstance(value, basestring):
             return get_date(value).astimezone(tzutc())
         elif value is not None:
-            return value.astimezone(tzutc()) # will raise Error is not datetime
+            return value.astimezone(tzutc())  # will raise Error is not datetime
 
     def process_result_value(self, value, engine):
         if value is not None:
@@ -104,7 +105,7 @@ class Records(Base):
                     doc[f] = get_date(getattr(self, f))
                 else:
                     doc[f] = None
-            for f in Records._json_fields: # json
+            for f in Records._json_fields:  # json
                 if load_only and f not in load_only:
                     continue
                 v = getattr(self, f, None)
@@ -124,7 +125,6 @@ class ChangeLog(Base):
     oldvalue = Column(Text)
     permanent = Column(Boolean, default=False)
 
-
     def toJSON(self):
         return {'id': self.id,
                 'key': self.key,
@@ -141,7 +141,7 @@ class IdentifierMapping(Base):
     target = Column(String(255))
 
     def toJSON(self):
-        return {'key': self.key, 'target': self.target }
+        return {'key': self.key, 'target': self.target}
 
 
 ## This definition is copied directly from: https://github.com/adsabs/metrics_service/blob/master/service/models.py
@@ -157,7 +157,7 @@ class MetricsModel(MetricsBase):
     author_num = Column(Integer, default=1, server_default=text("1::integer"))
     citations = Column(postgresql.ARRAY(String), default=[], server_default=text("(ARRAY[]::varchar[])"))
     citation_num = Column(Integer, default=0)
-    downloads = Column(postgresql.ARRAY(Integer),default=[])
+    downloads = Column(postgresql.ARRAY(Integer), default=[])
     reads = Column(postgresql.ARRAY(Integer), default=[])
     refereed = Column(Boolean, default=False)
     refereed_citations = Column(postgresql.ARRAY(String), default=[])
@@ -167,21 +167,20 @@ class MetricsModel(MetricsBase):
     rn_citation_data = Column(postgresql.JSON)
     modtime = Column(DateTime)
     
-    
     def toJSON(self):
-        return dict(id = self.id,
-            bibcode = self.bibcode,
-            an_citations = self.an_citations,
-            an_refereed_citations = self.an_refereed_citations,
-            author_num = self.author_num,
-            citations = self.citations,
-            citation_num = self.citation_num,
-            downloads = self.downloads,
-            reads = self.reads,
-            refereed = self.refereed,
-            refereed_citations = self.refereed_citations,
-            refereed_citation_num = self.refereed_citation_num,
-            reference_num = self.reference_num,
-            rn_citations = self.rn_citations,
-            rn_citation_data = self.rn_citation_data,
-            modtime = self.modtime and get_date(self.modtime).isoformat() or None)  
+        return dict(id=self.id,
+                    bibcode=self.bibcode,
+                    an_citations=self.an_citations,
+                    an_refereed_citations=self.an_refereed_citations,
+                    author_num=self.author_num,
+                    citations=self.citations,
+                    citation_num=self.citation_num,
+                    downloads=self.downloads,
+                    reads=self.reads,
+                    refereed=self.refereed,
+                    refereed_citations=self.refereed_citations,
+                    refereed_citation_num=self.refereed_citation_num,
+                    reference_num=self.reference_num,
+                    rn_citations=self.rn_citations,
+                    rn_citation_data=self.rn_citation_data,
+                    modtime=self.modtime and get_date(self.modtime).isoformat() or None)

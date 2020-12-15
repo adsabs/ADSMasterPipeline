@@ -4,22 +4,13 @@ import json
 from adsputils import date2solrstamp
 import sys
 import time
-from collections import OrderedDict
 
-# ============================= INITIALIZATION ==================================== #
-# - Use app logger:
-#import logging
-#logger = logging.getLogger('master-pipeline')
-# - Or individual logger for this file:
 from adsputils import setup_logging, load_config
 proj_home = os.path.realpath(os.path.join(os.path.dirname(__file__), '../'))
 config = load_config(proj_home=proj_home)
 logger = setup_logging(__name__, proj_home=proj_home,
-                        level=config.get('LOGGING_LEVEL', 'INFO'),
-                        attach_stdout=config.get('LOG_STDOUT', False))
-
-
-# =============================== FUNCTIONS ======================================= #
+                       level=config.get('LOGGING_LEVEL', 'INFO'),
+                       attach_stdout=config.get('LOG_STDOUT', False))
 
 
 def extract_metrics_pipeline(data, solrdoc):
@@ -110,6 +101,7 @@ def extract_augments_pipeline(db_augments, solrdoc):
             'aff_raw': db_augments.get('aff_raw', None),
             'institution': db_augments.get('institution', None)}
 
+
 def modify_affiliations(data, solrdoc):
     """Make sure that preference is given to affiliations extracted
     by augment pipeline
@@ -119,9 +111,10 @@ def modify_affiliations(data, solrdoc):
     if solrdoc.get('aff', None):
         solrdoc['aff_raw'] = solrdoc.get('aff', None)
 
+
 def extract_fulltext(data, solrdoc):
     out = {}
-    for x,f in (('body', 'body'), ('acknowledgements', 'ack'), ('facility', 'facility')):
+    for x, f in (('body', 'body'), ('acknowledgements', 'ack'), ('facility', 'facility')):
         if x in data:
             out[f] = data[x]
     return out
@@ -138,6 +131,7 @@ def generate_hier_facet(*levels):
         tmpl += '/{}'
         i += 1
     return out
+
 
 def get_orcid_claims(data, solrdoc):
     out = {}
@@ -175,14 +169,17 @@ def map_simbad_type(otype):
     else:
         return u'Other'
 
+
 _o_types = {}
-[_o_types.__setitem__(x, u'Galaxy') for x in ["G","GClstr","GGroup","GPair","GTrpl","G_Lens","PofG"]]
-[_o_types.__setitem__(x, u'Nebula') for x in ['Neb','PN','RfN']]
+[_o_types.__setitem__(x, u'Galaxy') for x in ["G", "GClstr", "GGroup", "GPair", "GTrpl", "G_Lens", "PofG"]]
+[_o_types.__setitem__(x, u'Nebula') for x in ['Neb', 'PN', 'RfN']]
 [_o_types.__setitem__(x, u'HII Region') for x in ['HII']]
 [_o_types.__setitem__(x, u'X-ray') for x in ['X']]
 [_o_types.__setitem__(x, u'Radio') for x in ['Maser', 'HI']]
 [_o_types.__setitem__(x, u'Infrared') for x in ['IrS']]
-[_o_types.__setitem__(x, u'Star') for x in ['Blue*','C*','exG*','Flare*','Nova','Psr','Red*','SN','SNR','V*','VisS','WD*','WR*']]
+[_o_types.__setitem__(x, u'Star') for x in ['Blue*', 'C*', 'exG*', 'Flare*', 'Nova', 'Psr', 'Red*', 'SN', 'SNR', 'V*', 'VisS', 'WD*', 'WR*']]
+
+
 def map_ned_type(otype):
     """
     Maps a native NED object type to a subset of basic classes
@@ -200,7 +197,6 @@ def map_ned_type(otype):
         return _o_types.get(otype, u'Other')
 
 
-
 # When building SOLR record, we grab data from the database and insert them
 # into the dictionary with the following conventions:
 
@@ -209,11 +205,13 @@ def map_ned_type(otype):
 # None == ignore the value completely
 # function == receives the data (and solr doc as built already), should return dict
 fmap = dict(metadata_mtime='bib_data_updated',
-           nonbib_mtime='nonbib_data_updated',
-           fulltext_mtime='fulltext_updated',
-           orcid_mtime='orcid_claims_updated',
-           metrics_mtime='metrics_updated'
-           )
+            nonbib_mtime='nonbib_data_updated',
+            fulltext_mtime='fulltext_updated',
+            orcid_mtime='orcid_claims_updated',
+            metrics_mtime='metrics_updated'
+)
+
+
 def get_timestamps(db_record, out):
     out = {}
     last_update = None
@@ -235,7 +233,7 @@ DB_COLUMN_DESTINATIONS = [
     ('metrics', extract_metrics_pipeline),
     ('id', 'id'),
     ('fulltext', extract_fulltext),
-    ('#timestamps', get_timestamps), # use 'id' to be always called
+    ('#timestamps', get_timestamps),  # use 'id' to be always called
     ('augments', extract_augments_pipeline),  # over aff field, adds aff_*
     ('#affiliations', modify_affiliations)
     ]
@@ -247,10 +245,10 @@ def delete_by_bibcodes(bibcodes, urls):
 
     deleted = []
     failed = []
-    headers = {"Content-Type":"application/json"}
+    headers = {"Content-Type": "application/json"}
     for bibcode in bibcodes:
         logger.info("Delete: %s" % bibcode)
-        data = json.dumps({'delete':{"query":'bibcode:"%s"' % bibcode}})
+        data = json.dumps({'delete': {"query": 'bibcode:"%s"' % bibcode}})
         i = 0
         for url in urls:
             r = requests.post(url, headers=headers, data=data)
@@ -261,7 +259,6 @@ def delete_by_bibcodes(bibcodes, urls):
         else:
             failed.append(bibcode)
     return (deleted, failed)
-
 
 
 def update_solr(json_records, solr_urls, ignore_errors=False, commit=False):
@@ -293,7 +290,6 @@ def update_solr(json_records, solr_urls, ignore_errors=False, commit=False):
     return out
 
 
-
 def transform_json_record(db_record):
     out = {'bibcode': db_record['bibcode']}
 
@@ -313,7 +309,7 @@ def transform_json_record(db_record):
         if db_record.get(field, None):
             if target:
                 if callable(target):
-                    x = target(db_record.get(field), out) # in the interest of speed, don't create copy of out
+                    x = target(db_record.get(field), out)  # in the interest of speed, don't create copy of out
                     if x:
                         out.update(x)
                 else:
@@ -326,7 +322,7 @@ def transform_json_record(db_record):
 
         elif field.startswith('#'):
             if callable(target):
-                x = target(db_record, out) # in the interest of speed, don't create copy of out
+                x = target(db_record, out)  # in the interest of speed, don't create copy of out
                 if x:
                     out.update(x)
 

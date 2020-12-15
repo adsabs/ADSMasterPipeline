@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import os
+import sys
 import adsputils
 import argparse
 import warnings
@@ -8,44 +9,42 @@ import json
 from requests.packages.urllib3 import exceptions
 warnings.simplefilter('ignore', exceptions.InsecurePlatformWarning)
 import time
-import requests
-from difflib import SequenceMatcher
 from pyrabbit.api import Client as PyRabbitClient
 from urlparse import urlparse
 
-from adsputils import setup_logging, get_date
+from adsputils import setup_logging, get_date, load_config
 from adsmp.models import KeyValue, Records
 from adsmp import tasks, solr_updater, validate
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
 # ============================= INITIALIZATION ==================================== #
-
-from adsputils import setup_logging, load_config
 proj_home = os.path.realpath(os.path.dirname(__file__))
 config = load_config(proj_home=proj_home)
 logger = setup_logging('run.py', proj_home=proj_home,
-                        level=config.get('LOGGING_LEVEL', 'INFO'),
-                        attach_stdout=config.get('LOG_STDOUT', False))
+                       level=config.get('LOGGING_LEVEL', 'INFO'),
+                       attach_stdout=config.get('LOG_STDOUT', False))
 
 app = tasks.app
 
 # =============================== FUNCTIONS ======================================= #
 
+
 def _print_record(bibcode):
     with app.session_scope() as session:
-        print 'stored by us:', bibcode
+        print('stored by us:', bibcode)
         r = session.query(Records).filter_by(bibcode=bibcode).first()
         if r:
-            print json.dumps(r.toJSON(), indent=2, default=str, sort_keys=True)
+            print(json.dumps(r.toJSON(), indent=2, default=str, sort_keys=True))
         else:
-            print 'None'
-        print '-' * 80
+            print('None')
+        print('-' * 80)
 
-        print 'as seen by SOLR'
+        print('as seen by SOLR')
         solr_doc = solr_updater.transform_json_record(r.toJSON())
-        print json.dumps(solr_doc, indent=2, default=str, sort_keys=True)
-        print '=' * 80
+        print(json.dumps(solr_doc, indent=2, default=str, sort_keys=True))
+        print('=' * 80)
+
 
 def diagnostics(bibcodes):
     """
@@ -55,7 +54,7 @@ def diagnostics(bibcodes):
     """
 
     if not bibcodes:
-        print 'Printing 3 randomly selected records (if any)'
+        print('Printing 3 randomly selected records (if any)')
         bibcodes = []
         with app.session_scope() as session:
             for r in session.query(Records).limit(3).all():
@@ -64,25 +63,23 @@ def diagnostics(bibcodes):
     for b in bibcodes:
         _print_record(b)
 
-
     with app.session_scope() as session:
         for x in dir(Records):
             if isinstance(getattr(Records, x), InstrumentedAttribute):
-                print '# of %s' % x, session.query(Records).filter(getattr(Records, x) != None).count()
+                print('# of %s' % x, session.query(Records).filter(getattr(Records, x) != None).count())
 
-    print 'sending test bibcodes to the queue for reindexing'
+    print('sending test bibcodes to the queue for reindexing')
     tasks.task_index_records.delay(bibcodes, force=True, update_solr=True, update_metrics=True, update_links=True,
                                    ignore_checksums=True)
 
 
-
 def print_kvs():
     """Prints the values stored in the KeyValue table."""
-    print 'Key, Value from the storage:'
-    print '-' * 80
+    print('Key, Value from the storage:')
+    print('-' * 80)
     with app.session_scope() as session:
         for kv in session.query(KeyValue).order_by('key').yield_per(100):
-            print kv.key, kv.value
+            print(kv.key, kv.value)
 
 
 def reindex(since=None, batch_size=None, force_indexing=False, update_solr=True, update_metrics=True,
@@ -97,12 +94,11 @@ def reindex(since=None, batch_size=None, force_indexing=False, update_solr=True,
         key = 'last.reindex.normal'
 
     if update_solr and update_metrics:
-        pass # default
+        pass  # default
     elif update_solr:
         key = key + '.solr-only'
     else:
         key = key + '.metrics-only'
-
 
     previous_since = None
     now = get_date()
@@ -120,7 +116,6 @@ def reindex(since=None, batch_size=None, force_indexing=False, update_solr=True,
             session.commit()
     else:
         since = get_date(since)
-
 
     logger.info('Sending records changed since: %s', since.isoformat())
     sent = 0
@@ -143,7 +138,7 @@ def reindex(since=None, batch_size=None, force_indexing=False, update_solr=True,
                 updated = get_date(rec.updated)
 
                 if not force_processing and processed > updated:
-                    continue # skip records that were already processed
+                    continue  # skip records that were already processed
 
                 sent += 1
                 if sent % 1000 == 0:
@@ -327,7 +322,7 @@ if __name__ == '__main__':
                         nargs='?',
                         dest='reindex',
                         action='store',
-                        const = 'sml',
+                        const='sml',
                         default='sml',
                         help='Sent all updated documents to SOLR/Postgres (you can combine with --since).' +
                         'Default is to update both solr and metrics. You can choose what to update.' +
@@ -423,11 +418,11 @@ if __name__ == '__main__':
                       'page_count', 'page_range')
 
         d = validate.Validate(fields, ignore_fields, new_fields)
-        d.compare_solr(bibcodelist=args.bibcodes,filename=args.filename)
+        d.compare_solr(bibcodelist=args.bibcodes, filename=args.filename)
 
     elif args.delete:
         if args.filename:
-            print 'deleting bibcodes from file via queue'
+            print('deleting bibcodes from file via queue')
             bibs = []
             with open(args.filename, 'r') as f:
                 for line in f:
@@ -435,7 +430,7 @@ if __name__ == '__main__':
                     if bibcode:
                         tasks.task_delete_documents(bibcode)
         else:
-            print 'please provide a file of bibcodes to delete via -n'
+            print('please provide a file of bibcodes to delete via -n')
 
     elif args.augment:
         if args.filename:
@@ -458,7 +453,7 @@ if __name__ == '__main__':
         print 'reindexing to solr url ' + str(solr_urls)
 
         if args.filename:
-            print 'sending bibcodes from file to the queue for reindexing'
+            print('sending bibcodes from file to the queue for reindexing')
             bibs = []
             with open(args.filename) as f:
                 for line in f:
@@ -478,7 +473,7 @@ if __name__ == '__main__':
                                                    solr_targets=solr_urls)
                     bibs = []
         else:
-            print 'sending bibcode since date to the queue for reindexing'
+            print('sending bibcode since date to the queue for reindexing')
             reindex(since=args.since, batch_size=args.batch_size, force_indexing=args.force_indexing,
                     update_solr=update_solr, update_metrics=update_metrics,
                     update_links = update_links, force_processing=args.force_processing, ignore_checksums=args.ignore_checksums,
