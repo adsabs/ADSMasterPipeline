@@ -114,7 +114,7 @@ def task_rebuild_index(bibcodes, force=False, update_solr=True, update_metrics=T
 
 @app.task(queue='index-records')
 def task_index_records(bibcodes, force=False, update_solr=True, update_metrics=True, update_links=True, commit=False,
-                       ignore_checksums=False, solr_targets=None, update_timestamps=True):
+                       ignore_checksums=False, solr_targets=None, update_timestamps=True, priority=0):
     """
     Sends data to production systems: solr, metrics and resolver links
 
