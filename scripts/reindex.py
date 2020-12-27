@@ -80,8 +80,9 @@ def run():
 
         if retcode != 0:
             data['error'] = '%s failed with retcode=%s\nstderr:\n%s' % (command, retcode, stderr)
-            logger.warn('stderr=%s' % (stderr))
-            raise
+            write_lockfile(lockfile, data)
+            logger.error('stderr=%s' % (stderr))
+            raise Exception('%s failed with retcode=%s\nstderr:\n%s' % (command, retcode, stderr))
 
         logger.info('Successfully finished indexing in %s secs' % (time.time() - now))
 

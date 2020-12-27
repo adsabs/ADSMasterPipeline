@@ -235,7 +235,7 @@ def rebuild_collection(collection_name):
                                            update_timestamps=False)
         _tasks.append(t)
 
-    logger.info('Done queueing bibcodes for rebuilding collection %s', (collection_name))
+    logger.info('Done queueing bibcodes for rebuilding collection %s', collection_name)
     # now wait for queue to empty
     queue_length = 1
     while queue_length > 0:
@@ -244,7 +244,7 @@ def rebuild_collection(collection_name):
         logger.info('Waiting %s for rebuild-collection tasks to finish, queue_length %s, sent %s' % (stime, queue_length, sent))
         time.sleep(stime)
 
-    logger.info('Done rebuilding collection %s, sent %s records', (collection_name, sent))
+    logger.info('Done rebuilding collection %s, sent %s records', collection_name, sent)
 
 
 if __name__ == '__main__':
