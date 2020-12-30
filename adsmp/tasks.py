@@ -103,18 +103,18 @@ def task_update_record(msg):
 
 @app.task(queue='rebuild-index')
 def task_rebuild_index(bibcodes, force=False, update_solr=True, update_metrics=True, update_links=True, commit=False,
-                       ignore_checksums=False, solr_targets=None, update_timestamps=True):
+                       ignore_checksums=False, solr_targets=None, set_processed_timestamp=True):
     """part of feature that rebuilds the entire solr index from scratch
 
     note that which collection to update is part of the url in solr_targets
     """
     reindex_records(bibcodes, force=force, update_solr=update_solr, update_metrics=update_metrics, update_links=update_links, commit=commit,
-                    ignore_checksums=ignore_checksums, solr_targets=solr_targets, update_timestamps=update_timestamps)
+                    ignore_checksums=ignore_checksums, solr_targets=solr_targets, set_processed_timestamp=set_processed_timestamp)
 
 
 @app.task(queue='index-records')
 def task_index_records(bibcodes, force=False, update_solr=True, update_metrics=True, update_links=True, commit=False,
-                       ignore_checksums=False, solr_targets=None, update_timestamps=True, priority=0):
+                       ignore_checksums=False, solr_targets=None, set_processed_timestamp=True, priority=0):
     """
     Sends data to production systems: solr, metrics and resolver links
 
@@ -125,27 +125,27 @@ def task_index_records(bibcodes, force=False, update_solr=True, update_metrics=T
     Use code also called by task_rebuild_index,
     """
     reindex_records(bibcodes, force=force, update_solr=update_solr, update_metrics=update_metrics, update_links=update_links, commit=commit,
-                    ignore_checksums=ignore_checksums, solr_targets=solr_targets, update_timestamps=update_timestamps)
+                    ignore_checksums=ignore_checksums, solr_targets=solr_targets, set_processed_timestamp=set_processed_timestamp)
 
     
 @app.task(queue='index-solr')
-def task_index_solr(solr_records, priority=0, commit=False, solr_targets=None, update_timestamp=True):
-    app.index_solr(solr_records, solr_targets, commit)
+def task_index_solr(solr_records, priority=0, commit=False, solr_targets=None, set_processed_timestamp=True):
+    app.index_solr(solr_records, solr_targets, commit, set_processed_timestamp)
 
 
 @app.task(queue='index-metrics')
-def task_index_metrics(metrics_records, priority=0, update_timestamps=True):
+def task_index_metrics(metrics_records, priority=0, set_processed_timestamps=True):
     # todo: create insert and update lists before queuing?
     app.index_metrics(metrics_records)
 
 
 @app.task(queue='index-data-links-resolver')
-def task_index_data_links_resolver(data_links_resolver_records, priority=0, update_timestamps=True):
-    app.index_datalinks(data_links_resolver_records, priority=priority, update_timestamps=update_timestamps)
+def task_index_data_links_resolver(data_links_resolver_records, priority=0, set_processed_timestamp=True):
+    app.index_datalinks(data_links_resolver_records, priority=priority, set_processed_timestamp=set_processed_timestamp)
 
 
 def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True, update_links=True, commit=False,
-                    ignore_checksums=False, solr_targets=None, update_timestamps=True, priority=0):
+                    ignore_checksums=False, solr_targets=None, set_processed_timestamp=True, priority=0):
     """Receives bibcodes that need production store updated
 
     Receives bibcodes and checks the database if we have all the
@@ -247,11 +247,11 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
                              (bibcode, bib_data_updated, orcid_claims_updated, nonbib_data_updated, fulltext_updated,
                               metrics_updated, augments_updated))
     if solr_records:
-        task_index_solr.delay(solr_records, priority, commit, solr_targets, update_timestamps)
+        task_index_solr.delay(solr_records, priority, commit, solr_targets, set_processed_timestamp)
     if metrics_records:
-        task_index_metrics.delay(metrics_records, priority, update_timestamps)
+        task_index_metrics.delay(metrics_records, priority, set_processed_timestamp)
     if links_data_records:
-        task_index_data_links_resolver.delay(links_data_records, priority, update_timestamps)
+        task_index_data_links_resolver.delay(links_data_records, priority, set_processed_timestamp)
 
 
 @app.task(queue='delete-records')

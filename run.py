@@ -21,6 +21,8 @@ from sqlalchemy.orm.attributes import InstrumentedAttribute
 # ============================= INITIALIZATION ==================================== #
 proj_home = os.path.realpath(os.path.dirname(__file__))
 config = load_config(proj_home=proj_home)
+set_processed_timestamp = config.get('SET_PROCESSED_TIMESTAMP', True)
+
 logger = setup_logging('run.py', proj_home=proj_home,
                        level=config.get('LOGGING_LEVEL', 'INFO'),
                        attach_stdout=config.get('LOG_STDOUT', False))
@@ -212,8 +214,8 @@ def rebuild_collection(collection_name):
     with app.session_scope() as session:
         # master db only contains valid documents, indexing task will make sure that incomplete docs are rejected
         for rec in session.query(Records) \
-            .options(load_only(Records.bibcode, Records.updated, Records.processed)) \
-            .yield_per(1000):
+                          .options(load_only(Records.bibcode)) \
+                          .yield_per(1000):
 
             sent += 1
             if sent % 1000 == 0:
@@ -222,9 +224,9 @@ def rebuild_collection(collection_name):
             batch.append(rec.bibcode)
             if len(batch) > 1000:
                 t = tasks.task_rebuild_index.delay(batch, force=True, update_solr=True,
-                                           update_metrics=False, update_links=False,
-                                           ignore_checksums=True, solr_targets=solr_urls,
-                                           update_timestamps=False)
+                                                   update_metrics=False, update_links=False,
+                                                   ignore_checksums=True, solr_targets=solr_urls,
+                                                   set_processed_timestamp=False)
                 _tasks.append(t)
                 batch = []
 
@@ -232,7 +234,7 @@ def rebuild_collection(collection_name):
         t = tasks.task_rebuild_index.delay(batch, force=True, update_solr=True,
                                            update_metrics=False, update_links=False,
                                            ignore_checksums=True, solr_targets=solr_urls,
-                                           update_timestamps=False)
+                                           set_processed_timestamp=False)
         _tasks.append(t)
 
     logger.info('Done queueing bibcodes for rebuilding collection %s', collection_name)
@@ -264,12 +266,12 @@ def reindex_failed(app):
             if len(bibs) >= 100:
                 session.commit()
                 tasks.task_index_records.delay(bibs, update_solr=True, update_metrics=True, update_links=True,
-                                               update_timestamps=True, force=True, ignore_checksums=True)
+                                               set_processed_timestamp=set_processed_timestamp, force=True, ignore_checksums=True)
                 bibs = []
         if bibs:
             session.commit()
             tasks.task_index_records.delay(bibs, update_solr=True, update_metrics=True, update_links=True,
-                                           update_timestamps=True, force=True, ignore_checksums=True)
+                                           set_processed_timestamp=set_processed_timestamp, force=True, ignore_checksums=True)
             bibs = []
         logger.info('Done reindexing %s previously failed bibcodes', count)
 
@@ -386,7 +388,7 @@ if __name__ == '__main__':
                         action='store',
                         default=0,
                         type=int,
-                        help='priority to use in queue, typically cron jobs use a high priority')
+                        help='priority to use in queue, typically cron jobs use a high priority.  preferred values are 1 to 10 where 10 is the highest priority')
 
     args = parser.parse_args()
 

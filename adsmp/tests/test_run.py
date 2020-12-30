@@ -56,7 +56,7 @@ class TestFixDbDuplicates(unittest.TestCase):
             queue_bibcodes.assert_called_with([u'bibcode2', u'bibcode3'],
                                               force=True, ignore_checksums=True,
                                               update_links=True, update_metrics=True,
-                                              update_solr=True, update_timestamps=True)
+                                              update_solr=True, set_processed_timestamp=True)
 
         # verify database was updated propery
         with self.app.session_scope() as session:
