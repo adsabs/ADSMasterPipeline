@@ -127,7 +127,7 @@ def task_index_records(bibcodes, force=False, update_solr=True, update_metrics=T
     reindex_records(bibcodes, force=force, update_solr=update_solr, update_metrics=update_metrics, update_links=update_links, commit=commit,
                     ignore_checksums=ignore_checksums, solr_targets=solr_targets, set_processed_timestamp=set_processed_timestamp)
 
-    
+
 @app.task(queue='index-solr')
 def task_index_solr(solr_records, priority=0, commit=False, solr_targets=None, set_processed_timestamp=True):
     app.index_solr(solr_records, solr_targets, commit, set_processed_timestamp)

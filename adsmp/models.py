@@ -19,7 +19,7 @@ MetricsBase = declarative_base()
 
 class UTCDateTime(types.TypeDecorator):
     impl = TIMESTAMP
-    
+
     def process_bind_param(self, value, engine):
         if isinstance(value, basestring):
             return get_date(value).astimezone(tzutc())
@@ -56,7 +56,7 @@ class Records(Base):
     # holds a dict of augments to be merged
     # currently only supported key is 'affiliations'
     #  with the value an array holding affiliation strings and '-' placeholders
-    augments = Column(Text) 
+    augments = Column(Text)
 
     # when data is received we set the updated timestamp
     bib_data_updated = Column(UTCDateTime, default=None)
@@ -69,17 +69,17 @@ class Records(Base):
     created = Column(UTCDateTime, default=get_date)
     updated = Column(UTCDateTime, default=get_date)
     processed = Column(UTCDateTime)
-    
+
     solr_processed = Column(UTCDateTime, default=None)
     metrics_processed = Column(UTCDateTime, default=None)
     datalinks_processed = Column(UTCDateTime, default=None)
-    
+
     solr_checksum = Column(String(10), default=None)
     metrics_checksum = Column(String(10), default=None)
     datalinks_checksum = Column(String(10), default=None)
-    
+
     status = Column(Enum('solr-failed', 'metrics-failed', 'links-failed', 'retrying', 'success', name='status'))
-    
+
     _date_fields = ['created', 'updated', 'processed',  # dates
                     'bib_data_updated', 'orcid_claims_updated', 'nonbib_data_updated',
                     'fulltext_updated', 'metrics_updated', 'augments_updated',
@@ -151,7 +151,7 @@ class MetricsModel(MetricsBase):
     __bind_key__ = 'metrics'
     id = Column(Integer, primary_key=True)
     bibcode = Column(String, nullable=False, index=True, unique=True)
-    
+
     an_citations = Column(postgresql.REAL)
     an_refereed_citations = Column(postgresql.REAL)
     author_num = Column(Integer, default=1, server_default=text("1::integer"))
@@ -166,7 +166,7 @@ class MetricsModel(MetricsBase):
     rn_citations = Column(postgresql.REAL)
     rn_citation_data = Column(postgresql.JSON)
     modtime = Column(DateTime)
-    
+
     def toJSON(self):
         return dict(id=self.id,
                     bibcode=self.bibcode,

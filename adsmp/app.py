@@ -34,7 +34,7 @@ class ADSMasterPipelineCelery(ADSCelery):
             _msession_factory = sessionmaker()
             self._metrics_session = scoped_session(_msession_factory)
             self._metrics_session.configure(bind=self._metrics_engine)
-            
+
             MetricsBase.metadata.bind = self._metrics_engine
             self._metrics_table = Table('metrics', MetricsBase.metadata, autoload=True, autoload_with=self._metrics_engine)
             register_after_fork(self._metrics_engine, self._metrics_engine.dispose)
@@ -250,7 +250,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                 return 'active'
         else:
             return 'unknown'
-        
+
     def index_solr(self, solr_docs, solr_urls, commit=False, priority=0, set_processed_timestamp=True):
         """Sends documents to solr. It will update
         the solr_processed timestamp for every document which succeeded.
@@ -263,7 +263,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         out = solr_updater.update_solr(solr_docs, solr_urls, ignore_errors=True)
         failed_bibcodes = []
         errs = [x for x in out if x != 200]
-        
+
         if len(errs) == 0:
             self.mark_processed([x['bibcode'] for x in solr_docs], type='solr')
         else:
@@ -277,11 +277,11 @@ class ADSMasterPipelineCelery(ADSCelery):
                         self.update_processed_timestamp(doc['bibcode'], type='solr')
                     self.logger.debug('%s success', doc['bibcode'])
                 except Exception as e:
-                    # if individual insert fails, 
+                    # if individual insert fails,
                     # and if 'body' is in excpetion we assume Solr failed on body field
                     # then we try once more without fulltext
                     # this bibcode needs to investigated as to why fulltext/body is failing
-                    failed_bibcode = doc['bibcode']                    
+                    failed_bibcode = doc['bibcode']
                     if 'body' in str(e) or 'not all arguments converted during string formatting' in str(e):
                         tmp_doc = dict(doc)
                         tmp_doc.pop('body', None)
@@ -303,18 +303,18 @@ class ADSMasterPipelineCelery(ADSCelery):
 
     def mark_processed(self, bibcodes, type=None, status=None, set_processed_timestamp=True):
         """Updates the timesstamp for all documents that match the bibcodes.
-        Optionally also sets the status (which says what actually happened 
+        Optionally also sets the status (which says what actually happened
         with the document).
-        
+
         """
 
         if set_processed_timestamp is False:
             return
-        
+
         # avoid updating whole database (when the set is empty)
         if len(bibcodes) < 1:
             return
-        
+
         if type == 'solr':
             column = 'solr_processed'
         elif type == 'metrics':
@@ -323,7 +323,7 @@ class ADSMasterPipelineCelery(ADSCelery):
             column = 'datalinks_processed'
         else:
             column = 'processed'
-        
+
         now = adsputils.get_date()
         updt = {column: now}
         if status:
@@ -335,14 +335,14 @@ class ADSMasterPipelineCelery(ADSCelery):
 
     def get_metrics(self, bibcode):
         """Helper method to retrieve data from the metrics db
-        
+
         @param bibcode: string
         @return: JSON structure if record was found, {} else
         """
-        
+
         if not self._metrics_session:
             raise Exception('METRCIS_SQLALCHEMU_URL not set!')
-        
+
         with self.metrics_session_scope() as session:
             x = session.query(MetricsModel).filter(MetricsModel.bibcode == bibcode).first()
             if x:
@@ -375,7 +375,7 @@ class ADSMasterPipelineCelery(ADSCelery):
             s.rollback()
             raise
         finally:
-            s.close()        
+            s.close()
 
     def index_metrics(self, batch, priority=0, set_processed_timestamp=True):
         success, metrics_exception = self.update_metrics_db(batch)
@@ -400,7 +400,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                 self.mark_processed([x['bibcode'] for x in links_data], type=None, status='links-failed')
         self.index_complete(links_data, failed, 'datalinks')
         return failed
-        
+
     def index_complete(self, batch, failed, kind):
         """update all state info in records database for last index
 
@@ -428,15 +428,15 @@ class ADSMasterPipelineCelery(ADSCelery):
         """Writes data into the metrics DB.
         :param: batch - list of json objects to upsert into the metrics db
         :return: tupple (list-of-processed-bibcodes, exception)
-        
+
         It tries hard to avoid raising exceptions; it will return the list
         of bibcodes that were successfully updated. It will also update
         metrics_processed timestamp in the records table for every bibcode that succeeded.
-        
+
         """
         if not self._metrics_session:
             raise Exception('You cant do this! Missing METRICS_SQLALACHEMY_URL?')
-        
+
         self.logger.debug('Updating metrics db: len(batch)=%s', len(batch))
         out = []
         with self.metrics_session_scope() as session:
@@ -470,16 +470,16 @@ class ADSMasterPipelineCelery(ADSCelery):
                 session.delete(r)
                 session.commit()
                 return True
-            
+
     def checksum(self, data, ignore_keys=('mtime', 'ctime', 'update_timestamp')):
         """
         Compute checksum of the passed in data. Preferred situation is when you
         give us a dictionary. We can clean it up, remove the 'ignore_keys' and
         sort the keys. Then compute CRC on the string version. You can also pass
         a string, in which case we simple return the checksum.
-        
+
         @param data: string or dict
-        @param ignore_keys: list of patterns, if they are found (anywhere) in 
+        @param ignore_keys: list of patterns, if they are found (anywhere) in
             the key name, we'll ignore this key-value pair
         @return: checksum
         """
@@ -504,7 +504,7 @@ class ADSMasterPipelineCelery(ADSCelery):
             else:
                 data_str = json.dumps(data, sort_keys=True)
             return hex(zlib.crc32(data_str) & 0xffffffff)
-    
+
     def request_aff_augment(self, bibcode, data=None):
         """send aff data for bibcode to augment affiliation pipeline
 
@@ -519,7 +519,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                 self.logger.warning('request_aff_augment called but no bib data for bibcode {}'.format(bibcode))
                 return
             aff = bib_data.get('aff', None)
-            author = bib_data.get('author', '')            
+            author = bib_data.get('author', '')
             data = {
                 'bibcode': bibcode,
                 "aff": aff,
@@ -551,7 +551,7 @@ class ADSMasterPipelineCelery(ADSCelery):
             # when avilable, prefer link info from nonbib
             resolver_record = {'bibcode': bibcode,
                                'data_links_rows': nonbib_links}
-            
+
         else:
             # as a fallback, use link from bib/direct ingest
             bib = record.get('bib_data', {})
