@@ -108,7 +108,7 @@ def task_rebuild_index(bibcodes, solr_targets=None):
     note that which collection to update is part of the url in solr_targets
     """
     reindex_records(bibcodes, force=True, update_solr=True, update_metrics=False, update_links=False, commit=False,
-                    ignore_checksums=True, solr_targets=solr_targets, update_processed=False)
+                    ignore_checksums=True, solr_targets=solr_targets, update_processed=False, priority=0)
 
 
 @app.task(queue='index-records')
@@ -128,18 +128,18 @@ def task_index_records(bibcodes, force=False, update_solr=True, update_metrics=T
 
 
 @app.task(queue='index-solr')
-def task_index_solr(solr_records, solr_records_checksum, priority=0, commit=False, solr_targets=None, update_processed=True):
+def task_index_solr(solr_records, solr_records_checksum, commit=False, solr_targets=None, update_processed=True):
     app.index_solr(solr_records, solr_records_checksum, solr_targets, commit, update_processed)
 
 
 @app.task(queue='index-metrics')
-def task_index_metrics(metrics_records, metrics_records_checksum, priority=0, update_processed=True):
+def task_index_metrics(metrics_records, metrics_records_checksum, update_processed=True):
     # todo: create insert and update lists before queuing?
     app.index_metrics(metrics_records, metrics_records_checksum)
 
 
 @app.task(queue='index-data-links-resolver')
-def task_index_data_links_resolver(links_data_records, links_data_records_checksum, priority=0, update_processed=True):
+def task_index_data_links_resolver(links_data_records, links_data_records_checksum, update_processed=True):
     app.index_datalinks(links_data_records, links_data_records_checksum, priority=priority, update_processed=update_processed)
 
 
@@ -263,11 +263,31 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
                              (bibcode, bib_data_updated, orcid_claims_updated, nonbib_data_updated, fulltext_updated,
                               metrics_updated, augments_updated))
     if solr_records:
-        task_index_solr.delay(solr_records, solr_records_checksum, priority, commit, solr_targets, update_processed)
+        task_index_solr.apply_async(
+            args=(solr_records, solr_records_checksum,),
+            kwargs={
+               'commit': commit,
+               'solr_targets': solr_targets,
+               'update_processed': update_processed
+            },
+            priority=priority
+        )
     if metrics_records:
-        task_index_metrics.delay(metrics_records, metrics_records_checksum, priority, update_processed)
+        task_index_metrics.apply_async(
+            args=(metrics_records, metrics_records_checksum,),
+            kwargs={
+               'update_processed': update_processed
+            },
+            priority=priority
+        )
     if links_data_records:
-        task_index_data_links_resolver.delay(links_data_records, links_data_records_checksum, priority, update_processed)
+        task_index_data_links_resolver.apply_async(
+            args=(links_data_records, links_data_records_checksum,),
+            kwargs={
+               'update_processed': update_processed
+            },
+            priority=priority
+        )
 
 
 @app.task(queue='delete-records')
