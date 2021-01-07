@@ -14,7 +14,7 @@ class TestFixDbDuplicates(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.postgresql = \
-            testing.postgresql.Postgresql(host='127.0.0.1', port=15678, user='postgres', 
+            testing.postgresql.Postgresql(host='127.0.0.1', port=15678, user='postgres',
                                           database='test')
 
     @classmethod
@@ -56,7 +56,7 @@ class TestFixDbDuplicates(unittest.TestCase):
             queue_bibcodes.assert_called_with([u'bibcode2', u'bibcode3'],
                                               force=True, ignore_checksums=True,
                                               update_links=True, update_metrics=True,
-                                              update_solr=True, set_processed_timestamp=True)
+                                              update_solr=True, update_processed=True)
 
         # verify database was updated propery
         with self.app.session_scope() as session:
