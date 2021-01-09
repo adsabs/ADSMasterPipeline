@@ -11,23 +11,25 @@ import pickle
 import requests
 import time
 
-homedir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if homedir not in sys.path:
-    sys.path.append(homedir)
+proj_home = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if proj_home not in sys.path:
+    sys.path.append(proj_home)
 
 from subprocess import PIPE, Popen
 from adsmp import tasks
-from adsputils import setup_logging
+from adsputils import setup_logging, load_config
 
 
-app = tasks.app
-logger = setup_logging('rebuild')
-lockfile = os.path.abspath(homedir + '/rebuild.locked')
+config = load_config(proj_home=proj_home)
+logger = setup_logging('rebuild', proj_home=proj_home,
+                        level=config.get('LOGGING_LEVEL', 'INFO'),
+                        attach_stdout=config.get('LOG_STDOUT', False))
+lockfile = os.path.abspath(proj_home + '/rebuild.locked')
 
 
 def get_solr_url(path):
     # use what is configured in current config, but only the first instance
-    urls = app.conf.get('SOLR_URLS')
+    urls = config.get('SOLR_URLS')
     s = urls[0].split('/collection')[0]
     if path.startswith('/'):
         return s + path
@@ -43,11 +45,11 @@ mbean_url = get_solr_url('/collection2/admin/mbeans?stats=true&wt=json')
 def run():
     # it is important that we do not run multiple times
     if os.path.exists(lockfile):
-        sys.stderr.write('Lockfile %s already exists; exiting! (if you want to proceed, delete the file)\n' % (lockfile))
+        logger.error('Lockfile %s already exists; exiting! (if you want to proceed, delete the file)' % (lockfile,))
         data = read_lockfile(lockfile)
         for k,v in data.items():
-            sys.stderr.write('%s=%s\n' % (k,v))
-        exit(1)
+            logger.error('%s=%s' % (k, v,))
+        sys.exit(1)
     else:
         data = {}
 
@@ -75,16 +77,16 @@ def run():
         data['start'] = now
         write_lockfile(lockfile, data)
 
-        command = 'python2 run.py --rebuild-collection --solr-collection collection2 >> %s/logs/reindex.log' % (homedir)
-        retcode, stdout, stderr = execute(command, cwd=homedir)
+        command = 'python2 run.py --rebuild-collection --solr-collection collection2 >> %s/logs/reindex.log' % (proj_home,)
+        retcode, stdout, stderr = execute(command, cwd=proj_home)
 
         if retcode != 0:
-            data['error'] = '%s failed with retcode=%s\nstderr:\n%s' % (command, retcode, stderr)
+            data['error'] = '%s failed with retcode=%s\nstderr:\n%s' % (command, retcode, stderr,)
             write_lockfile(lockfile, data)
             logger.error('stderr=%s' % (stderr))
-            raise Exception('%s failed with retcode=%s\nstderr:\n%s' % (command, retcode, stderr))
+            raise Exception('%s failed with retcode=%s\nstderr:\n%s' % (command, retcode, stderr,))
 
-        logger.info('Successfully finished indexing in %s secs' % (time.time() - now))
+        logger.info('Successfully finished indexing in %s secs' % (time.time() - now,))
 
         # wait for solr workers to complete final messages
         monitor_solr_writes()
@@ -109,7 +111,7 @@ def run():
                 for bean in beans:
                     if type(bean) is dict and 'searcher' in bean:
                         t = str_to_datetime(bean['searcher']['stats']['registeredAt'])
-                        logger.info('waiting for solr commit to complete, commit_time: %s, searcher registeredAt: %s' % (commit_time, t))
+                        logger.info('waiting for solr commit to complete, commit_time: %s, searcher registeredAt: %s' % (commit_time, t,))
                         if t > commit_time:
                             finished = True
                         time_waiting = datetime.datetime.utcnow() - commit_time
@@ -142,10 +144,9 @@ def run():
 
 
         logger.info('Deleting the lock; congratulations on your new solr collection!')
-        os.remove(lockfile)       
+        os.remove(lockfile)
     except Exception as e:
-        logger.error('Failed; we will keep the process permanently locked: %s' % (e))
-        sys.stderr.write('Failed. Please see logs for more details')
+        logger.error('Failed; we will keep the process permanently locked: %s' % (e,))
         data['last-exception'] = str(e)
         write_lockfile(lockfile, data)
 
@@ -171,7 +172,7 @@ def verify_collection2_size(data):
     if data['index'].get('numDocs', 0) <= 14150713:
         raise Exception('Too few documents in the new index: %s' % data['index'].get('numDocs', 0))
     if data['index'].get('sizeInBytes', 0) / (1024*1024*1024.0) <= 146.0: # index size at least 146GB
-        raise Exception('The index is suspiciously small: %s' % (data['index'].get('sizeInBytes', 0) / (1024*1024*1024.0)))
+        raise Exception('The index is suspiciously small: %s' % (data['index'].get('sizeInBytes', 0) / (1024*1024*1024.0),))
 
 
 def str_to_datetime(s):
