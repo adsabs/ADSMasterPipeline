@@ -251,7 +251,7 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
         else:
             # if forced and we have at least the bib data, index it
             if force is True:
-                logger.warn('%s is missing bib data, even with force=True, this cannot proceed', bibcode)
+                logger.debug('%s is missing bib data, even with force=True, this cannot proceed', bibcode)
             else:
                 logger.debug('%s not ready for indexing yet (metadata=%s, orcid=%s, nonbib=%s, fulltext=%s, metrics=%s, augments=%s)' %
                              (bibcode, bib_data_updated, orcid_claims_updated, nonbib_data_updated, fulltext_updated,
