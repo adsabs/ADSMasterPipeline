@@ -286,7 +286,7 @@ def delete_obsolete_records(older_than, batch_size=1000):
             deleted += 1
         else:
             logger.warn("Failed to delete: %s (this only happens if the rec cannot be found)", bibcode)
-    
+
     logger.info("Deleted {} obsolete records".format(deleted))
 
 
@@ -435,6 +435,12 @@ if __name__ == '__main__':
                         action='store',
                         default=None,
                         help='Datestamp used in indexing and other operations')
+
+    parser.add_argument('--delete_obsolete',
+                        dest='delete_obsolete',
+                        action='store_true',
+                        default=False,
+                        help='Delete records without bib_data that are in the db and that are older than `since` timestamp.')
 
     parser.add_argument('-k',
                         '--kv',
