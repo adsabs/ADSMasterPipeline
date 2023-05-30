@@ -97,7 +97,7 @@ def run():
 
         # issue commit
         commit_time = datetime.datetime.utcnow()
-        r = requests.get(update_url + '?commit=true')
+        r = requests.get(update_url + '?commit=true&waitSearcher=false')
         r.raise_for_status()
         logger.info('Issued async commit to SOLR')
 
@@ -119,8 +119,8 @@ def run():
                         if t > commit_time:
                             finished = True
                         time_waiting = datetime.datetime.utcnow() - commit_time
-                        if (time_waiting.seconds > (3600 * 2)):
-                            logger.warn('Solr commit running for over two  hours, aborting')
+                        if (time_waiting.seconds > (3600 * 3)):
+                            logger.warn('Solr commit running for over three hours, aborting')
                             raise
             if not finished:
                 time.sleep(30)
@@ -223,7 +223,7 @@ def monitor_solr_writes():
                 logger.info('monitoring docsPending with current_docs_pending {}, previous_docs_pending {}, consecutive_match_count {}'.format(current_docs_pending, previous_docs_pending, consecutive_match_count))
                 time.sleep(30)
     logger.info('completed monitoring of docsPending on solr with current_docs_pending {}, previous_docs_pending {}, consecutive_match_count {}'.format(current_docs_pending, previous_docs_pending, consecutive_match_count))
-    
+
 
 if __name__ == '__main__':
     run()
