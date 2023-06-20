@@ -130,7 +130,7 @@ def run():
         logger.info('Waiting for the new collection to have a minimum number of commited documents')
         # all went well, verify the numDocs is similar to the previous collection
         min_committed_docs = os.environ.get('MIN_COMMITTED_DOCS', 17500000)
-        min_index_size = os.environ.get('MIN_COMMITTED_DOCS', 200) # GB
+        min_index_size = os.environ.get('MIN_INDEX_SIZE', 200) # GB
         for _ in range(24): # Check every 5 minutes for 2 hours max
             time.sleep(300)
             verified, verified_msg = verify_collection2_size(cores_url, min_committed_docs, min_index_size)
