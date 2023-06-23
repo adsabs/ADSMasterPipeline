@@ -129,8 +129,8 @@ def run():
 
         logger.info('Waiting for the new collection to have a minimum number of commited documents')
         # all went well, verify the numDocs is similar to the previous collection
-        min_committed_docs = os.environ.get('MIN_COMMITTED_DOCS', 17500000)
-        min_index_size = os.environ.get('MIN_INDEX_SIZE', 200) # GB
+        min_committed_docs = int(os.environ.get('MIN_COMMITTED_DOCS', 17500000))
+        min_index_size = int(os.environ.get('MIN_INDEX_SIZE', 200)) # GB
         for _ in range(24): # Check every 5 minutes for 2 hours max
             time.sleep(300)
             verified, verified_msg = verify_collection2_size(cores_url, min_committed_docs, min_index_size)
@@ -194,9 +194,9 @@ def verify_collection2_size(cores_url, min_committed_docs, min_index_size):
     index_size = data.get('index', {}).get('sizeInBytes', 0) / (1024*1024*1024.0) # GB
     #
     logger.info('New collection has {} committed entries and the index size is {:.2f} GB'.format(num_docs, index_size))
-    if num_docs <= min_committed_docs:
+    if num_docs < min_committed_docs:
         return (False, 'Too few committed documents in the new index: {}'.format(num_docs))
-    if index_size <= min_index_size:
+    if index_size < min_index_size:
         return (False, 'The new index is suspiciously small: {:.2f} GB'.format(index_size))
     return (True, 'Successfully verified the new collection')
 
