@@ -319,32 +319,29 @@ class TestSolrUpdater(unittest.TestCase):
             "augment field should not be in solr record when augment is not available",
         )
 
-        try:
-            self.assertTrue(
-                x["has"],
-                [
-                    "abstract",
-                    "ack",
-                    "aff",
-                    "author",
-                    "bibgroup",
-                    "body",
-                    "citation_count",
-                    "database",
-                    "doctype",
-                    "first_author",
-                    "identifier",
-                    "orcid_other",
-                    "orcid_pub",
-                    "property",
-                    "pub",
-                    "pub_raw",
-                    "title",
-                    "volume",
-                ],
-            )
-        except:
-            pdb.set_trace()
+        self.assertTrue(
+            x["has"],
+            [
+                "abstract",
+                "ack",
+                "aff",
+                "author",
+                "bibgroup",
+                "body",
+                "citation_count",
+                "database",
+                "doctype",
+                "first_author",
+                "identifier",
+                "orcid_other",
+                "orcid_pub",
+                "property",
+                "pub",
+                "pub_raw",
+                "title",
+                "volume",
+            ],
+        )
 
         self.app.update_storage(
             "bibcode",
