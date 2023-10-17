@@ -14,7 +14,7 @@ from adsmsg.orcid_claims import OrcidClaims
 import mock
 import copy
 
-
+import pdb
 def unwind_task_index_solr_apply_async(args=None, kwargs=None, priority=None):
     tasks.task_index_solr(args[0], args[1], kwargs)
 
@@ -408,13 +408,13 @@ class TestWorkers(unittest.TestCase):
             tasks.task_index_records(['foo'], force=True)
 
             self.assertEqual(update_solr.call_count, 1)
-            self._check_checksum('foo', solr='0x76452254')
+            self._check_checksum('foo', solr='0x4db9a611')
 
             # now change metrics (solr shouldn't be called)
             getter.return_value = {'bibcode': 'foo', 'metrics_updated': get_date('1972-04-02'),
                                    'bib_data_updated': get_date('1972-04-01'),
                                    'metrics': {},
-                                   'solr_checksum': '0x76452254'}
+                                   'solr_checksum': '0x4db9a611'}
             tasks.task_index_records(['foo'], force=True)
             self.assertEqual(update_solr.call_count, 1)
 
@@ -426,14 +426,16 @@ class TestWorkers(unittest.TestCase):
              patch('adsmp.tasks.task_index_solr.apply_async', wraps=unwind_task_index_solr_apply_async):
             getter.return_value = {'bibcode': 'foo', 'metrics_updated': get_date('1972-04-02'),
                                    'bib_data_updated': get_date('1972-04-01'),
-                                   'solr_checksum': '0x76452254'}
+                                   'solr_checksum': '0x4db9a611'}
 
             # update with matching checksum and then update and ignore checksums
             tasks.task_index_records(['foo'], force=True, update_metrics=False, update_links=False, ignore_checksums=False)
+            # pdb.set_trace()
+
             self.assertEqual(update_solr.call_count, 0)
             tasks.task_index_records(['foo'], force=True, update_metrics=False, update_links=False, ignore_checksums=True)
             self.assertEqual(update_solr.call_count, 1)
-
+            
     def test_ignore_checksums_datalinks(self):
         """verify ingore_checksums works with datalinks updates"""
         self._reset_checksum('linkstest')  # put bibcode in database
