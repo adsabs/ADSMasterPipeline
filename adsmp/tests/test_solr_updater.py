@@ -319,12 +319,11 @@ class TestSolrUpdater(unittest.TestCase):
             "augment field should not be in solr record when augment is not available",
         )
 
-        self.assertTrue(
+        self.assertEqual(
             x["has"],
             [
                 "abstract",
                 "ack",
-                "aff",
                 "author",
                 "bibgroup",
                 "body",
@@ -334,7 +333,6 @@ class TestSolrUpdater(unittest.TestCase):
                 "first_author",
                 "identifier",
                 "orcid_other",
-                "orcid_pub",
                 "property",
                 "pub",
                 "pub_raw",

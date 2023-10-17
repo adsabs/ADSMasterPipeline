@@ -107,4 +107,7 @@ logs
 python/*
 venv/*
 **/.DS_Store
+local_config.py
+.pre-commit-config.yaml
+
 .idea/

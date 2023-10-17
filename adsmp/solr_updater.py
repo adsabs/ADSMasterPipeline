@@ -1,6 +1,5 @@
 import json
 import os
-import pdb
 import sys
 import time
 
@@ -435,14 +434,18 @@ def transform_json_record(db_record):
             # this is done to not count fields where blank entries can be ['-',...]
 
             # if field does not have a string or list, make it a list of strings so it is iterable
-            if not (isinstance(out[field], list) or isinstance(out[field], str)):
-                out_field = [str(out[field])]
-            else:
-                out_field = out[field]
-            # iterate through each character of each element in the field to check for at least one alphanumeric character
-            if any([any(char.isalnum() for char in element) for element in out_field]):
-                has.append(field)
 
+            if not (isinstance(out[field], list) or isinstance(out[field], str)):
+                out_field = str.join("", str(out[field]))
+            else:
+                out_field = str.join("", out[field])
+
+            out_field = set(out_field)
+            # iterate through each character of each element in the field to check for at least one alphanumeric character
+            if any(
+                [any(char.isalnum() for char in out_field)]
+            ):  # set(element)) for element in out_field]):
+                has.append(field)
     out["has"] = has
 
     return out
