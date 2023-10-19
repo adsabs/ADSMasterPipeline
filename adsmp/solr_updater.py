@@ -442,9 +442,7 @@ def transform_json_record(db_record):
 
             out_field = set(out_field)
             # iterate through each character of each element in the field to check for at least one alphanumeric character
-            if any(
-                [any(char.isalnum() for char in out_field)]
-            ):  # set(element)) for element in out_field]):
+            if any([char.isalnum() for char in out_field]):
                 has.append(field)
     out["has"] = has
 
