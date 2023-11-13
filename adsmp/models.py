@@ -5,7 +5,7 @@ from past.builtins import basestring
 from adsputils import get_date
 from datetime import datetime
 from dateutil.tz import tzutc
-from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, Boolean, DateTime
+from sqlalchemy import Column, Integer, BigInteger, String, Text, TIMESTAMP, Boolean, DateTime
 from sqlalchemy import types
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import Enum
@@ -118,7 +118,7 @@ class Records(Base):
 
 class ChangeLog(Base):
     __tablename__ = 'change_log'
-    id = Column(Integer, primary_key=True)
+    id = Column(BigInteger, primary_key=True)
     created = Column(UTCDateTime, default=get_date)
     key = Column(String(255))
     type = Column(String(255))
