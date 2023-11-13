@@ -103,6 +103,7 @@ ENV/
 # emacs
 *~
 
+local_config.py
 logs
 python/*
 venv/*
