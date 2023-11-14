@@ -51,3 +51,5 @@ def downgrade():
     op.alter_column('change_log', 'id', nullable=False, new_column_name='old_id')
     op.alter_column('change_log', 'smallid', nullable=False, new_column_name='id')
     op.drop_column('change_log', 'old_id')
+    op.execute('ALTER SEQUENCE change_log_id_seq as int MAXVALUE 2147483647')
+
