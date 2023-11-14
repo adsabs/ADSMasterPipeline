@@ -18,15 +18,15 @@ import sqlalchemy as sa
 
 def upgrade():
     op.execute('ALTER TABLE change_log ADD COLUMN big_id BIGINT;')
-    # op.execute('CREATE FUNCTION set_new_id() RETURNS TRIGGER AS\n'\
-    #                '$BODY$\n'\
-    #                'BEGIN\n'\
-    #                '\t NEW.big_id := NEW.id;\n'\
-    #                '\t RETURN NEW;\n'\
-    #                'END\n'\
-    #                '$BODY$ LANGUAGE PLPGSQL;\n'\
-    #                'CREATE TRIGGER set_new_id_trigger BEFORE INSERT OR UPDATE ON {}\n'\
-    #                'FOR EACH ROW EXECUTE PROCEDURE set_new_id();\n'.format('change_log'))
+    op.execute('CREATE FUNCTION set_new_id() RETURNS TRIGGER AS\n'\
+                   '$BODY$\n'\
+                   'BEGIN\n'\
+                   '\t NEW.big_id := NEW.id;\n'\
+                   '\t RETURN NEW;\n'\
+                   'END\n'\
+                   '$BODY$ LANGUAGE PLPGSQL;\n'\
+                   'CREATE TRIGGER set_new_id_trigger BEFORE INSERT OR UPDATE ON {}\n'\
+                   'FOR EACH ROW EXECUTE PROCEDURE set_new_id();\n'.format('change_log'))
     op.execute('UPDATE change_log SET big_id=id')
     op.execute('CREATE UNIQUE INDEX IF NOT EXISTS big_id_unique ON change_log(big_id);')
     op.execute('ALTER TABLE change_log ADD CONSTRAINT big_id_not_null CHECK (big_id IS NOT NULL) NOT VALID;')
