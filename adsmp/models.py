@@ -118,7 +118,7 @@ class Records(Base):
 
 class ChangeLog(Base):
     __tablename__ = 'change_log'
-    id = Column(BigInteger, primary_key=True)
+    id = Column(Integer, primary_key=True)
     created = Column(UTCDateTime, default=get_date)
     key = Column(String(255))
     type = Column(String(255))
