@@ -33,7 +33,7 @@ LINKS_RESOLVER_UPDATE_URL = "http://localhost:8080/update"
 ADS_API_TOKEN = "fixme"
 
 
-ENABLE_HAS = False
+ENABLE_HAS = True
 
 HAS_FIELDS = [
     "abstract",
