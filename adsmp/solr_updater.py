@@ -422,28 +422,28 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
+    if config.get("ENABLE_HAS", False):
+        # Read-in names of fields to check for solr "has:" field
+        hasfields = sorted(config.get("HAS_FIELDS", []))
 
-    # Read-in names of fields to check for solr "has:" field
-    hasfields = sorted(config.get("HAS_FIELDS", []))
+        # populate "has:" field with fields that exist for a particular record
+        has = []
+        for field in hasfields:
+            if out.get(field, ""):
+                # if field is not empty, check if at least one character is alphanumeric
+                # this is done to not count fields where blank entries can be ['-',...]
 
-    # populate "has:" field with fields that exist for a particular record
-    has = []
-    for field in hasfields:
-        if out.get(field, ""):
-            # if field is not empty, check if at least one character is alphanumeric
-            # this is done to not count fields where blank entries can be ['-',...]
+                # if field does not have a string or list, make it a list of strings so it is iterable
 
-            # if field does not have a string or list, make it a list of strings so it is iterable
+                if not (isinstance(out[field], list) or isinstance(out[field], str)):
+                    out_field = str.join("", str(out[field]))
+                else:
+                    out_field = str.join("", out[field])
 
-            if not (isinstance(out[field], list) or isinstance(out[field], str)):
-                out_field = str.join("", str(out[field]))
-            else:
-                out_field = str.join("", out[field])
-
-            out_field = set(out_field)
-            # iterate through each character of each element in the field to check for at least one alphanumeric character
-            if any([char.isalnum() for char in out_field]):
-                has.append(field)
-    out["has"] = has
+                out_field = set(out_field)
+                # iterate through each character of each element in the field to check for at least one alphanumeric character
+                if any([char.isalnum() for char in out_field]):
+                    has.append(field)
+        out["has"] = has
 
     return out
