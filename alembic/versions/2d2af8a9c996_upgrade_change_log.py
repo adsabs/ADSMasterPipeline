@@ -38,6 +38,7 @@ def upgrade():
     op.execute("ALTER TABLE change_log RENAME COLUMN big_id TO id;")
     op.drop_column('change_log', 'old_id')
     op.execute('ALTER SEQUENCE change_log_id_seq as bigint MAXVALUE 9223372036854775807')
+    op.execute('DROP TRIGGER IF EXISTS set_new_id_trigger ON change_log')
     # ### end Alembic commands ###
 
 
