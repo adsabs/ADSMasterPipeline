@@ -663,6 +663,33 @@ class TestSolrUpdater(unittest.TestCase):
             d["ned_object_facet_hier"],
         )
 
+        nonbib = {
+            "gpn": ["Moon/Crater/Langrenus/3273"]
+        }
+        d = solr_updater.extract_data_pipeline(nonbib, None)
+        self.assertEqual(["3273"], d["gpn_id"])
+        self.assertEqual(
+            ['0/Moon', '1/Moon/Crater', '2/Moon/Crater/Langrenus'],
+            d["gpn_facet_hier_3level"],
+        )
+        self.assertEqual(
+            ['0/Moon', '1/Moon/Crater/Langrenus'],
+            d["gpn_facet_hier_2level"],
+        )
+
+        nonbib = {
+            "gpn": ["Mars/Terra/Terra Cimmeria/5930"]
+        }
+        d = solr_updater.extract_data_pipeline(nonbib, None)
+        self.assertEqual(["5930"], d["gpn_id"])
+        self.assertEqual(
+            ['0/Mars', '1/Mars/Terra', '2/Mars/Terra/Terra Cimmeria'],
+            d["gpn_facet_hier_3level"],
+        )
+        self.assertEqual(
+            ['0/Mars', '1/Mars/Terra/Terra Cimmeria'],
+            d["gpn_facet_hier_2level"],
+        )
 
 if __name__ == "__main__":
     unittest.main()

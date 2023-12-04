@@ -111,3 +111,7 @@ local_config.py
 .pre-commit-config.yaml
 
 .idea/
+
+Dockerfile
+docker-compose.yaml
+scripts/support/*
