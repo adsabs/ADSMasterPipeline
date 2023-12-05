@@ -663,33 +663,85 @@ class TestSolrUpdater(unittest.TestCase):
             d["ned_object_facet_hier"],
         )
 
-        nonbib = {
-            "gpn": ["Moon/Crater/Langrenus/3273"]
-        }
+        # Test simple gpn
+        nonbib = {"gpn": ["Moon/Crater/Langrenus/3273"]}
         d = solr_updater.extract_data_pipeline(nonbib, None)
+        self.assertEqual(["Moon/Crater/Langrenus"], d["gpn"])
         self.assertEqual(["3273"], d["gpn_id"])
         self.assertEqual(
-            ['0/Moon', '1/Moon/Crater', '2/Moon/Crater/Langrenus'],
+            ["0/Moon", "1/Moon/Crater", "2/Moon/Crater/Langrenus"],
             d["gpn_facet_hier_3level"],
         )
         self.assertEqual(
-            ['0/Moon', '1/Moon/Crater/Langrenus'],
+            ["0/Moon", "1/Moon/Crater/Langrenus"],
             d["gpn_facet_hier_2level"],
         )
 
-        nonbib = {
-            "gpn": ["Mars/Terra/Terra Cimmeria/5930"]
-        }
+        # Test gpn with space in feature name
+        nonbib = {"gpn": ["Mars/Terra/Terra Cimmeria/5930"]}
         d = solr_updater.extract_data_pipeline(nonbib, None)
+        self.assertEqual(["Mars/Terra/Terra Cimmeria"], d["gpn"])
         self.assertEqual(["5930"], d["gpn_id"])
         self.assertEqual(
-            ['0/Mars', '1/Mars/Terra', '2/Mars/Terra/Terra Cimmeria'],
+            ["0/Mars", "1/Mars/Terra", "2/Mars/Terra/Terra Cimmeria"],
             d["gpn_facet_hier_3level"],
         )
         self.assertEqual(
-            ['0/Mars', '1/Mars/Terra/Terra Cimmeria'],
+            ["0/Mars", "1/Mars/Terra/Terra Cimmeria"],
             d["gpn_facet_hier_2level"],
         )
+
+        # Test one bibcode with multiple gpns assigned
+        nonbib = {
+            "gpn": [
+                "Moon/Mare/Mare Imbrium/3678",
+                "Moon/Crater/Alder/171",
+                "Moon/Crater/Finsen/1959",
+                "Moon/Crater/Leibnitz/3335",
+            ]
+        }
+        d = solr_updater.extract_data_pipeline(nonbib, None)
+        self.assertEqual(
+            [
+                "Moon/Mare/Mare Imbrium",
+                "Moon/Crater/Alder",
+                "Moon/Crater/Finsen",
+                "Moon/Crater/Leibnitz",
+            ],
+            d["gpn"],
+        )
+        self.assertEqual(["3678", "171", "1959", "3335"], d["gpn_id"])
+        self.assertEqual(
+            [
+                "0/Moon",
+                "1/Moon/Mare",
+                "2/Moon/Mare/Mare Imbrium",
+                "0/Moon",
+                "1/Moon/Crater",
+                "2/Moon/Crater/Alder",
+                "0/Moon",
+                "1/Moon/Crater",
+                "2/Moon/Crater/Finsen",
+                "0/Moon",
+                "1/Moon/Crater",
+                "2/Moon/Crater/Leibnitz",
+            ],
+            d["gpn_facet_hier_3level"],
+        )
+        self.assertEqual(
+            [
+                "0/Moon",
+                "1/Moon/Mare/Mare Imbrium",
+                "0/Moon",
+                "1/Moon/Crater/Alder",
+                "0/Moon",
+                "1/Moon/Crater/Finsen",
+                "0/Moon",
+                "1/Moon/Crater/Leibnitz",
+            ],
+            d["gpn_facet_hier_2level"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
