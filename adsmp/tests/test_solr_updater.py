@@ -673,7 +673,7 @@ class TestSolrUpdater(unittest.TestCase):
             d["gpn_facet_hier_3level"],
         )
         self.assertEqual(
-            ["0/Moon", "1/Moon/Crater/Langrenus"],
+            ["0/Moon", "1/Moon/Crater Langrenus"],
             d["gpn_facet_hier_2level"],
         )
 
@@ -687,7 +687,7 @@ class TestSolrUpdater(unittest.TestCase):
             d["gpn_facet_hier_3level"],
         )
         self.assertEqual(
-            ["0/Mars", "1/Mars/Terra/Terra Cimmeria"],
+            ["0/Mars", "1/Mars/Terra Cimmeria"],
             d["gpn_facet_hier_2level"],
         )
 
@@ -731,13 +731,13 @@ class TestSolrUpdater(unittest.TestCase):
         self.assertEqual(
             [
                 "0/Moon",
-                "1/Moon/Mare/Mare Imbrium",
+                "1/Moon/Mare Imbrium",
                 "0/Moon",
-                "1/Moon/Crater/Alder",
+                "1/Moon/Crater Alder",
                 "0/Moon",
-                "1/Moon/Crater/Finsen",
+                "1/Moon/Crater Finsen",
                 "0/Moon",
-                "1/Moon/Crater/Leibnitz",
+                "1/Moon/Crater Leibnitz",
             ],
             d["gpn_facet_hier_2level"],
         )
