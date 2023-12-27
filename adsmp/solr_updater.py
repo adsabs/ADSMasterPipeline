@@ -1,5 +1,6 @@
 import json
 import os
+import pdb
 import sys
 import time
 
@@ -59,6 +60,18 @@ def extract_data_pipeline(data, solrdoc):
             feature_name = " ".join([feature, feature_name])
         gpn_facet_hier_2level.extend(generate_hier_facet(planet, feature_name))
 
+    uat = []
+    uat_id = []
+    uat_facet_hier = []
+
+    for x in data.get("uat", []):
+        uat_info = x.split("/")
+        uat_keywords = uat_info[:-1]
+        uat_no = uat_info[-1]
+        uat.append("/".join(uat_keywords))
+        uat_id.append(uat_no)
+        uat_facet_hier.extend(generate_hier_facet(*uat_keywords))
+
     simbid = []
     simbtype = []
     simbad_object_facet_hier = []
@@ -111,6 +124,9 @@ def extract_data_pipeline(data, solrdoc):
         gpn_id=gpn_id,
         gpn_facet_hier_2level=gpn_facet_hier_2level,
         gpn_facet_hier_3level=gpn_facet_hier_3level,
+        uat=uat,
+        uat_id=uat_id,
+        uat_facet_hier=uat_facet_hier,
         grant=grant,
         grant_facet_hier=grant_facet_hier,
         simbid=simbid,
