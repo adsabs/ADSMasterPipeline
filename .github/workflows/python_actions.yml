@@ -45,7 +45,7 @@ jobs:
     - name: Test with pytest
       run: |
         py.test
-    - uses: actions/upload-artifact@v2
+    - uses: actions/upload-artifact@v4
       with:
         name: my-artifact
         path: .coverage
