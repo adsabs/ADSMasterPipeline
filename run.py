@@ -16,7 +16,7 @@ except ImportError:
     from urlparse import urlparse
 
 from adsputils import setup_logging, get_date, load_config
-from adsmp.models import KeyValue, Records
+from adsmp.models import KeyValue, Records, SitemapInfo
 from adsmp import tasks, solr_updater, validate
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import InstrumentedAttribute
@@ -399,6 +399,20 @@ def reindex_failed_bibcodes(app, update_processed=True):
             bibs = []
         logger.info('Done reindexing %s previously failed bibcodes', count)
 
+def populate_sitemap_table(bibcodes, action = 'add'):
+    """
+    actions: 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
+            'delete-table': delete all contents of sitemap table
+            'force-update': force update sitemap table entries for given bibcodes  
+    """
+    # tasks.task_generate_sitemap(bibcodes, action = 'delete-table') 
+    tasks.task_populate_sitemap_table(bibcodes, action = action)
+
+def update_sitemap_files():
+    """
+    Update all sitemap files for records with update_flag = True
+    """
+    tasks.task_update_sitemap_files()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process user input.')
@@ -524,6 +538,20 @@ if __name__ == '__main__':
                         default=False,
                         dest='update_processed',
                         help='update processed timestamps and other state info in records table when a record is indexed')
+    parser.add_argument('--populate-sitemap-table',
+                        action='store_true',
+                        default=False,
+                        dest='populate_sitemap_table',
+                        help='populate sitemap table for list of bibcode')
+    parser.add_argument('--action',
+                        default=False,
+                        choices=['add', 'delete-table', 'force-update', 'remove'],
+                        help='action for populate sitemap table function')
+    parser.add_argument('--update-sitemap-files',
+                        action='store_true',
+                        default=False,
+                        dest='update_sitemap_files',
+                        help='update sitemap files for records with update_flag = True in sitemap table')
 
     args = parser.parse_args()
 
@@ -594,6 +622,25 @@ if __name__ == '__main__':
         rebuild_collection(args.solr_collection, args.batch_size)
     elif args.index_failed:
         reindex_failed_bibcodes(app, args.update_processed)
+    elif args.populate_sitemap_table:
+        if args.filename:
+            bibs = []
+            with open(args.filename) as f:
+                for line in f:
+                    bibcode = line.strip()
+                    if bibcode:
+                        bibs.append(bibcode)
+        elif args.bibcodes:
+            bibs = args.bibcodes
+        if args.action:
+            action = args.action
+        else:
+            action = 'add'
+
+        #TODO: make async?
+        populate_sitemap_table(bibs, action = action)
+    elif args.update_sitemap_files:
+            update_sitemap_files()
     elif args.reindex:
         update_solr = 's' in args.reindex.lower()
         update_metrics = 'm' in args.reindex.lower()
@@ -647,6 +694,3 @@ if __name__ == '__main__':
                     update_solr=update_solr, update_metrics=update_metrics,
                     update_links=update_links, force_processing=args.force_processing, ignore_checksums=args.ignore_checksums,
                     solr_targets=solr_urls, update_processed=args.update_processed, priority=args.priority)
-
-
-

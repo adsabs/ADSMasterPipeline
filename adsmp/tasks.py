@@ -7,7 +7,10 @@ from adsmp import app as app_module
 from adsmp import solr_updater
 from kombu import Queue
 from adsmsg.msg import Msg
-
+from sqlalchemy import create_engine, MetaData, Table
+from sqlalchemy.orm import sessionmaker
+from adsmp.models import SitemapInfo
+import pdb
 # ============================= INITIALIZATION ==================================== #
 
 proj_home = os.path.realpath(os.path.join(os.path.dirname(__file__), '../'))
@@ -22,6 +25,7 @@ app.conf.CELERY_QUEUES = (
     Queue('index-solr', app.exchange, routing_key='index-solr'),
     Queue('index-metrics', app.exchange, routing_key='index-metrics'),
     Queue('index-data-links-resolver', app.exchange, routing_key='index-data-links-resolver'),
+    Queue('generate-sitemap', app.exchange, routing_key='generate-sitemap'),
 )
 
 
@@ -304,6 +308,82 @@ def task_delete_documents(bibcode):
     else:
         logger.debug('Failed to deleted metrics record: %s', bibcode)
 
+@app.task(queue='populate-sitemap-table') 
+def task_populate_sitemap_table(bibcodes, action = 'add', sitemap_dir='/app/logs/sitemap/'):
+    """
+    Populate the sitemap table for the given bibcodes
+    """
+
+    if action not in ['add', 'remove', 'force-update', 'delete-table']: 
+        logger.error("Invalid action %s, must be 'add', 'remove', 'force-update', 'delete-table'", action)
+        return
+
+    if action == 'delete-table':
+        # reset and empty all entries in sitemap table
+        app.delete_contents(SitemapInfo)
+
+        # move all sitemap files to a backup directory
+        app.backup_sitemap_files(sitemap_dir)
+        return
+
+    #TODO: update records table schema to accommodate foreign key (in alembic)
+    if isinstance(bibcodes, basestring):
+        bibcodes = [bibcodes]
+
+    logger.debug('Updating sitemap info for: %s', bibcodes)
+    fields = ['id', 'bibcode', 'bib_data_updated']
+
+    sitemap_records = []
+    # update all record_id from records table into sitemap table
+    for bibcode in bibcodes:
+        r = app.get_record(bibcode, load_only=fields)
+        s = app.get_sitemap_info(bibcode) 
+
+        if r is None:
+            logger.error('The bibcode %s doesn\'t exist!', bibcode)
+            continue
+
+        if s is None: #sitemap record does not exist
+            bib_data_updated = r.get('bib_data_updated', None)
+
+            sitemap_record = {
+                'record_id': r.get('id', None),
+                'bibcode': r.get('bibcode', None),
+                'bib_data_updated': bib_data_updated,
+                'filename_lastmoddate': None, 
+                'sitemap_filename': None,
+            }
+            # Insert sitemap_records into sitemap table
+            app.populate_sitemap_table(sitemap_record, sitemap_dir, action='force-update') 
+            sitemap_records.append(sitemap_record)
+
+        else:
+            bib_data_updated = r.get('bib_data_updated', None)
+            filename_lastmoddate = s.get('filename_lastmoddate', None)
+            s['bib_data_updated'] = bib_data_updated
+
+            if bib_data_updated and filename_lastmoddate:
+                if (bib_data_updated > filename_lastmoddate):
+                    s['update_flag'] = True
+
+            if (action == 'force-update'):
+                    s['update_flag'] = True
+            
+            app.populate_sitemap_table(s, sitemap_dir, action=action) 
+
+
+@app.task(queue='update-sitemap-files') 
+def task_update_sitemap_files(sitemap_dir='/app/logs/sitemap/'):
+
+    # Update sitemap files for records which have update_flag set to True
+    app.update_sitemap_files()
+    app.create_robot_txt_file(sitemap_dir)
+    app.create_sitemap_index(sitemap_dir)
+
+        # directory names : about, help, blog  
+        # need to query github to find when above dirs are updated: https://docs.github.com/en/rest?apiVersion=2022-11-28
+        # need to generate an API token from ADStailor (maybe)
+        #OTHER -- do this for ADS and SciX 
 
 if __name__ == '__main__':
     app.start()

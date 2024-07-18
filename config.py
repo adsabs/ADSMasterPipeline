@@ -2,7 +2,7 @@
 # serves as a running log of claims and storage of author-related
 # information). It is not consumed by others (ie. we 'push' results)
 # SQLALCHEMY_URL = 'postgres://docker:docker@localhost:6432/docker'
-SQLALCHEMY_URL = "sqlite:///"
+SQLALCHEMY_URL = "postgresql://master_pipeline:master_pipeline@ingest_pipeline_test_db:5432/master_pipeline"
 SQLALCHEMY_ECHO = False
 
 

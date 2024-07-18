@@ -2,12 +2,12 @@
 from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 from . import exceptions
-from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records
+from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records, SitemapInfo
 from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session, contextmanager
 from sqlalchemy.orm import load_only as _load_only
-from sqlalchemy import Table, bindparam
+from sqlalchemy import Table, bindparam, func
 import adsputils
 import json
 from adsmp import solr_updater
@@ -19,7 +19,10 @@ import requests
 from copy import deepcopy
 import sys
 from sqlalchemy.dialects.postgresql import insert
-
+import os
+import pdb
+import gzip
+from itertools import chain
 
 class ADSMasterPipelineCelery(ADSCelery):
 
@@ -92,6 +95,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                 oldval = r.bib_data
                 r.bib_data = payload
                 r.bib_data_updated = now
+                self.populate_sitemap_table(r.bibcode, action='add') 
             elif type == 'nonbib_data':
                 oldval = r.nonbib_data
                 r.nonbib_data = payload
@@ -134,6 +138,11 @@ class ADSMasterPipelineCelery(ADSCelery):
             if r is not None:
                 session.add(ChangeLog(key='bibcode:%s' % bibcode, type='deleted', oldvalue=serializer.dumps(r.toJSON())))
                 session.delete(r)
+                session.commit()
+                return True
+            s = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
+            if s is not None:
+                session.delete(s)
                 session.commit()
                 return True
 
@@ -555,3 +564,209 @@ class ADSMasterPipelineCelery(ADSCelery):
                     # here if record holds unexpected value
                     self.logger.error('invalid value in bib data, bibcode = {}, type = {}, value = {}'.format(bibcode, type(bib_links_record), bib_links_record))
         return resolver_record
+
+    def populate_sitemap_table(self, sitemap_record, sitemap_dir, action = 'add'): 
+        """Populate the sitemap with the given record id and action.
+
+        :param bibcode: bibcode of record to be updated
+        :param action: string, either 'add' or 'remove'
+        """
+
+        if action not in ['add', 'remove', 'force-update', 'delete-table']: 
+            self.logger.error("Invalid action %s, must be 'add', 'remove', 'force-update', 'delete-table'", action)
+            return
+
+        with self.session_scope() as session:
+            info = session.query(SitemapInfo).filter_by(record_id=sitemap_record['record_id']).first()
+
+            if info is None:
+                info = SitemapInfo(record_id=sitemap_record["record_id"])
+                session.add(info)
+            
+            info.record_id = sitemap_record.get('record_id', None)
+            info.bibcode = sitemap_record.get('bibcode', None)
+            info.filename_lastmoddate = sitemap_record.get('filename_lastmoddate', None)
+            info.sitemap_filename = sitemap_record.get('sitemap_filename', None)
+            info.bib_data_updated = sitemap_record.get('bib_data_updated', None)
+            
+            # This block is executed if a new record is being added to the sitemap table OR if the sitemap table is being forcefully updated
+            # Generate a new sitemap filename for the record
+            if action == 'force-update':
+                info.update_flag = True
+            
+            if (info.sitemap_filename is None):
+                # get list of sitemap filenames from the SiteMapInfo table
+                sitemap_files = session.query(SitemapInfo.sitemap_filename).all()
+                sitemap_files = list(chain.from_iterable(sitemap_files))
+
+                if sitemap_files and any(sitemap_files):
+                    # remove and None values from the list
+                    sitemap_files = list(filter(lambda x: x is not None, sitemap_files))
+
+                    # split all the filenames to get the index of the latest sitemap file
+                    sitemap_file_indices = [int(sitemap_file.split('_bib_')[-1].split('.')[0]) for sitemap_file in sitemap_files]
+                    latest_index = max(sitemap_file_indices)
+                    sitemap_file_latest = 'sitemap_bib_{}.xml'.format(latest_index)
+
+                    # Check the number of files assigned to sitemap_file_latest
+                    sitemap_file_latest_count = session.query(SitemapInfo).filter_by(sitemap_filename=os.path.join(sitemap_dir,sitemap_file_latest)).count()
+                    print(sitemap_file_latest)
+                    print(sitemap_file_latest_count)
+
+                    if sitemap_file_latest_count >= 3: 
+                        latest_index += 1
+                        sitemap_filename = os.path.join(sitemap_dir, 'sitemap_bib_{}.xml'.format(latest_index))
+                    else:
+                        sitemap_filename = os.path.join(sitemap_dir, sitemap_file_latest)
+                    
+                    info.sitemap_filename = sitemap_filename
+                    info.update_flag = True
+                else:
+                    info.sitemap_filename = os.path.join(sitemap_dir, 'sitemap_bib_1.xml')
+                    info.update_flag = True
+            try:
+                session.commit()
+                return True 
+            except exc.IntegrityError:
+                self.logger.exception('error')
+                session.rollback()
+                raise
+
+            #TODO: how to handle empty files in case of mass deletion?
+
+    def update_sitemap_files(self):
+        """Update the sitemap file with the given record id and action.
+
+        :param bibcode: bibcode of record to be updated
+        """
+        with self.session_scope() as session:
+            # Filter all records with update_flag = True and Count the number of records for each sitemap_filename
+            # SELECT sitemap_filename, count(*)
+            # FROM sitemap
+            # WHERE update_flag = True
+            # GROUP BY sitemap_filename
+            sitemapinfo = session.query(SitemapInfo.sitemap_filename, func.count('*').label('count')).filter(SitemapInfo.update_flag == True).group_by(SitemapInfo.sitemap_filename).all()
+            #unique sitemap filenames
+            sitemap_filenames = list(map(lambda item: item[0], sitemapinfo))
+
+            for file in sitemap_filenames:
+                fileinfo = session.query(SitemapInfo).filter_by(sitemap_filename=file)
+                newlines = []
+                for info in fileinfo:                
+                    # Update the sitemap file
+                    info.filename_lastmoddate = adsputils.get_date()
+                    newline = '\n<url><loc>https://ui.adsabs.harvard.edu/abs/{}/abstract</loc><lastmod>{}</lastmod></url>'.format(info.bibcode, info.bib_data_updated.date()) 
+                    newlines.append(newline)
+                    info.update_flag = False
+                    session.commit()
+
+                with open(file, 'w') as file:
+                    file.write('<?xml version="1.0" encoding="UTF-8"?>')
+                    file.write('\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
+                    for newline in newlines:
+                        file.write(newline)
+
+        return 
+    
+    def get_sitemap_info(self, bibcode):
+        """Get sitemap info for given bibcode.
+
+        :param bibcode: bibcode of record to be updated
+        """
+        with self.session_scope() as session:
+            info = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
+            if info is None:
+                return None
+            return info.toJSON()
+        
+    def delete_contents(self, table):
+        """Delete all contents of the table
+
+        :param table: string, name of the table
+        """
+        with self.session_scope() as session:
+            session.query(table).delete()
+            session.commit()
+    
+    def backup_sitemap_files(self, directory):
+        """Backup the sitemap files to the given directory
+
+        :param dir: string, directory to backup the sitemap files
+        """
+
+        # move dir to /app/tmp 
+        date = adsputils.get_date()
+        tmpdir = '/app/logs/tmp/sitemap_{}_{}_{}-{}/'.format(date.year, date.month, date.day, date.time())
+        os.system('mkdir -p {}'.format(tmpdir))
+        os.system('mv {}/* {}/'.format(directory, tmpdir))
+        return
+    
+    def create_robot_txt_file(self, sitemap_dir, sitemap_url='https://ui.adsabs.harvard.edu/sitemap/'):
+        """Create a robots.txt file with the given sitemap url
+
+        :param sitemap_url: string, url of the sitemap
+        """
+        with open(sitemap_dir+'/robots.txt', 'w') as file:
+            file.write("Sitemap: "+sitemap_url+"/sitemap_index.xml")
+
+            file.write("\nUser-agent: *")
+            file.write("\nDisallow: /v1/")
+            file.write("\nDisallow: /resources")
+            file.write("\nDisallow: /core")
+            file.write("\nDisallow: /tugboat")
+            file.write("\nDisallow: /link_gateway/")
+            file.write("\nDisallow: /search/")
+            file.write("\nDisallow: /execute-query/")
+            file.write("\nDisallow: /status")
+
+            file.write("\n\nAllow: /help/")
+            file.write("\nAllow: /about/")
+            file.write("\nAllow: /blog/")
+            file.write("\nAllow: /abs/")
+            
+            file.write("\n\nDisallow: /abs/*/citations")
+            file.write("\nDisallow: /abs/*/references")
+            file.write("\nDisallow: /abs/*/coreads")
+            file.write("\nDisallow: /abs/*/similar")
+            file.write("\nDisallow: /abs/*/toc")
+            file.write("\nDisallow: /abs/*/graphics")
+            file.write("\nDisallow: /abs/*/metrics")
+            file.write("\nDisallow: /abs/*/exportcitation")
+        return
+    
+    def create_sitemap_index(self, sitemap_dir, sitemap_url='https://ui.adsabs.harvard.edu/sitemap/'):
+        """Create a sitemap index file with the given sitemap url
+
+        :param sitemap_url: string, url of the sitemap
+        """
+        with open(sitemap_dir+'/sitemap_index.xml', 'w') as file:
+            file.write('<?xml version="1.0" encoding="UTF-8"?>')
+            file.write('<link type="text/css" rel="stylesheet" id="dark-mode-custom-link"/>')
+            file.write('<link type="text/css" rel="stylesheet" id="dark-mode-general-link"/>')
+            file.write('<style lang="en" type="text/css" id="dark-mode-custom-style"/>')
+            file.write('<style lang="en" type="text/css" id="dark-mode-native-style"/>')
+            file.write('<style lang="en" type="text/css" id="dark-mode-native-sheet"/>')
+            file.write('\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
+
+            with self.session_scope() as session:
+                sitemapinfo = session.query(SitemapInfo.sitemap_filename,func.count('*').label('count')).group_by(
+                                            SitemapInfo.sitemap_filename).order_by(
+                                                func.min(SitemapInfo.id).asc()).all()
+
+                #unique sitemap filenames
+                sitemap_filenames = list(map(lambda item: item[0], sitemapinfo))
+
+                for filename in sitemap_filenames:
+                    lastmoddate = session.query(SitemapInfo.filename_lastmoddate).filter_by(sitemap_filename=filename).first()
+                    filename = filename.split('/')[-1]
+                    
+                    try:
+                        file.write('\n<sitemap>')
+                        file.write('\n<loc>'+sitemap_url+filename+'</loc>')
+                        file.write('\n<lastmod>'+str(lastmoddate[0].date())+'</lastmod>')
+                        file.write('\n</sitemap>')
+                    except:
+                        self.logger.error('Error writing '+filename+' to sitemap_index.xml')
+                        continue            
+            file.write('\n</sitemapindex>')
+        return
