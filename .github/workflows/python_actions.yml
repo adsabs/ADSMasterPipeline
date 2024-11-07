@@ -46,6 +46,7 @@ jobs:
       run: |
         py.test
     - uses: actions/upload-artifact@v4
+      include-hidden-files: true
       with:
         name: my-artifact
         path: .coverage
