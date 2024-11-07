@@ -52,7 +52,7 @@ HAS_FIELDS = [
     "identifier",
     "institution",
     "issue",
-    "keywords",
+    "keyword",
     "orcid_other",
     "orcid_pub",
     "orcid_user",
