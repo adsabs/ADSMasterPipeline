@@ -620,7 +620,6 @@ if __name__ == '__main__':
         else:
             flag = ''
 
-        #TODO: make async?
         tasks.task_update_scixid(bibs, flag = flag)
     elif args.reindex:
         update_solr = 's' in args.reindex.lower()
@@ -671,9 +670,6 @@ if __name__ == '__main__':
                     bibs = []
         else:
             print('sending bibcode since date to the queue for reindexing')
-            # for bibcodes in args.bibcodes:
-            #     app.update_storage(bibcodes, 'bib_data', None)
-
             reindex(since=args.since, batch_size=args.batch_size, force_indexing=args.force_indexing,
                     update_solr=update_solr, update_metrics=update_metrics,
                     update_links=update_links, force_processing=args.force_processing, ignore_checksums=args.ignore_checksums,
