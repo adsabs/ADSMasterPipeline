@@ -10,6 +10,7 @@ from requests.packages.urllib3 import exceptions
 warnings.simplefilter('ignore', exceptions.InsecurePlatformWarning)
 import time
 from pyrabbit.api import Client as PyRabbitClient
+
 try:
     from urllib.parse import urlparse
 except ImportError:
@@ -524,6 +525,16 @@ if __name__ == '__main__':
                         default=False,
                         dest='update_processed',
                         help='update processed timestamps and other state info in records table when a record is indexed')
+    parser.add_argument('--update-scix-id',
+                        action='store_true',
+                        default=False,
+                        dest='update_scixid',
+                        help='update scix_id for records with specified bibcodes')
+    parser.add_argument('--scix-id-flag',
+                        default=False,
+                        dest='scix_id_flag',
+                        choices=['update', 'force'],
+                        help='update records to be assigned a new scix_id or force reset scix_id and assign all new scix_ids')
 
     args = parser.parse_args()
 
@@ -594,6 +605,23 @@ if __name__ == '__main__':
         rebuild_collection(args.solr_collection, args.batch_size)
     elif args.index_failed:
         reindex_failed_bibcodes(app, args.update_processed)
+    elif args.update_scixid:
+        if args.filename:
+            bibs = []
+            with open(args.filename) as f:
+                for line in f:
+                    bibcode = line.strip()
+                    if bibcode:
+                        bibs.append(bibcode)
+        elif args.bibcodes:
+            bibs = args.bibcodes
+        if args.scix_id_flag:
+            flag = args.scix_id_flag
+        else:
+            flag = ''
+
+        #TODO: make async?
+        tasks.task_update_scixid(bibs, flag = flag)
     elif args.reindex:
         update_solr = 's' in args.reindex.lower()
         update_metrics = 'm' in args.reindex.lower()
@@ -643,6 +671,9 @@ if __name__ == '__main__':
                     bibs = []
         else:
             print('sending bibcode since date to the queue for reindexing')
+            # for bibcodes in args.bibcodes:
+            #     app.update_storage(bibcodes, 'bib_data', None)
+
             reindex(since=args.since, batch_size=args.batch_size, force_indexing=args.force_indexing,
                     update_solr=update_solr, update_metrics=update_metrics,
                     update_links=update_links, force_processing=args.force_processing, ignore_checksums=args.ignore_checksums,

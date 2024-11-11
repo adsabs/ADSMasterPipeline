@@ -47,6 +47,7 @@ class Records(Base):
     __tablename__ = 'records'
     id = Column(Integer, primary_key=True)
     bibcode = Column(String(19), index=True, unique=True)
+    scix_id = Column(String(19), index=True, unique=True, default=None)
 
     bib_data = Column(Text)  # 'metadata' is reserved by SQLAlchemy
     orcid_claims = Column(Text)
