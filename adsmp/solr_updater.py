@@ -466,6 +466,9 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
+
+    import pdb
+    pdb.set_trace()
     if config.get("ENABLE_HAS", False):
         # Read-in names of fields to check for solr "has:" field
         hasfields = sorted(config.get("HAS_FIELDS", []))
