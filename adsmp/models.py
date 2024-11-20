@@ -205,7 +205,7 @@ class BoostFactors(Base):
 
     """
 
-    __tablename__ = 'sitemap'
+    __tablename__ = 'boostfactors'
 
     id = Column(Integer, primary_key=True) #bigint
     record_id = Column(Integer, ForeignKey('records.id'))

@@ -64,7 +64,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         r = self.app.get_record('abc')
         self.assertEqual(r, None)
         
-        self.app.update_storage('abc', 'bib_data', {'bibcode': 'abc', 'hey': 1})
+        self.app.update_storage('abc', 'bib_data', {'bibcode': 'abc', 'hey': 1, 'doctype': 'article'})
         self.app.mark_processed(['abc'], 'solr', checksums=['jkl'], status='success')
         r = self.app.get_record('abc')
         
@@ -76,6 +76,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         self.assertTrue(r['solr_processed'])
         self.assertTrue(r['processed'])
         self.assertEqual(r['status'], 'solr-failed')
+        self.assertEqual(self.app.get_doctype_boost, 1)
 
     def test_index_solr(self):
         self.app.update_storage('abc', 'bib_data', {'bibcode': 'abc', 'hey': 1})
