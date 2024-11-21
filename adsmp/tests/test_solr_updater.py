@@ -340,6 +340,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "volume",
             ],
         )
+        self.assertEqual(round(x["doctype_boost"],3),0.857)
 
         self.app.update_storage(
             "bibcode",
@@ -546,6 +547,8 @@ class TestSolrUpdater(unittest.TestCase):
                 "volume",
             ],
         )
+        self.assertEqual(round(x["doctype_boost"],3),0.857)
+
 
     def test_links_data_merge(self):
         # links_data only from bib
