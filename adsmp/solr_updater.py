@@ -21,7 +21,6 @@ def extract_metrics_pipeline(data, solrdoc):
 
     return dict(citation=citation)
 
-
 def extract_data_pipeline(data, solrdoc):
     reader = data.get("readers", [])
     read_count = len(reader)
@@ -301,7 +300,6 @@ def get_timestamps(db_record, out):
         out["update_timestamp"] = date2solrstamp(last_update)
     return out
 
-
 DB_COLUMN_DESTINATIONS = [
     ("bib_data", ""),
     ("orcid_claims", get_orcid_claims),
@@ -466,6 +464,9 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
+    if db_record.get("doctype_boost", None):
+        out["doctype_boost"] = db_record.get("doctype_boost")
+    
     if config.get("ENABLE_HAS", False):
         # Read-in names of fields to check for solr "has:" field
         hasfields = sorted(config.get("HAS_FIELDS", []))

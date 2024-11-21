@@ -5,12 +5,13 @@ from past.builtins import basestring
 from adsputils import get_date
 from datetime import datetime
 from dateutil.tz import tzutc
-from sqlalchemy import Column, Integer, BigInteger, String, Text, TIMESTAMP, Boolean, DateTime
+from sqlalchemy import Column, Integer, BigInteger, String, Text, TIMESTAMP, Boolean, DateTime, Float
 from sqlalchemy import types
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.types import Enum
 from sqlalchemy.dialects import postgresql
 from sqlalchemy import text
+from sqlalchemy import ForeignKey
 import json
 
 Base = declarative_base()
@@ -184,3 +185,58 @@ class MetricsModel(MetricsBase):
                     rn_citations=self.rn_citations,
                     rn_citation_data=self.rn_citation_data,
                     modtime=self.modtime and get_date(self.modtime).isoformat() or None)
+
+class BoostFactors(Base):
+    """
+    Tracks the various boost factors associated to each bibcode
+    Attributes:
+        id (int): The unique identifier for the table
+        record_id (int): The foreign key referencing the associated record.
+        bibcode (str) : bibcode of the record
+        doctype_boost (float): Boost factor between 0 to 1 based on doctype of the record
+        recency_boost (float): Boost factor between 0 to 1 based on pubyear of the record
+        refereed_boost (float): Boost factor between 0 to 1 based on refereed status of the record
+        cite_boost_astro (float): Boost factor between 0 to 1 based on the number of citations of the record relative to the astro collection and year
+        cite_boost_geo (float): Boost factor between 0 to 1 based on the number of citations of the record relative to the earth science collection and year
+        cite_boost_planetary (float): Boost factor between 0 to 1 based on the number of citations of the record relative to the planetary science collection and year
+        cite_boost_physics (float): Boost factor between 0 to 1 based on the number of citations of the record relative to the physics collection and year
+        cite_boost_general (float): Boost factor between 0 to 1 based on the number of citations of the record relative to the general collection and year
+        cite_boost (float): Boost factor between 0 to 1; combination of other cite_boost scores based on the all the collections relevant to the record
+
+    """
+
+    __tablename__ = 'boostfactors'
+
+    id = Column(Integer, primary_key=True) #bigint
+    record_id = Column(Integer, ForeignKey('records.id'))
+    bibcode = Column(String(255))
+    doctype_boost = Column(Float)
+    cite_boost = Column(Float)
+    recency_boost = Column(Float)
+    refereed_boost = Column(Float)
+    cite_boost_astro = Column(Float)
+    cite_boost_geo = Column(Float)
+    cite_boost_planetary = Column(Float)
+    cite_boost_physics = Column(Float)
+    cite_boost_general = Column(Float)
+
+    def toJSON(self):
+        """
+        Converts the BoostFactors object to a JSON representation.
+        Returns:
+            dict: A dictionary containing the JSON representation of the object.
+        """
+        return {
+            'id': self.id,
+            'record_id': self.record_id,
+            'bibcode': self.bibcode,
+             "doctype_boost": self.doctype_boost,
+            "cite_boost": self.cite_boost,
+            "recency_boost": self.recency_boost,
+            "refereed_boost": self.refereed_boost,
+            "cite_boost_astro": self.cite_boost_astro,
+            "cite_boost_geo": self.cite_boost_geo,
+            "cite_boost_planetary": self.cite_boost_planetary,
+            "cite_boost_physics": self.cite_boost_physics,
+            "cite_boost_general": self.cite_boost_general,
+        }

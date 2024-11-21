@@ -2,7 +2,7 @@
 from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 from . import exceptions
-from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records
+from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records, BoostFactors
 from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session, contextmanager
@@ -71,6 +71,16 @@ class ADSMasterPipelineCelery(ADSCelery):
                 'rn_citations': getattr(self._metrics_table_upsert.excluded, 'rn_citations'),
                 'rn_citation_data': getattr(self._metrics_table_upsert.excluded, 'rn_citation_data')}
             self._metrics_table_upsert = self._metrics_table_upsert.on_conflict_do_update(index_elements=['bibcode'], set_=update_columns)
+        
+        if self._config.get("DOCTYPE_RANKING", False):
+            doctype_rank = self._config.get("DOCTYPE_RANKING") 
+            unique_ranks = sorted(set(doctype_rank.values()))
+
+            # Map ranks to scores evenly spaced between 0 and 1 (invert: lowest rank gets the highest score)
+            rank_to_score = {rank: 1 - ( i / (len(unique_ranks) - 1)) for i, rank in enumerate(unique_ranks)}
+
+            # Assign scores to each rank
+            self._doctype_scores = {doctype: rank_to_score[rank] for doctype, rank in doctype_rank.items()}
 
     def update_storage(self, bibcode, type, payload):
         """Update the document in the database, every time
@@ -120,6 +130,9 @@ class ADSMasterPipelineCelery(ADSCelery):
 
             r.updated = now
             out = r.toJSON()
+            if out.get("bib_data", None):
+                self.generate_doctype_boost(out["bib_data"].get("bibcode", None),out["bib_data"].get("doctype", None) )
+
             try:
                 session.commit()
                 return out
@@ -134,6 +147,12 @@ class ADSMasterPipelineCelery(ADSCelery):
             if r is not None:
                 session.add(ChangeLog(key='bibcode:%s' % bibcode, type='deleted', oldvalue=serializer.dumps(r.toJSON())))
                 session.delete(r)
+                session.commit()
+                return True
+            
+            b = session.query(BoostFactors).filter_by(bibcode=bibcode).first()
+            if b is not None:
+                session.delete(b)
                 session.commit()
                 return True
 
@@ -555,3 +574,29 @@ class ADSMasterPipelineCelery(ADSCelery):
                     # here if record holds unexpected value
                     self.logger.error('invalid value in bib data, bibcode = {}, type = {}, value = {}'.format(bibcode, type(bib_links_record), bib_links_record))
         return resolver_record
+
+    def generate_doctype_boost(self, bibcode, doctype):
+        if bibcode and doctype:
+            with self.session_scope() as session:
+                b = session.query(BoostFactors).filter_by(bibcode=bibcode).first()
+                
+                if b is None:
+                    b = BoostFactors(bibcode=bibcode)
+                    session.add(b)
+            
+                b.doctype_boost = self._doctype_scores.get(doctype, None)
+
+                try:
+                    session.commit()
+                except exc.IntegrityError:
+                    self.logger.exception('error in app.generate_doctype_boost while updating database for bibcode {}'.format(r.bibcode))
+                    session.rollback()
+                    raise
+
+    def get_doctype_boost(self, bibcode):
+        if bibcode:
+            with self.session_scope() as session:
+                b = session.query(BoostFactors).filter_by(bibcode=bibcode).first()
+                
+                if b:
+                    return b.doctype_boost
