@@ -137,7 +137,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                 session.commit()
                 return out
             except exc.IntegrityError:
-                self.logger.debug.exception('error in app.update_storage while updating database for bibcode {}, type {}'.format(bibcode, type))
+                self.logger.exception('error in app.update_storage while updating database for bibcode {}, type {}'.format(bibcode, type))
                 session.rollback()
                 raise
 
@@ -177,7 +177,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                 r.bibcode = new_bibcode
                 session.commit()
             else:
-                self.logger.debug.error('Rename operation, bibcode doesnt exist: old=%s, new=%s', old_bibcode, new_bibcode)
+                self.logger.error('Rename operation, bibcode doesnt exist: old=%s, new=%s', old_bibcode, new_bibcode)
 
     def get_record(self, bibcode, load_only=None):
         if isinstance(bibcode, list):
