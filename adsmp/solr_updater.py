@@ -468,6 +468,8 @@ def transform_json_record(db_record):
                 )
 
     # Compute doctype scores on the fly
+    out["doctype_boost"] = None
+
     if config.get("DOCTYPE_RANKING", False):
         doctype_rank = config.get("DOCTYPE_RANKING") 
         unique_ranks = sorted(set(doctype_rank.values()))
