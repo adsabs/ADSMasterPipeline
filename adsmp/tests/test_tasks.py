@@ -537,7 +537,7 @@ class TestWorkers(unittest.TestCase):
             tasks.task_index_records(["foo"], force=True)
 
             self.assertEqual(update_solr.call_count, 1)
-            self._check_checksum("foo", solr="0x4db9a611")
+            self._check_checksum("foo", solr="0x8f51bd8d")
 
             # now change metrics (solr shouldn't be called)
             getter.return_value = {
@@ -545,7 +545,7 @@ class TestWorkers(unittest.TestCase):
                 "metrics_updated": get_date("1972-04-02"),
                 "bib_data_updated": get_date("1972-04-01"),
                 "metrics": {},
-                "solr_checksum": "0x4db9a611",
+                "solr_checksum": "0x8f51bd8d",
             }
             tasks.task_index_records(["foo"], force=True)
             self.assertEqual(update_solr.call_count, 1)
@@ -563,7 +563,7 @@ class TestWorkers(unittest.TestCase):
                 "bibcode": "foo",
                 "metrics_updated": get_date("1972-04-02"),
                 "bib_data_updated": get_date("1972-04-01"),
-                "solr_checksum": "0x4db9a611",
+                "solr_checksum": "0x8f51bd8d",
             }
 
             # update with matching checksum and then update and ignore checksums
@@ -574,7 +574,6 @@ class TestWorkers(unittest.TestCase):
                 update_links=False,
                 ignore_checksums=False,
             )
-            # pdb.set_trace()
 
             self.assertEqual(update_solr.call_count, 0)
             tasks.task_index_records(
