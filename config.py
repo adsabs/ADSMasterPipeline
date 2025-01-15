@@ -29,7 +29,7 @@ SOLR_URL_OLD = "http://localhost:9984/solr/collection1/query"
 
 # url and token for the update endpoint of the links resolver microservice
 # new links data is sent to this url, the mircoservice updates its datastore
-LINKS_RESOLVER_UPDATE_URL = "http://localhost:8080/update"
+LINKS_RESOLVER_UPDATE_URL = "http://localhost:8080/update_new"
 ADS_API_TOKEN = "fixme"
 
 
