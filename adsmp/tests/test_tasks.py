@@ -55,7 +55,7 @@ class TestWorkers(unittest.TestCase):
                 "SQLALCHEMY_ECHO": False,
                 "SOLR_URLS": ["http://foo.bar.com/solr/v1"],
                 "METRICS_SQLALCHEMY_URL": None,
-                "LINKS_RESOLVER_UPDATE_URL": "http://localhost:8080/update",
+                "LINKS_RESOLVER_UPDATE_URL": "http://localhost:8080/update_new",
                 "ADS_API_TOKEN": "api_token",
             },
         )
@@ -477,7 +477,7 @@ class TestWorkers(unittest.TestCase):
                 force=True,
             )
             p.assert_called_with(
-                "http://localhost:8080/update",
+                "http://localhost:8080/update_new",
                 data=json.dumps(
                     [{"bibcode": "linkstest", "data_links_rows": [{"baz": 0}]}]
                 ),
