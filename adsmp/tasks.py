@@ -194,7 +194,8 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
         # Adding boost factors to r to pass it to solr
         doctype_boost = app.get_doctype_boost(bibcode)
         if doctype_boost:
-            r["doctype_boost"] = doctype_boost
+            if r.get('nonbib_data', None):
+                r["nonbib_data"]["doctype_boost"] = doctype_boost
 
         augments_updated = r.get('augments_updated', None)
         bib_data_updated = r.get('bib_data_updated', None)
