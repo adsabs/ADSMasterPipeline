@@ -131,7 +131,7 @@ class ADSMasterPipelineCelery(ADSCelery):
             r.updated = now
             out = r.toJSON()
             if out.get("bib_data", None):
-                self.generate_doctype_boost(out["bib_data"].get("bibcode", None),out["bib_data"].get("doctype", None) )
+                doctype_boost = self.generate_doctype_boost(out["bib_data"].get("bibcode", None),out["bib_data"].get("doctype", None) )
 
             try:
                 session.commit()
@@ -592,6 +592,8 @@ class ADSMasterPipelineCelery(ADSCelery):
                     self.logger.exception('error in app.generate_doctype_boost while updating database for bibcode {}'.format(r.bibcode))
                     session.rollback()
                     raise
+            
+                return b.doctype_boost
 
     def get_doctype_boost(self, bibcode):
         if bibcode:

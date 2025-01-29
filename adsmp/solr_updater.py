@@ -465,8 +465,10 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
-    if db_record.get("doctype_boost", None):
-        out["doctype_boost"] = db_record.get("doctype_boost")
+    out["doctype_boost"] = None
+    if db_record.get("nonbib_data"):
+        if db_record["nonbib_data"].get("doctype_boost", None):
+            out["doctype_boost"] = db_record["nonbib_data"]["doctype_boost"]
     
     if config.get("ENABLE_HAS", False):
         # Read-in names of fields to check for solr "has:" field

@@ -76,7 +76,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         self.assertTrue(r['solr_processed'])
         self.assertTrue(r['processed'])
         self.assertEqual(r['status'], 'solr-failed')
-        self.assertEqual(self.app.get_doctype_boost, 1)
+        self.assertEqual(self.app.get_doctype_boost(r["bibcode"]), 1)
 
     def test_index_solr(self):
         self.app.update_storage('abc', 'bib_data', {'bibcode': 'abc', 'hey': 1})
@@ -453,7 +453,6 @@ class TestAdsOrcidCelery(unittest.TestCase):
             m_args = m.call_args_list
             self.assertTrue('testbib' in str(m_args[0]))
             self.assertTrue('foobar' in str(m_args[0]))
-
 
 if __name__ == '__main__':
     unittest.main()

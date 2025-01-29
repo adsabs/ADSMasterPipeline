@@ -307,6 +307,11 @@ class TestSolrUpdater(unittest.TestCase):
         )
         rec = self.app.get_record("bibcode")
 
+        # Generate doctype_boost given the doctype from bib_data
+        doctype_boost = self.app.generate_doctype_boost(rec["bibcode"], rec["bib_data"]['doctype'])
+        # Add doctype_boost to nonbib_data as done in reindex task
+        rec["nonbib_data"]["doctype_boost"] = doctype_boost        
+        
         x = solr_updater.transform_json_record(rec)
         # self.assertFalse('aff' in x, 'virtual field should not be in solr output')
 
@@ -340,6 +345,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "volume",
             ],
         )
+        self.assertEqual(round(x["doctype_boost"],3),0.857)
 
         self.app.update_storage(
             "bibcode",
@@ -513,6 +519,11 @@ class TestSolrUpdater(unittest.TestCase):
                 self.assertEqual(x[f], "2017-09-19T21:17:12.026474Z")
 
         rec = self.app.get_record("bibcode")
+        # Generate doctype_boost given the doctype from bib_data
+        doctype_boost = self.app.generate_doctype_boost(rec["bibcode"], rec["bib_data"]['doctype'])
+        # Add doctype_boost to nonbib_data as done in reindex task
+        rec["nonbib_data"]["doctype_boost"] = doctype_boost        
+        
         x = solr_updater.transform_json_record(rec)
 
         self.assertTrue("aff" in x)  # aff is no longer a virtual field
@@ -546,6 +557,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "volume",
             ],
         )
+        self.assertEqual(round(x["doctype_boost"],3),0.857)
 
     def test_links_data_merge(self):
         # links_data only from bib
