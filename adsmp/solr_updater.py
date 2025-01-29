@@ -112,7 +112,6 @@ def extract_data_pipeline(data, solrdoc):
         reader=reader,
         read_count=read_count,
         cite_read_boost=data.get("boost", 0.0),
-        doctype_boost = data.get("doctype_boost", None),
         classic_factor=data.get("norm_cites", 0.0),
         reference=data.get("reference", []),
         data=data.get("data", []),
