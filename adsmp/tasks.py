@@ -7,7 +7,7 @@ from adsmp import app as app_module
 from adsmp import solr_updater
 from kombu import Queue
 from adsmsg.msg import Msg
-
+from adsmp.models import BoostFactors
 # ============================= INITIALIZATION ==================================== #
 
 proj_home = os.path.realpath(os.path.join(os.path.dirname(__file__), '../'))
@@ -195,7 +195,7 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
         doctype_boost = app.get_doctype_boost(bibcode)
         if doctype_boost:
             r["nonbib_data"]["doctype_boost"] = doctype_boost
-
+        logger.debug("doctype_boost ",doctype_boost)
         augments_updated = r.get('augments_updated', None)
         bib_data_updated = r.get('bib_data_updated', None)
         fulltext_updated = r.get('fulltext_updated', None)
@@ -309,6 +309,28 @@ def task_delete_documents(bibcode):
     else:
         logger.debug('Failed to deleted metrics record: %s', bibcode)
 
+@app.task(queue='populate-boostfactors-table') 
+def task_populate_boostfactors_table(bibcodes, boost_action):
+    """
+    Populate the sitemap table for the given bibcodes
+    """
+
+    if boost_action not in ['add', 'delete-tablecontents']:
+        logger.error("Invalid boost_action %s, must be 'add', 'remove', 'force-update', 'delete-table'", boost_action)
+        return
+
+    if boost_action == 'delete-tablecontents':
+        # reset and empty all entries in boostfactors table
+        app.delete_table_contents(BoostFactors)
+        return
+
+    if isinstance(bibcodes, basestring):
+        bibcodes = [bibcodes]
+
+    if boost_action == 'add':
+        logger.debug('Updating doctype_boost info in boostfactors table for: %s', bibcodes)
+        for bibcode in bibcodes:
+            app.generate_doctype_boost(bibcode)
 
 if __name__ == '__main__':
     app.start()

@@ -7,7 +7,7 @@ SQLALCHEMY_ECHO = False
 
 
 # possible values: WARN, INFO, DEBUG
-LOGGING_LEVEL = "INFO"
+LOGGING_LEVEL = "DEBUG"
 CELERY_INCLUDE = ["adsmp.tasks"]
 
 OUTPUT_CELERY_BROKER = "pyamqp://test:test@localhost:5682/test_augment_pipeline"

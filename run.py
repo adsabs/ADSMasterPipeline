@@ -399,6 +399,13 @@ def reindex_failed_bibcodes(app, update_processed=True):
             bibs = []
         logger.info('Done reindexing %s previously failed bibcodes', count)
 
+def populate_boostfactors_table(bibcodes, boost_action):
+    """
+    actions: 'add': add/update doctype_boost scores in boostfactors table for given bibcodes
+            'delete-table-contents': delete all contents of boostfactors table
+    """
+    tasks.task_populate_boostfactors_table(bibcodes, boost_action = boost_action)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process user input.')
@@ -524,6 +531,15 @@ if __name__ == '__main__':
                         default=False,
                         dest='update_processed',
                         help='update processed timestamps and other state info in records table when a record is indexed')
+    parser.add_argument('--populate-boostfactors-table',
+                        action='store_true',
+                        default=False,
+                        dest='populate_boostfactors_table',
+                        help='populate boostfactors table for list of bibcode')
+    parser.add_argument('--boost_action',
+                        default=False,
+                        choices=['add', 'delete-tablecontents'],
+                        help='action for populate_boostfactors_table function')    
 
     args = parser.parse_args()
 
@@ -534,7 +550,7 @@ if __name__ == '__main__':
         print_kvs()
 
     logger.info('Executing run.py: %s', args)
-
+    
     # uff: this whole block needs refactoring (as is written, it only allows for single operation)
     if args.diagnostics:
         diagnostics(args.bibcodes)
@@ -594,6 +610,22 @@ if __name__ == '__main__':
         rebuild_collection(args.solr_collection, args.batch_size)
     elif args.index_failed:
         reindex_failed_bibcodes(app, args.update_processed)
+    elif args.populate_boostfactors_table:
+        if args.filename:
+            bibs = []
+            with open(args.filename) as f:
+                for line in f:
+                    bibcode = line.strip()
+                    if bibcode:
+                        bibs.append(bibcode)
+        elif args.bibcodes:
+            bibs = args.bibcodes
+        if args.boost_action:
+            boost_action = args.boost_action
+        else:
+            boost_action = 'add'
+
+        populate_boostfactors_table(bibs, boost_action = boost_action)
     elif args.reindex:
         update_solr = 's' in args.reindex.lower()
         update_metrics = 'm' in args.reindex.lower()

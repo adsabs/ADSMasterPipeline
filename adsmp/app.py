@@ -575,7 +575,15 @@ class ADSMasterPipelineCelery(ADSCelery):
                     self.logger.error('invalid value in bib data, bibcode = {}, type = {}, value = {}'.format(bibcode, type(bib_links_record), bib_links_record))
         return resolver_record
 
-    def generate_doctype_boost(self, bibcode, doctype):
+    def generate_doctype_boost(self, bibcode, doctype = None):
+        if not doctype:
+            with self.session_scope() as session:
+                r = session.query(Records).filter_by(bibcode=bibcode).first()
+                r = r.toJSON()
+                if r:
+                    if r.get("bibdata", None):
+                        doctype = r["bibdata"].get("doctype", None)
+
         if bibcode and doctype:
             with self.session_scope() as session:
                 b = session.query(BoostFactors).filter_by(bibcode=bibcode).first()
@@ -602,3 +610,11 @@ class ADSMasterPipelineCelery(ADSCelery):
                 
                 if b:
                     return b.doctype_boost
+
+    def delete_table_contents(self, table):
+        """Delete all contents of the table
+        :param table: string, name of the table
+        """
+        with self.session_scope() as session:
+            session.query(table).delete()
+            session.commit()
