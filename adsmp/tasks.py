@@ -125,7 +125,7 @@ def task_update_scixid(bibcodes, flag):
                 return
             if flag == 'update':
                 if not r.scix_id:
-                    r.scix_id = app.generate_scix_id(r.id)
+                    r.scix_id = "scix:" + app.generate_scix_id(r.id)
                     try:
                         session.commit()
                         logger.debug('Bibcode %s has been assigned a new scix id', bibcode)
@@ -133,13 +133,12 @@ def task_update_scixid(bibcodes, flag):
                         logger.exception('error in app.update_storage while updating database for bibcode {}, type {}'.format(bibcode, type))
                         session.rollback()
                 else:
-                    r.scix_id = bibcode
                     session.commit()
                     logger.debug('Bibcode %s already has a scix id assigned', bibcode)
                     session.rollback()
 
             if flag == 'force':
-                r.scix_id = app.generate_scix_id(r.id)
+                r.scix_id = "scix:" + app.generate_scix_id(r.id)
                 try:
                     session.commit()
                     logger.debug('Bibcode %s has been assigned a new scix id', bibcode)

@@ -340,7 +340,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "volume",
             ],
         )
-
+        self.assertEqual(x["scix_id"], "scix:0000-0000-0011")
         self.app.update_storage(
             "bibcode",
             "augment",
@@ -556,6 +556,7 @@ class TestSolrUpdater(unittest.TestCase):
         }
         solr_record = solr_updater.transform_json_record(db_record)
         self.assertEqual(db_record["bib_data"]["links_data"], solr_record["links_data"])
+        self.assertEqual(solr_record["scix_id"], None)
         db_record = {
             "bibcode": "foo",
             "bib_data": {"links_data": ['{"url": "http://asdf"}']},

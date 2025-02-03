@@ -116,13 +116,13 @@ class ADSMasterPipelineCelery(ADSCelery):
             else:
                 raise Exception('Unknown type: %s' % type)
             session.add(ChangeLog(key=bibcode, type=type, oldvalue=oldval))
-
             r.updated = now
             out = r.toJSON()
             try:
                 session.flush()
                 if not r.scix_id:
-                    r.scix_id = self.generate_scix_id(r.id)
+                    r.scix_id = "scix:" + str(self.generate_scix_id(r.id))
+                    out = r.toJSON()
                 session.commit()
                 return out
             except exc.IntegrityError:
