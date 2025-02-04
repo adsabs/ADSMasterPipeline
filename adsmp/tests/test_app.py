@@ -322,19 +322,15 @@ class TestAdsOrcidCelery(unittest.TestCase):
 
         document_data = self.get_document_data() 
         # init database so timestamps and checksum can be updated
-        self.app.update_storage('linkstest', 'nonbib_data', document_data)
+        self.app.update_storage('linkstest', 'nonbib_data', document_data['links'])
 
         with mock.patch('requests.put', return_value=m) as p:
 
-            document_payload = {
-            'bibcode': 'linkstest',
-            'identifier': ['arXiv:1234.5678', 'DOI:10.1234/example'],
-            'links': document_data['links']
-            }
+            
             checksum = 'thechecksum'
-            self.app.index_datalinks([document_payload], [checksum])
+            self.app.index_datalinks([document_data], [checksum])
             p.assert_called_with('http://localhost:8080/update_new',
-                                 data=json.dumps([document_payload]),
+                                 data=json.dumps([document_data]),
                                  headers={'Authorization': 'Bearer fixme'})
             self.assertEqual(p.call_count, 1)
             # verify database updated
@@ -355,18 +351,14 @@ class TestAdsOrcidCelery(unittest.TestCase):
         document_data = self.get_document_data()
         
         # init database so timestamps and checksum can be updated
-        self.app.update_storage('linkstest', 'nonbib_data', document_data)
+        self.app.update_storage('linkstest', 'nonbib_data', document_data['links'])
 
         with mock.patch('requests.put', return_value=m) as p:
-            document_payload = {
-            'bibcode': 'linkstest',
-            'identifier': ['arXiv:1234.5678', 'DOI:10.1234/example'],
-            'links': document_data['links']
-            }            
+                
             checksum = 'thechecksum'
-            self.app.index_datalinks([document_payload], [checksum])
+            self.app.index_datalinks([document_data], [checksum])
             p.assert_called_with('http://localhost:8080/update_new',
-                                 data=json.dumps([document_payload]),
+                                 data=json.dumps([document_data]),
                                  headers={'Authorization': 'Bearer fixme'})
 
             rec = self.app.get_record(bibcode='linkstest')
@@ -379,8 +371,9 @@ class TestAdsOrcidCelery(unittest.TestCase):
 
     def test_index_datalinks_service_only_batch_failure(self):
         # init database so timestamps and checksum can be updated
-        nonbib_data = {'data_links_rows': [{'baz': 0}]}
-        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
+
+        document_data = self.get_document_data()
+        self.app.update_storage('linkstest', 'nonbib_data', document_data['links'])
         with mock.patch('requests.put') as p:
             bad = mock.Mock()
             bad.status_code = 500
@@ -389,8 +382,6 @@ class TestAdsOrcidCelery(unittest.TestCase):
             good.status_code = 200
 
             p.side_effect = [bad, good]
-
-            document_data = self.get_document_data()
 
             checksum = 'thechecksum'
             self.app.index_datalinks([document_data], [checksum])
@@ -412,17 +403,12 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # init database so timestamps and checksum can be updated
         document_data = self.get_document_data()
 
-        self.app.update_storage('linkstest', 'nonbib_data', document_data)
+        self.app.update_storage('linkstest', 'nonbib_data', document_data['links'])
         with mock.patch('requests.put', return_value=m) as p:
-            document_payload = {
-                'bibcode': 'linkstest',
-                'identifier': ['arXiv:1234.5678', 'DOI:10.1234/example'],
-                'links': document_data['links']
-            }        
             checksum = 'thechecksum'
-            self.app.index_datalinks([document_payload], [checksum], update_processed=False)
+            self.app.index_datalinks([document_data], [checksum], update_processed=False)
             p.assert_called_with('http://localhost:8080/update_new',
-                                 data=json.dumps([document_payload]),
+                                 data=json.dumps([document_data]),
                                  headers={'Authorization': 'Bearer fixme'})
             # verify database updated
             rec = self.app.get_record(bibcode='linkstest')
