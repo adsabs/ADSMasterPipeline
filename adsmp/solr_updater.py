@@ -437,7 +437,7 @@ def transform_json_record(db_record):
         "bibgroup_facet", None
     ):
         out["bibgroup_facet"] = db_record["nonbib_data"]["bibgroup_facet"]
-
+    
     # if only bib data is available, use it to compute property
     if db_record.get("nonbib_data", None) is None and db_record.get("bib_data", None):
         links_data = db_record["bib_data"].get("links_data", None)
@@ -466,8 +466,11 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
+    out["scix_id"] = None
+    if db_record.get("scix_id", None):
+        out["scix_id"] = db_record.get("scix_id")
 
-    # Compute doctype scores on the fly
+        # Compute doctype scores on the fly
     out["doctype_boost"] = None
 
     if config.get("DOCTYPE_RANKING", False):
