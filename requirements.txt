@@ -1,6 +1,6 @@
-adsputils==1.5.2
+adsputils==1.5.5
 alembic==0.9.1
-httplib2==0.18.1
+httplib2==0.19.0
 portalocker==1.7.1
 psycopg2==2.8.6
 pyrabbit==1.1.0
