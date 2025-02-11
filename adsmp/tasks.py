@@ -9,6 +9,8 @@ from adsmp.models import Records
 from kombu import Queue
 from adsmsg.msg import Msg
 from sqlalchemy import exc
+from sqlalchemy.orm import load_only
+
 
 # ============================= INITIALIZATION ==================================== #
 
@@ -113,7 +115,7 @@ def task_update_scixid(bibcodes, flag):
           'force' - force reset scix_id and assign new scix_ids to all bibcodes
     """
     if flag not in ['update', 'force']:
-        logger.error('flag can only have the values "update" or "force"')
+        logger.error('flag can only have the values "update", "update-all", "force"')
 
     for bibcode in bibcodes:
         logger.debug('Updating record: %s', bibcode)
@@ -145,6 +147,7 @@ def task_update_scixid(bibcodes, flag):
                 except exc.IntegrityError:
                     logger.exception('error in app.update_storage while updating database for bibcode {}, type {}'.format(bibcode, type))
                     session.rollback()
+
 
 @app.task(queue='rebuild-index')
 def task_rebuild_index(bibcodes, solr_targets=None):
