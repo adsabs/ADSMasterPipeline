@@ -115,7 +115,7 @@ def task_update_scixid(bibcodes, flag):
           'force' - force reset scix_id and assign new scix_ids to all bibcodes
     """
     if flag not in ['update', 'force']:
-        logger.error('flag can only have the values "update", "update-all", "force"')
+        logger.error('task_update_scixid flag can only have the values "update" or "force"')
 
     for bibcode in bibcodes:
         logger.debug('Updating record: %s', bibcode)
