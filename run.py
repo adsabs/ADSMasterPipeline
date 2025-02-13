@@ -290,6 +290,51 @@ def delete_obsolete_records(older_than, batch_size=1000):
 
     logger.info("Deleted {} obsolete records".format(deleted))
 
+def process_all_scixid(batch_size, flag):
+    if flag == 'update-all':
+        flag = 'update'
+    elif flag == 'force-all':
+        flag = 'force'
+    # first, fail if we can not monitor queue length before we queue anything
+    u = urlparse(app.conf['OUTPUT_CELERY_BROKER'])
+    rabbitmq = PyRabbitClient(u.hostname + ':' + str(u.port + 10000), u.username, u.password)
+    if not rabbitmq.is_alive('master_pipeline'):
+        logger.error('failed to connect to rabbitmq with PyRabbit to monitor queue')
+        sys.exit(1)
+
+    sent = 0
+    batch = []
+    _tasks = []
+    with app.session_scope() as session:
+        # load all records from RecordsDB
+        for rec in session.query(Records) \
+                        .options(load_only(Records.bibcode)) \
+                        .yield_per(batch_size):
+
+            sent += 1
+            if sent % 1000 == 0:
+                logger.debug('Sending %s records', sent)
+
+            batch.append(rec.bibcode)
+            if len(batch) > batch_size:
+                t = tasks.task_update_scixid.delay(batch, flag)
+                _tasks.append(t)
+                batch = []
+    
+    if len(batch) > 0:
+        t = tasks.task_update_scixid.delay(batch, flag)
+        _tasks.append(t)
+    
+    # now wait for update-scixid queue to empty
+    queue_length = 1
+    while queue_length > 0:
+        queue_length = rabbitmq.get_queue_depth('master_pipeline', 'update-scixid')
+        stime = max(queue_length * 0.1, 10.0)
+        logger.info('Waiting %s for update-scixid queue to empty, queue_length %s, sent %s' % (stime, queue_length, sent))
+        time.sleep(stime)
+
+    logger.info('Completed waiting %s for update-scixid queue to empty, queue_length %s, sent %s' % (stime, queue_length, sent))
+
 
 def rebuild_collection(collection_name, batch_size):
     """
@@ -533,8 +578,8 @@ if __name__ == '__main__':
     parser.add_argument('--scix-id-flag',
                         default=False,
                         dest='scix_id_flag',
-                        choices=['update', 'force'],
-                        help='update records to be assigned a new scix_id or force reset scix_id and assign all new scix_ids')
+                        choices=['update', 'update-all', 'force', 'force-all'],
+                        help='update records to be assigned a new scix_id, update all records in recordsDB with new scix_id, force reset scix_id and assign new scix_ids, force all records in recordsDB with new scix_id')
 
     args = parser.parse_args()
 
@@ -620,7 +665,11 @@ if __name__ == '__main__':
         else:
             flag = ''
 
-        tasks.task_update_scixid(bibs, flag = flag)
+        if flag == 'update-all' or flag == 'force-all':
+            batch_size = args.batch_size
+            process_all_scixid(batch_size, flag)
+        else:
+            tasks.task_update_scixid(bibs, flag = flag)
     elif args.reindex:
         update_solr = 's' in args.reindex.lower()
         update_metrics = 'm' in args.reindex.lower()

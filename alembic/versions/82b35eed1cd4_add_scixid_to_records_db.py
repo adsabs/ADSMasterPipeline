@@ -12,12 +12,37 @@ down_revision = '2d2af8a9c996'
 
 from alembic import op
 from sqlalchemy import Column, String, Integer, TIMESTAMP, DateTime, Text, Index, Boolean
-
+from adsmp.models import Records
+from adsmp import tasks
+from sqlalchemy.orm import load_only, Session
                                
+def populate_scix_id(session):
+    sent = 0
+    batch = []
+    _tasks = []
+    batch_size = 100
+    # load all records from RecordsDB
+    for rec in session.query(Records) \
+                    .options(load_only(Records.bibcode)) \
+                    .yield_per(batch_size):
+
+        sent += 1
+
+        batch.append(rec.bibcode)
+        if len(batch) > batch_size:
+            t = tasks.task_update_scixid(batch, 'update')
+            _tasks.append(t)
+            batch = []
+    
+    if len(batch) > 0:
+        t = tasks.task_update_scixid(batch, 'update')
+        _tasks.append(t)
 
 
 def upgrade():
     op.add_column('records', Column('scix_id', String(19), nullable = True, default=None, unique=True))
+    session = Session(bind = op.get_bind())
+    populate_scix_id(session)
     
 
 def downgrade():
