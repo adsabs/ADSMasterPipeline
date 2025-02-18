@@ -510,6 +510,134 @@ class ADSMasterPipelineCelery(ADSCelery):
         else:
             self.logger.debug('request_aff_augment called but bibcode {} has no aff data'.format(bibcode))
 
+    def prepare_bibcode(self, bibcode):
+        """prepare data for classifier pipeline"""
+        # import pdb; pdb.set_trace()
+        # rec = self.get_record(bibcode)
+        if rec is None:
+            self.logger.warning('request_classifier called but no data at all for bibcode {}'.format(bibcode))
+            return
+        bib_data = rec.get('bib_data', None)
+        if bib_data is None:
+            self.logger.warning('request_classifier called but no bib data for bibcode {}'.format(bibcode))
+            return
+        title = bib_data.get('title', '')
+        abstract = bib_data.get('abstract', '')
+        data = {
+            'bibcode': bibcode,
+            'title': title,
+            'abstract': abstract,
+        }
+        return data
+
+    def request_classify(self, bibcode=None,scix_id = None, filename=None,mode='auto', batch_size=500, data=None,check_boolean=False):
+        """ send classifier request for bibcode to classifier pipeline
+
+        set data parameter to provide test data
+
+        Parameters
+        ----------
+        bibcode = reference ID for record (Needs to include SciXID)
+        scix_id = reference ID for record
+        filename : filename of input file with list of records to classify 
+        mode : 'auto' (default) assumes single record input from master, 'amnual' assumes multiple records input at command line
+        batch_size : size of batch for large input files
+        check_boolean :
+        
+        """
+        self.logger.info('request_classify called with bibcode={}, filename={}, mode={}, batch_size={}, data={}, validate={}'.format(bibcode, filename, mode, batch_size, data, check_boolean))
+
+        if not self._config.get('OUTPUT_TASKNAME_CLASSIFIER'):
+            self.logger.warning('request_classifier called but no classifier taskname in config')
+            return
+        if not self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER'):
+            self.logger.warning('request_classifier called but no classifier broker in config')
+            return
+
+        # print('bibcode',bibcode)
+        # print('filename',filename)
+        # import pdb; pdb.set_trace()
+        if bibcode is not None and mode == 'auto':
+            if data is None:
+                data = self.prepare_bibcode(bibcode)
+            if data and data.get('title'):
+                message = ClassifyRequestRecord(**data) # Maybe make as one element list check protobuf
+                self.forward_message(message, pipeline='classifier')
+                self.logger.debug('sent classifier request for bibcode {}'.format(bibcode))
+            else:
+                self.logger.debug('request_classifier called but bibcode {} has no title data'.format(bibcode))
+        if filename is not None and mode == 'manual':
+            batch_idx = 0
+            batch_list = []
+            self.logger.info('request_classifier called with filename {}'.format(filename))
+            # import pdb; pdb.set_trace()
+            with open(filename, 'r') as f:
+                reader = csv.DictReader(f)
+                bibcodes =  [row for row in reader]
+            # if check_boolean is False:
+                # import pdb; pdb.set_trace()
+                # with open(filename, 'r') as f:
+                #     bibcodes = f.read().splitlines()
+                # if 'bibcode' in bibcodes[0].lower():  # check lower function does it need casting as string?
+                #     bibcodes = bibcodes[1:]
+                # with open(filename, 'r') as f:
+                #     reader = csv.DictReader(f)
+                #     bibcodes =  [row for row in reader]
+                # self.logger.info('list of bibcodes: {}'.format(bibcodes))
+            # else:
+            #     with open(filename, 'r') as f:
+            #         reader = csv.DictReader(f)
+            #         bibcodes =  [row for row in reader]
+            # print('bibcodes',bibcodes)
+            # import pdb; pdb.set_trace()
+            while batch_idx < len(bibcodes):
+                bibcodes_batch = bibcodes[batch_idx:batch_idx+batch_size]
+                # import pdb; pdb.set_trace()
+                for record in bibcodes_batch:
+                    # import pdb; pdb.set_trace()
+                    if record.get('title') or record.get('abstract'):
+                        data = record
+                    else:
+                        data = self.prepare_bibcode(record)
+                    # if check_boolean is False:
+                    #     self.logger.info('preparing record for: {}'.format(bibcode))
+                    #     # import pdb; pdb.set_trace()
+                    #     data = self.prepare_bibcode(bibcode)
+                    # else:
+                    #     data = bibcode
+                    if data and data.get('title'):
+                        # import pdb; pdb.set_trace()
+                        batch_list.append(data)
+                # import pdb; pdb.set_trace()
+                if len(batch_list) > 0:
+                    # message = ClassifyRequestRecordList(*batch_list) # may not need to be different protobuff
+                    message = ClassifyRequestRecordList() # may not need to be different protobuff
+                    for item in batch_list:
+                        entry = message.classify_requests.add()
+                        entry.bibcode = item.get('bibcode')
+                        entry.title = item.get('title')
+                        entry.abstract = item.get('abstract')
+                    # message_0 = ClassifyRequestRecord(batch_list[0])
+                    output_taskname=self._config.get('OUTPUT_TASKNAME_CLASSIFIER')
+                    output_broker=self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER')
+                    # import pdb; pdb.set_trace()
+                    # print('check boolean',check_boolean)
+                    # import pdb; pdb.set_trace()
+                    if check_boolean is True:
+                        # Save message to file 
+                        # with open('classifier_request.json', 'w') as f:
+                        #     f.write(str(message))
+                        json_message = MessageToJson(message)
+                        with open('classifier_request.json', 'w') as f:
+                            f.write(json_message)
+                    else:
+                        self.logger.info('Sending message for batch')
+                        self.logger.info('sending message {}'.format(message))
+                        self.forward_message(message, pipeline='classifier')
+                        self.logger.debug('sent classifier request for batch {}'.format(batch_idx))
+                batch_idx += batch_size
+                batch_list = []
+
     def generate_links_for_resolver(self, record):
         """use nonbib or bib elements of database record and return links for resolver and checksum"""
         # nonbib data has something like
