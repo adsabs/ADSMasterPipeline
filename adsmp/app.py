@@ -3,7 +3,7 @@ from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 from . import exceptions
 from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records
-from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord
+from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session, contextmanager
 from sqlalchemy.orm import load_only as _load_only
@@ -19,6 +19,7 @@ import requests
 from copy import deepcopy
 import sys
 from sqlalchemy.dialects.postgresql import insert
+import csv
 
 
 class ADSMasterPipelineCelery(ADSCelery):
