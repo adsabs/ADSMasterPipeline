@@ -10,6 +10,7 @@ from requests.packages.urllib3 import exceptions
 warnings.simplefilter('ignore', exceptions.InsecurePlatformWarning)
 import time
 from pyrabbit.api import Client as PyRabbitClient
+
 try:
     from urllib.parse import urlparse
 except ImportError:
@@ -524,6 +525,34 @@ if __name__ == '__main__':
                         default=False,
                         dest='update_processed',
                         help='update processed timestamps and other state info in records table when a record is indexed')
+    parser.add_argument('--update-scix-id',
+                        action='store_true',
+                        default=False,
+                        dest='update_scixid',
+                        help='update scix_id for records with specified bibcodes')
+    parser.add_argument('--scix-id-flag',
+                        default=False,
+                        dest='scix_id_flag',
+                        choices=['update', 'force'],
+                        help='update records to be assigned a new scix_id or force reset scix_id and assign all new scix_ids')
+
+    parser.add_argument('--classify',
+                        dest='classify',
+                        action='store_true',
+                        default=False,
+                        help='Run the classifier on the given bibcodes')
+
+    parser.add_argument('--manual',
+                        dest='manual',
+                        action='store_true',
+                        default=False,
+                        help='Allow the classifier to be run in manual mode')
+
+    parser.add_argument('--validate_classifier',
+                        dest='validate_classifier',
+                        action='store_true',
+                        default=False,
+                        help='Test data for classifier')
 
     args = parser.parse_args()
 
@@ -590,10 +619,60 @@ if __name__ == '__main__':
 
                         app.request_aff_augment(bibcode)
 
+    elif args.classify:
+        print('Running Classifier')
+        # import pdb;pdb.set_trace()
+        if args.validate_classifier:
+            data = None
+            check_boolean = True
+        else:
+            data = None
+            check_boolean = False
+        if args.manual:
+            # if args.filename or data is not None:
+            if args.filename:
+                # filename should be checked
+                filename = args.filename
+                # import pdb;pdb.set_trace()
+                # print('classifying bibcodes from file via queue')
+                logger.info('Classifying records from file via queue')
+                keywords_dictionary = {"filename": filename, "mode": "manual", "data": data, "check_boolean": check_boolean}
+                # import pdb;pdb.set_trace()
+                # app.request_classify(filename=filename,mode='manual',data=data,check_boolean=check_boolean)
+        else:
+            if args.filename:
+                with open(args.filename, 'r') as f:
+                    for line in f:
+                        bibcode = line.strip()
+                        # import pdb;pdb.set_trace()
+                        if bibcode:
+                            keywords_dictionary = {"bibcode": bibcode, "mode": "auto"}
+                            # app.request_classify(bibcode=bibcode,mode='auto')
+
+        # import pdb;pdb.set_trace()
+        app.request_classify(**keywords_dictionary)
+                # app.request_classify(args.filename)
+
     elif args.rebuild_collection:
         rebuild_collection(args.solr_collection, args.batch_size)
     elif args.index_failed:
         reindex_failed_bibcodes(app, args.update_processed)
+    elif args.update_scixid:
+        if args.filename:
+            bibs = []
+            with open(args.filename) as f:
+                for line in f:
+                    bibcode = line.strip()
+                    if bibcode:
+                        bibs.append(bibcode)
+        elif args.bibcodes:
+            bibs = args.bibcodes
+        if args.scix_id_flag:
+            flag = args.scix_id_flag
+        else:
+            flag = ''
+
+        tasks.task_update_scixid(bibs, flag = flag)
     elif args.reindex:
         update_solr = 's' in args.reindex.lower()
         update_metrics = 'm' in args.reindex.lower()
