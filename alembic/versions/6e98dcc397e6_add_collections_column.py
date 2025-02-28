@@ -20,10 +20,10 @@ def upgrade():
     cx = op.get_context()
     if 'sqlite' in cx.connection.engine.name:
         with op.batch_alter_table("records") as batch_op:
-            batch_op.add_column(sa.Column('collections', sa.ARRAY(sa.String)))
+            batch_op.add_column(sa.Column('collections', sa.Text))
             batch_op.add_column(sa.Column('collections_updated', sa.TIMESTAMP))
     else:
-        op.add_column('records', sa.Column('collections', sa.ARRAY(sa.String)))
+        op.add_column('records', sa.Column('collections', sa.Text))
         op.add_column('records', sa.Column('collections_updated', sa.TIMESTAMP))
 
 
