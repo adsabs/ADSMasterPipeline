@@ -274,7 +274,7 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
                     solr_payload['identifier'] = []
                 if 'bibcode' in solr_payload and solr_payload['bibcode'] not in solr_payload['identifier']:
                     solr_payload['identifier'].append(solr_payload['bibcode'])
-                logger.debug('Built SOLR: %s', solr_payload)
+                logger.debug('Built SOLR record for %s', solr_payload['bibcode'])
                 solr_checksum = app.checksum(solr_payload)
                 if ignore_checksums or r.get('solr_checksum', None) != solr_checksum:
                     solr_records.append(solr_payload)

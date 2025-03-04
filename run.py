@@ -295,12 +295,6 @@ def process_all_scixid(batch_size, flag):
         flag = 'update'
     elif flag == 'force-all':
         flag = 'force'
-    # first, fail if we can not monitor queue length before we queue anything
-    u = urlparse(app.conf['OUTPUT_CELERY_BROKER'])
-    rabbitmq = PyRabbitClient(u.hostname + ':' + str(u.port + 10000), u.username, u.password)
-    if not rabbitmq.is_alive('master_pipeline'):
-        logger.error('failed to connect to rabbitmq with PyRabbit to monitor queue')
-        sys.exit(1)
 
     sent = 0
     batch = []
@@ -323,18 +317,9 @@ def process_all_scixid(batch_size, flag):
     
     if len(batch) > 0:
         t = tasks.task_update_scixid.delay(batch, flag)
+        logger.debug('Sending %s records', len(batch))
         _tasks.append(t)
     
-    # now wait for update-scixid queue to empty
-    queue_length = 1
-    while queue_length > 0:
-        queue_length = rabbitmq.get_queue_depth('master_pipeline', 'update-scixid')
-        stime = max(queue_length * 0.1, 10.0)
-        logger.info('Waiting %s for update-scixid queue to empty, queue_length %s, sent %s' % (stime, queue_length, sent))
-        time.sleep(stime)
-
-    logger.info('Completed waiting %s for update-scixid queue to empty, queue_length %s, sent %s' % (stime, queue_length, sent))
-
 
 def rebuild_collection(collection_name, batch_size):
     """
