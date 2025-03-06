@@ -119,8 +119,8 @@ class ADSMasterPipelineCelery(ADSCelery):
                 # payload contains new value for collections field
                 # r.augments holds a list, save it in database
                 oldval = 'not-stored'
-                r.collections = payload
-                r.collections_updated = now
+                r.classifications = payload
+                r.classifications_updated = now
             else:
                 raise Exception('Unknown type: %s' % type)
             session.add(ChangeLog(key=bibcode, type=type, oldvalue=oldval))
