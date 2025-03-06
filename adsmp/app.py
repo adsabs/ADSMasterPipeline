@@ -3,7 +3,7 @@ from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 from . import exceptions
 from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records
-from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList
+from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session, contextmanager
 from sqlalchemy.orm import load_only as _load_only
@@ -115,6 +115,12 @@ class ADSMasterPipelineCelery(ADSCelery):
                 oldval = 'not-stored'
                 r.augments = payload
                 r.augments_updated = now
+            elif type == 'classify':
+                # payload contains new value for collections field
+                # r.augments holds a list, save it in database
+                oldval = 'not-stored'
+                r.collections = payload
+                r.collections_updated = now
             else:
                 raise Exception('Unknown type: %s' % type)
             session.add(ChangeLog(key=bibcode, type=type, oldvalue=oldval))
@@ -217,6 +223,8 @@ class ADSMasterPipelineCelery(ADSCelery):
             return 'metrics_records'
         elif isinstance(msg, AugmentAffiliationResponseRecord):
             return 'augment'
+        elif isinstance(msg, ClassifyResponseRecord):
+            return 'classify'
 
         else:
             raise exceptions.IgnorableException('Unkwnown type {0} submitted for update'.format(repr(msg)))
