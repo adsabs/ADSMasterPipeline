@@ -536,8 +536,8 @@ if __name__ == '__main__':
                         choices=['update', 'force'],
                         help='update records to be assigned a new scix_id or force reset scix_id and assign all new scix_ids')
 
-    parser.add_argument('--classify',
-                        dest='classify',
+    parser.add_argument('--classify_verify',
+                        dest='classify_verify',
                         action='store_true',
                         default=False,
                         help='Run the classifier on the given bibcodes')
@@ -619,7 +619,7 @@ if __name__ == '__main__':
 
                         app.request_aff_augment(bibcode)
 
-    elif args.classify:
+    elif args.classify_verify:
         print('Running Classifier')
         # import pdb;pdb.set_trace()
         if args.validate_classifier:

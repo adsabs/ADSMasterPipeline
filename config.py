@@ -20,7 +20,8 @@ METRICS_SQLALCHEMY_URL = None  #'postgres://postgres@localhost:5432/metrics'
 
 
 # Main Solr
-SOLR_URLS = ["http://localhost:9983/solr/collection1/update"]
+# SOLR_URLS = ["http://localhost:9983/solr/collection1/update"]
+SOLR_URLS = ["http://montysolr:9983/solr/collection1/update"]
 
 # For the run's argument --validate_solr, which compares two Solr instances for
 # the given bibcodes or file of bibcodes
