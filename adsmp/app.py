@@ -539,7 +539,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         }
         return data
 
-    def request_classify(self, bibcode=None,scix_id = None, filename=None,mode='auto', batch_size=500, data=None,check_boolean=False):
+    def request_classify(self, bibcode=None,scix_id = None, filename=None,mode='auto', batch_size=500, data=None,check_boolean=False, operation_step=None):
         """ send classifier request for bibcode to classifier pipeline
 
         set data parameter to provide test data
@@ -570,6 +570,7 @@ class ADSMasterPipelineCelery(ADSCelery):
             if data is None:
                 data = self.prepare_bibcode(bibcode)
             if data and data.get('title'):
+                data['operation_step'] = operation_step
                 message = ClassifyRequestRecord(**data) # Maybe make as one element list check protobuf
                 self.forward_message(message, pipeline='classifier')
                 self.logger.debug('sent classifier request for bibcode {}'.format(bibcode))

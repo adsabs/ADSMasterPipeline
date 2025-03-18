@@ -540,7 +540,13 @@ if __name__ == '__main__':
                         dest='classify_verify',
                         action='store_true',
                         default=False,
-                        help='Run the classifier on the given bibcodes')
+                        help='Run the classifier on the given bibcodes - Includes a manual verification step')
+
+    parser.add_argument('--classify',
+                        dest='classify',
+                        action='store_true',
+                        default=False,
+                        help='Run the classifier on the given bibcodes - No manual verification')
 
     parser.add_argument('--manual',
                         dest='manual',
@@ -619,8 +625,17 @@ if __name__ == '__main__':
 
                         app.request_aff_augment(bibcode)
 
-    elif args.classify_verify:
+    elif args.classify_verify or args.classify:
         print('Running Classifier')
+
+        if args.classify_verify:
+            print('Include manual verification step - check output file an resubmit using the Classifier Pipeline')
+            operation_step = 'classify_verify'
+        elif args.classify:
+            print('Skipping manual verification')
+            operation_step = 'classify'
+        else:
+            print('Select classsification process')
         # import pdb;pdb.set_trace()
         if args.validate_classifier:
             data = None
@@ -636,7 +651,7 @@ if __name__ == '__main__':
                 # import pdb;pdb.set_trace()
                 # print('classifying bibcodes from file via queue')
                 logger.info('Classifying records from file via queue')
-                keywords_dictionary = {"filename": filename, "mode": "manual", "data": data, "check_boolean": check_boolean}
+                keywords_dictionary = {"filename": filename, "mode": "manual", "data": data, "check_boolean": check_boolean, "operation_step" : operation_step}
                 # import pdb;pdb.set_trace()
                 # app.request_classify(filename=filename,mode='manual',data=data,check_boolean=check_boolean)
         else:
@@ -646,7 +661,7 @@ if __name__ == '__main__':
                         bibcode = line.strip()
                         # import pdb;pdb.set_trace()
                         if bibcode:
-                            keywords_dictionary = {"bibcode": bibcode, "mode": "auto"}
+                            keywords_dictionary = {"bibcode": bibcode, "mode": "auto", "operation_step" : operation_step}
                             # app.request_classify(bibcode=bibcode,mode='auto')
 
         # import pdb;pdb.set_trace()
