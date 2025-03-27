@@ -549,9 +549,10 @@ class ADSMasterPipelineCelery(ADSCelery):
         bibcode = reference ID for record (Needs to include SciXID)
         scix_id = reference ID for record
         filename : filename of input file with list of records to classify 
-        mode : 'auto' (default) assumes single record input from master, 'amnual' assumes multiple records input at command line
+        mode : 'auto' (default) assumes single record input from master, 'manual' assumes multiple records input at command line
         batch_size : size of batch for large input files
-        check_boolean :
+        check_boolean : Used for testing - writes the message to file
+        operation_step: string - defines mode of operation: classify or _classify_verify ore verify
         
         """
         self.logger.info('request_classify called with bibcode={}, filename={}, mode={}, batch_size={}, data={}, validate={}'.format(bibcode, filename, mode, batch_size, data, check_boolean))
