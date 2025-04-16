@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 class TestAdsOrcidCelery(unittest.TestCase):
     """
-    Tests the application's methods
+    Tests the appliction's methods
     """
     
     @classmethod
@@ -30,30 +30,6 @@ class TestAdsOrcidCelery(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.postgresql.stop()
-    
-    @classmethod
-    def get_document_data(cls):
-        """
-        Shared fixture-like method for test data.
-        """
-        return {
-            'bibcode': 'linkstest',
-            'identifier': ['arXiv:1234.5678', 'DOI:10.1234/example'],
-            'links': {
-                'ARXIV': ['arXiv:1234.5678'],
-                'DOI': ['DOI:10.1234/example'],
-                'DATA': {
-                    'dataset1': {'url': ['http://example.com/dataset1'], 'title': ['Dataset 1'], 'count': 1}
-                },
-                'ESOURCE': {
-                    'source1': {'url': ['http://example.com/source1'], 'title': ['Source 1'], 'count': 1}
-                },
-                'ABSTRACT': True,
-                'CITATIONS': True,
-                'METRICS': False,
-                'TOC': True
-            }
-        }
         
     def setUp(self):
         unittest.TestCase.setUp(self)
@@ -72,7 +48,6 @@ class TestAdsOrcidCelery(unittest.TestCase):
         
         MetricsBase.metadata.bind = self.app._metrics_engine
         MetricsBase.metadata.create_all()
-
 
     def tearDown(self):
         unittest.TestCase.tearDown(self)
@@ -233,7 +208,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         r = self.app.get_record('abc')
         self.app.index_metrics([r], ['checksum'])
         m = self.app.get_metrics('abc')
-        self.assertTrue(m, 'initialized metrics data')
+        self.assertTrue(m, 'intialized metrics data')
         self.app.metrics_delete_by_bibcode('abc')
         m = self.app.get_metrics('abc')
         self.assertFalse(m, 'deleted metrics data')
@@ -247,6 +222,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             with self.app.session_scope() as session:
                 r = session.query(models.Records).filter_by(bibcode='abc').first()
                 self.assertTrue(r.id == 1)
+                self.assertTrue(r.scix_id == 'scix:0000-0000-0011')
                 j = r.toJSON()
                 self.assertEqual(j[k], {'foo': 'bar', 'hey': 1})
                 t = j[k + '_updated']
@@ -258,6 +234,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             r = session.query(models.Records).filter_by(bibcode='abc').first()
             self.assertTrue(r.id == 1)
+            self.assertTrue(r.scix_id == 'scix:0000-0000-0011')
             j = r.toJSON()
             self.assertEqual(j['fulltext'], {'body': 'foo bar'})
             t = j['fulltext_updated']
@@ -265,10 +242,12 @@ class TestAdsOrcidCelery(unittest.TestCase):
         
         r = self.app.get_record('abc')
         self.assertEqual(r['id'], 1)
+        self.assertEqual(r['scix_id'],'scix:0000-0000-0011')
         self.assertEqual(r['processed'], None)
         
         r = self.app.get_record(['abc'])
         self.assertEqual(r[0]['id'], 1)
+        self.assertEqual(r[0]['scix_id'],'scix:0000-0000-0011')
         self.assertEqual(r[0]['processed'], None)
         
         r = self.app.get_record('abc', load_only=['id'])
@@ -319,18 +298,15 @@ class TestAdsOrcidCelery(unittest.TestCase):
         """
         m = mock.Mock()
         m.status_code = 200
-
-        document_data = self.get_document_data() 
         # init database so timestamps and checksum can be updated
-        self.app.update_storage('linkstest', 'nonbib_data', document_data['links'])
-
+        nonbib_data = {'data_links_rows': [{'baz': 0}]}
+        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
         with mock.patch('requests.put', return_value=m) as p:
-
-            
+            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
             checksum = 'thechecksum'
-            self.app.index_datalinks([document_data], [checksum])
-            p.assert_called_with('http://localhost:8080/update_new',
-                                 data=json.dumps([document_data]),
+            self.app.index_datalinks([datalinks_payload], [checksum])
+            p.assert_called_with('http://localhost:8080/update',
+                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
                                  headers={'Authorization': 'Bearer fixme'})
             self.assertEqual(p.call_count, 1)
             # verify database updated
@@ -341,24 +317,21 @@ class TestAdsOrcidCelery(unittest.TestCase):
             self.assertEqual(rec['status'], 'success')
             self.assertTrue(rec['datalinks_processed'])
 
-    def test_index_datalinks_service_failure(self, ):
+    def test_index_datalinks_service_failure(self):
         """
            verify handles failure from service
         """
         m = mock.Mock()
         m.status_code = 500
-
-        document_data = self.get_document_data()
-        
         # init database so timestamps and checksum can be updated
-        self.app.update_storage('linkstest', 'nonbib_data', document_data['links'])
-
+        nonbib_data = {'data_links_rows': [{'baz': 0}]}
+        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
         with mock.patch('requests.put', return_value=m) as p:
-                
+            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
             checksum = 'thechecksum'
-            self.app.index_datalinks([document_data], [checksum])
-            p.assert_called_with('http://localhost:8080/update_new',
-                                 data=json.dumps([document_data]),
+            self.app.index_datalinks([datalinks_payload], [checksum])
+            p.assert_called_with('http://localhost:8080/update',
+                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
                                  headers={'Authorization': 'Bearer fixme'})
 
             rec = self.app.get_record(bibcode='linkstest')
@@ -371,22 +344,19 @@ class TestAdsOrcidCelery(unittest.TestCase):
 
     def test_index_datalinks_service_only_batch_failure(self):
         # init database so timestamps and checksum can be updated
-
-        document_data = self.get_document_data()
-        self.app.update_storage('linkstest', 'nonbib_data', document_data['links'])
+        nonbib_data = {'data_links_rows': [{'baz': 0}]}
+        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
         with mock.patch('requests.put') as p:
             bad = mock.Mock()
             bad.status_code = 500
-
             good = mock.Mock()
             good.status_code = 200
-
             p.side_effect = [bad, good]
-
+            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
             checksum = 'thechecksum'
-            self.app.index_datalinks([document_data], [checksum])
-            p.assert_called_with('http://localhost:8080/update_new',
-                                 data=json.dumps([document_data]),
+            self.app.index_datalinks([datalinks_payload], [checksum])
+            p.assert_called_with('http://localhost:8080/update',
+                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
                                  headers={'Authorization': 'Bearer fixme'})
             self.assertEqual(p.call_count, 2)
             # verify database updated
@@ -401,14 +371,14 @@ class TestAdsOrcidCelery(unittest.TestCase):
         m = mock.Mock()
         m.status_code = 200
         # init database so timestamps and checksum can be updated
-        document_data = self.get_document_data()
-
-        self.app.update_storage('linkstest', 'nonbib_data', document_data['links'])
+        nonbib_data = {'data_links_rows': [{'baz': 0}]}
+        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
         with mock.patch('requests.put', return_value=m) as p:
+            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
             checksum = 'thechecksum'
-            self.app.index_datalinks([document_data], [checksum], update_processed=False)
-            p.assert_called_with('http://localhost:8080/update_new',
-                                 data=json.dumps([document_data]),
+            self.app.index_datalinks([datalinks_payload], [checksum], update_processed=False)
+            p.assert_called_with('http://localhost:8080/update',
+                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
                                  headers={'Authorization': 'Bearer fixme'})
             # verify database updated
             rec = self.app.get_record(bibcode='linkstest')
@@ -642,5 +612,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             self.assertTrue('testbib' in str(m_args[0]))
             self.assertTrue('foobar' in str(m_args[0]))
 
+
 if __name__ == '__main__':
     unittest.main()
+
