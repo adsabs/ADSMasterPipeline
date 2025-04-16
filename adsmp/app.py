@@ -1,4 +1,3 @@
-
 from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 from . import exceptions
@@ -19,7 +18,7 @@ import requests
 from copy import deepcopy
 import sys
 from sqlalchemy.dialects.postgresql import insert
-
+import re
 
 class ADSMasterPipelineCelery(ADSCelery):
 
@@ -512,38 +511,63 @@ class ADSMasterPipelineCelery(ADSCelery):
 
     def generate_links_for_resolver(self, record):
         """use nonbib or bib elements of database record and return links for resolver and checksum"""
-        # nonbib data has something like
-        #  "data_links_rows": [{"url": ["http://arxiv.org/abs/1902.09522"]
-        # bib data has json string for:
-        # "links_data": [{"access": "open", "instances": "", "title": "", "type": "preprint",
+        # Links data can come from two sources with different formats:
+        #
+        # 1. Nonbib data in either:
+        #    - Old format with "data_links_rows":
+        #      [{"url": ["http://arxiv.org/abs/1902.09522"], "title": [""], "item_count": 0}]
+        #    - New format with "links": 
+        #      {"DATA": {"url": ["http://arxiv.org/abs/1902.09522"], "title": [""], "count": 0}}
+        #
+        # 2. Bib data with "links_data" as JSON string:
+        #    [{"access": "open", 
+        #      "instances": "",
+        #      "title": "",
+        #      "type": "preprint",
+        #      "url": "http://arxiv.org/abs/1902.09522"}]
+        #
+        # We prioritize nonbib data when available, falling back to bib data if needed.
+        # We also assume it will be in either the old or new format, but not both.
+        # If there is no relevant data, we return None.
 
-        #                 "url": "http://arxiv.org/abs/1902.09522"}]
-
+        
         resolver_record = None   # default value to return
         bibcode = record.get('bibcode')
         nonbib = record.get('nonbib_data', {})
-        if type(nonbib) is not dict:
+        # New format 
+        nonbib_new_links = nonbib.get('links', {}) if nonbib else {}
+
+        resolver_record = {'bibcode': bibcode,
+                           'links':  nonbib_new_links}
+
+        if not isinstance(nonbib, dict):
             nonbib = {}    # in case database has None or something odd
-        nonbib_links = nonbib.get('data_links_rows', None)
-        if nonbib_links:
-            # when avilable, prefer link info from nonbib
-            resolver_record = {'bibcode': bibcode,
-                               'data_links_rows': nonbib_links}
-        else:
-            # as a fallback, use link from bib/direct ingest
+        
+        # Old format links are in the "data_links_rows" key
+        nonbib_old_links = nonbib.get('data_links_rows', [])
+
+        # If nonbib data but in old format, transform into new format
+        if not nonbib_new_links and nonbib_old_links:
+            # transform into new format
+            resolver_record['links'] = self._transform_old_links_to_new_format(nonbib_old_links)
+        
+        # If not nonbib data in any format, use link from bib/direct ingest
+        elif not nonbib_new_links:
             bib = record.get('bib_data', {})
-            if type(bib) is not dict:
-                bib = {}
+            if not isinstance(bib, dict):
+                bib = {} 
+
             bib_links_record = bib.get('links_data', None)
+            
+            
             if bib_links_record:
                 try:
                     bib_links_data = json.loads(bib_links_record[0])
                     url = bib_links_data.get('url', None)
                     if url:
-                        # need to change what direct sends
+                        # Need to change what direct sends
                         url_pdf = url.replace('/abs/', '/pdf/')
-                        resolver_record = {'bibcode': bibcode,
-                                           'data_links_rows': [{'url': [url],
+                        default_data_links_rows = {'data_links_rows': [{'url': [url],
                                                                 'title': [''], 'item_count': 0,
                                                                 'link_type': 'ESOURCE',
                                                                 'link_sub_type': 'EPRINT_HTML'},
@@ -551,7 +575,290 @@ class ADSMasterPipelineCelery(ADSCelery):
                                                                 'title': [''], 'item_count': 0,
                                                                 'link_type': 'ESOURCE',
                                                                 'link_sub_type': 'EPRINT_PDF'}]}
+                        # Transform into new format
+                        resolver_record['links'] = self._transform_old_links_to_new_format(default_data_links_rows['data_links_rows'])
                 except (KeyError, ValueError):
                     # here if record holds unexpected value
                     self.logger.error('invalid value in bib data, bibcode = {}, type = {}, value = {}'.format(bibcode, type(bib_links_record), bib_links_record))
+                    return
+        
+        # Only populate links if it has relevant data, otherwise return None
+        if resolver_record.get('links', {}):
+            # Now populate any missing link information from all available sources
+            resolver_record = self._populate_links_structure(record, resolver_record)
+            return resolver_record
+        
+        
+
+    def _transform_old_links_to_new_format(self, data_links_rows):
+        """Transform the old links format to the new links format"""
+        
+        link_type_mapping = {
+            'DATA': 'DATA',
+            'ESOURCE': 'ESOURCE',
+            'ASSOCIATED': 'ASSOCIATED',
+            'INSPIRE': 'INSPIRE',
+            'LIBRARYCATALOG': 'LIBRARYCATALOG',
+            'PRESENTATION': 'PRESENTATION'
+        }
+
+        new_links = {
+                        "ARXIV": [],
+                        "DOI": [],
+                        "DATA": {},
+                        "ESOURCE": {},
+                        "ASSOCIATED": {
+                            "url": [],
+                            "title": [],
+                            "count": 0
+                        },
+                        "INSPIRE": {
+                            "url": [],
+                            "title": [],
+                            "count": 0
+                        },
+                        "LIBRARYCATALOG": {
+                            "url": [],
+                            "title": [],
+                            "count": 0
+                        },
+                        "PRESENTATION": {
+                            "url": [],
+                            "title": [],
+                            "count": 0
+                        },
+                        "ABSTRACT": False,
+                        "CITATIONS": False,
+                        "GRAPHICS": False,
+                        "METRICS": False,
+                        "OPENURL": True, 
+                        "REFERENCES": False,
+                        "TOC": False,
+                        "COREAD": True 
+                    }
+        
+        for row in data_links_rows:
+            link_type = row.get('link_type', '')
+            if link_type not in link_type_mapping:
+                continue
+
+            mapped_type = link_type_mapping[link_type]
+
+            if mapped_type in ('DATA', 'ESOURCE'):
+                sub_type = row.get('link_sub_type', '')
+                if sub_type not in new_links[mapped_type]:
+                    new_links[mapped_type][sub_type] = {
+                        'url': [],
+                        'title': [],
+                        'count': 0
+                    }
+                if 'url' in row:
+                    new_links[mapped_type][sub_type]['url'].extend(row['url'])
+                if 'title' in row:
+                    new_links[mapped_type][sub_type]['title'].extend(row['title'])
+                if 'item_count' in row:
+                    new_links[mapped_type][sub_type]['count'] = row['item_count']
+            
+            else:
+                if 'url' in row:
+                    new_links[mapped_type]['url'].extend(row['url'])
+                if 'title' in row:
+                    new_links[mapped_type]['title'].extend(row['title'])
+                if 'item_count' in row:
+                    new_links[mapped_type]['count'] = row['item_count']
+                
+        return new_links
+    
+    def is_arxiv_id(self, identifier):
+
+        
+        identifier = str(identifier).lower()
+
+        patterns = [
+            r'^arxiv:\d{4}\.\d{5}$',                     # arXiv:2502.20510
+            r'^arxiv:[a-z\-]+/\d{7}$',                   # arXiv:astro-ph/0610305
+            r'^10\.48550/arxiv\.\d{4}\.\d{5}$',          # 10.48550/arXiv.2502.20510
+            r'^10\.48550/arxiv\.[a-z\-]+/\d{7}$'         # 10.48550/arXiv.astro-ph/0610305
+        ]
+
+        return any(re.match(pat, identifier) for pat in patterns)
+        
+    
+    def is_doi_id(self, identifier):
+        # Normalize whitespace and case
+        identifier = str(identifier).strip().lower()
+
+        # Regex pattern for DOI
+        doi_pattern = re.compile(r'^10\.\d{4,9}/\S+$', re.IGNORECASE)
+        return bool(doi_pattern.match(identifier))
+
+    
+    def _extract_data_components(self, record):
+        """Extract and validate data components from a record.
+        
+        Args:
+            record (dict): The complete record with all available components
+            
+        Returns:
+            tuple: Contains (bibcode, bib_data, fulltext, metrics, nonbib, orcid_claims)
+        """
+        bibcode = record.get('bibcode')
+        
+        # Extract and validate all needed components
+        bib_data = record.get('bib_data', {})
+        if not isinstance(bib_data, dict):
+            bib_data = {}
+            
+        fulltext = record.get('fulltext', {})
+        if not isinstance(fulltext, dict):
+            fulltext = {}
+            
+        metrics = record.get('metrics', {})
+        if not isinstance(metrics, dict):
+            metrics = {}
+        
+        nonbib = record.get('nonbib_data', {})
+        if not isinstance(nonbib, dict):
+            nonbib = {}
+            
+        orcid_claims = record.get('orcid_claims', {})
+        if not isinstance(orcid_claims, dict):
+            orcid_claims = {}
+            
+        return bibcode, bib_data, fulltext, metrics, nonbib, orcid_claims
+    
+    def _populate_identifiers(self, record, resolver_record, links):
+        """Populate the identifier list and extract ARXIV and DOI links.
+        
+        Args:
+            record (dict): The complete record with all available components from the database
+            resolver_record (dict): The resolver record to update with identifiers
+            links (dict): The links structure to update with ARXIV and DOI information
+            
+        Returns:
+            dict: The updated links structure with ARXIV and DOI fields populated
+        """
+        bibcode, bib_data, _, _, _, _ = self._extract_data_components(record)
+        
+        # Collect all identifiers from all sources
+        identifiers = self._collect_identifiers(bibcode, bib_data)
+        resolver_record['identifier'] = identifiers
+            
+        # Process identifiers for ARXIV and DOI fields
+        arxiv_ids = set()
+        doi_ids = set()
+        
+        for identifier in identifiers:
+                
+            # ARXIV identifiers
+            if identifier and self.is_arxiv_id(identifier):
+                arxiv_ids.add(identifier)
+                
+            # DOI identifiers
+            if identifier and self.is_doi_id(identifier):
+                doi_ids.add(identifier)
+                
+        # Initialize ARXIV and DOI fields if they don't exist or are not lists
+        if 'ARXIV' not in links or not isinstance(links['ARXIV'], list):
+            links['ARXIV'] = []
+        
+        if 'DOI' not in links or not isinstance(links['DOI'], list):
+            links['DOI'] = []
+        
+        # Add identifiers to links structure
+        if arxiv_ids:
+            links['ARXIV'].extend(list(arxiv_ids))
+            
+        if doi_ids:
+            links['DOI'].extend(list(doi_ids))
+        
+        return links
+    
+    def _populate_links_structure(self, record, resolver_record):
+        '''Finally populates missing data like identifier, arxiv, doi, abstract, graphics, metrics, citations and references.
+        
+        Args:
+            record (dict): The complete record with all available components from the database
+            resolver_record (dict): The partially populated resolver record with base links structure
+            
+        Returns:
+            dict: The fully populated resolver record with all available link information
+        '''
+      
+        links = resolver_record.get('links', {})
+        
+        # Extract all necessary components
+        _, bib_data, fulltext, metrics, nonbib, _ = self._extract_data_components(record)
+        
+        # Populate identifiers and extract ARXIV and DOI links
+        links = self._populate_identifiers(record, resolver_record, links)
+            
+        # Set ABSTRACT flag if abstract is present in bib_data
+        if 'abstract' in bib_data and bib_data['abstract']:
+            links['ABSTRACT'] = True
+
+        # Set CITATIONS flag if citations are present in metrics or nonbib
+        if ('citation_num' in metrics and metrics['citation_num'] > 0) or \
+           ('citation_count' in nonbib and nonbib['citation_count'] > 0):
+            links['CITATIONS'] = True
+            
+        # Set GRAPHICS flag if fulltext contains graphics indicators
+        links['GRAPHICS'] = True
+
+        # Set METRICS flag if metrics data is available
+        if metrics and any(key in metrics for key in ['citation_num', 'downloads', 'reads']):
+            links['METRICS'] = True
+
+        # Always set OPENURL to True
+        links['OPENURL'] = True
+            
+        # Set REFERENCES flag if references are present in nonbib or metrics indicates references
+        if ('reference' in nonbib and len(nonbib['reference']) > 0) or \
+           (metrics and 'reference_num' in metrics and metrics['reference_num'] > 0):
+            links['REFERENCES'] = True
+            
+        # Check for TOC flag
+        if 'property' in nonbib and isinstance(nonbib['property'], list) and 'TOC' in nonbib['property']:
+            links['TOC'] = True
+        elif bib_data.get('metadata', {}).get('properties', {}).get('doctype', {}).get('content') == 'toc':
+            links['TOC'] = True
+            
+        # Always set COREAD to True 
+        links['COREAD'] = True
+            
+        # Update the links in the resolver record
+        resolver_record['links'] = links
+        
         return resolver_record
+        
+    def _collect_identifiers(self, bibcode, bib_data):
+            """Collect identifiers from all available sources.
+            
+            Args:
+                bibcode (str): The bibcode of the record
+                bib_data (dict): The bibliographic data dictionary
+                nonbib (dict): The non-bibliographic data dictionary
+                
+            Returns:
+                set: A set of all collected identifiers
+            """
+            identifiers = set()
+            
+            # 1. Add bibcode itself as an identifier
+            if bibcode:
+                identifiers.add(bibcode)
+                
+            # 2. Get identifiers from bib_data
+            if 'identifier' in bib_data:
+                bib_identifiers = bib_data.get('identifier', [])
+                if isinstance(bib_identifiers, list):
+                    identifiers.update([id for id in bib_identifiers if id])
+
+            # 3. Get any additional identifiers from alternate_bibcode
+            if 'alternate_bibcode' in bib_data:
+                alt_bibcodes = bib_data.get('alternate_bibcode', [])
+                if isinstance(alt_bibcodes, list):
+                    identifiers.update([id for id in alt_bibcodes if id])
+                    
+            return list(identifiers)
+                

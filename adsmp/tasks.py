@@ -1,4 +1,3 @@
-
 from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 import os
@@ -185,21 +184,21 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
 
     # check if we have complete record
     for bibcode in bibcodes:
-        r = app.get_record(bibcode, load_only=fields)
+        record = app.get_record(bibcode, load_only=fields)
 
-        if r is None:
+        if record is None:
             logger.error('The bibcode %s doesn\'t exist!', bibcode)
             continue
 
-        augments_updated = r.get('augments_updated', None)
-        bib_data_updated = r.get('bib_data_updated', None)
-        fulltext_updated = r.get('fulltext_updated', None)
-        metrics_updated = r.get('metrics_updated', None)
-        nonbib_data_updated = r.get('nonbib_data_updated', None)
-        orcid_claims_updated = r.get('orcid_claims_updated', None)
+        augments_updated = record.get('augments_updated', None)
+        bib_data_updated = record.get('bib_data_updated', None)
+        fulltext_updated = record.get('fulltext_updated', None)
+        metrics_updated = record.get('metrics_updated', None)
+        nonbib_data_updated = record.get('nonbib_data_updated', None)
+        orcid_claims_updated = record.get('orcid_claims_updated', None)
 
         year_zero = '1972'
-        processed = r.get('processed', adsputils.get_date(year_zero))
+        processed = record.get('processed', adsputils.get_date(year_zero))
         if processed is None:
             processed = adsputils.get_date(year_zero)
 
@@ -220,7 +219,7 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
                               metrics_updated, augments_updated))
             # build the solr record
             if update_solr:
-                solr_payload = solr_updater.transform_json_record(r)
+                solr_payload = solr_updater.transform_json_record(record)
                 # ADS microservices assume the identifier field exists and contains the canonical bibcode:
                 if 'identifier' not in solr_payload:
                     solr_payload['identifier'] = []
@@ -228,7 +227,7 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
                     solr_payload['identifier'].append(solr_payload['bibcode'])
                 logger.debug('Built SOLR: %s', solr_payload)
                 solr_checksum = app.checksum(solr_payload)
-                if ignore_checksums or r.get('solr_checksum', None) != solr_checksum:
+                if ignore_checksums or record.get('solr_checksum', None) != solr_checksum:
                     solr_records.append(solr_payload)
                     solr_records_checksum.append(solr_checksum)
                 else:
@@ -236,9 +235,9 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
 
             # get data for metrics
             if update_metrics:
-                metrics_payload = r.get('metrics', None)
+                metrics_payload = record.get('metrics', None)
                 metrics_checksum = app.checksum(metrics_payload or '')
-                if (metrics_payload and ignore_checksums) or (metrics_payload and r.get('metrics_checksum', None) != metrics_checksum):
+                if (metrics_payload and ignore_checksums) or (metrics_payload and record.get('metrics_checksum', None) != metrics_checksum):
                     metrics_payload['bibcode'] = bibcode
                     logger.debug('Got metrics: %s', metrics_payload)
                     metrics_records.append(metrics_payload)
@@ -247,10 +246,10 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
                     logger.debug('Checksum identical or no metrics data available, skipping metrics update for: %s', bibcode)
 
             if update_links and links_url:
-                datalinks_payload = app.generate_links_for_resolver(r)
+                datalinks_payload = app.generate_links_for_resolver(record)
                 if datalinks_payload:
                     datalinks_checksum = app.checksum(datalinks_payload)
-                    if ignore_checksums or r.get('datalinks_checksum', None) != datalinks_checksum:
+                    if ignore_checksums or record.get('datalinks_checksum', None) != datalinks_checksum:
                         links_data_records.append(datalinks_payload)
                         links_data_records_checksum.append(datalinks_checksum)
         else:
