@@ -580,30 +580,6 @@ class TestSolrUpdater(unittest.TestCase):
             db_record["nonbib_data"]["links_data"], solr_record["links_data"]
         )
 
-        # NEW STRUCTURE: links only from nonbib
-        new_links = {
-            "ARXIV": ["1234.5678"],
-            "DOI": ["10.1234/5678"],
-            "DATA": {
-                "CDS": {"url": ["http://cds.example.com"], "title": ["CDS Data"], "count": 1},
-                "NED": {"url": ["http://ned.example.com"], "title": ["NED Objects"], "count": 1}
-            },
-            "ESOURCE": {
-                "PUB_PDF": {"url": ["http://publisher.com/pdf"], "title": ["Publisher PDF"], "count": 1},
-            },
-            "ABSTRACT": True,
-            "CITATIONS": True,
-            "REFERENCES": False,
-            "GRAPHICS": False
-        }
-        db_record = {
-            "bibcode": "foo",
-            "nonbib_data": {"links": new_links},
-            "nonbib_data_updated": datetime.now(),
-        }
-        solr_record = solr_updater.transform_json_record(db_record)
-        self.assertEqual(db_record["nonbib_data"]["links"], solr_record["links"])
-
         # links_data from both
         db_record = {
             "bibcode": "foo",
@@ -616,22 +592,6 @@ class TestSolrUpdater(unittest.TestCase):
         self.assertEqual(
             db_record["nonbib_data"]["links_data"], solr_record["links_data"]
         )
-
-        # NEW & OLD STRUCTURE: both old links_data and new links format
-        db_record = {
-            "bibcode": "foo",
-            "bib_data": {"links_data": "asdf"},
-            "bib_data_updated": datetime.now(),
-            "nonbib_data": {
-                "links_data": "jkl",
-                "links": new_links
-            },
-            "nonbib_data_updated": datetime.now() - timedelta(1),
-        }
-        solr_record = solr_updater.transform_json_record(db_record)
-        # Both links_data and links should be in the output
-        self.assertEqual(db_record["nonbib_data"]["links_data"], solr_record["links_data"])
-        self.assertEqual(db_record["nonbib_data"]["links"], solr_record["links"])
 
         db_record = {
             "bibcode": "foo",

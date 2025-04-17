@@ -418,6 +418,7 @@ def transform_json_record(db_record):
     ):
        
         out["links_data"] = db_record["nonbib_data"]["links_data"]
+    
     # Else if only bib pipeline provided links data
     elif db_record.get("bib_data", {}).get("links_data"):
         links_data = db_record["bib_data"].get("links_data", None)
@@ -450,20 +451,11 @@ def transform_json_record(db_record):
     out["scix_id"] = None
     if db_record.get("scix_id", None):
         out["scix_id"] = db_record.get("scix_id")
-        
+
     # override temporal priority for bibgroup and bibgroup_facet, prefer nonbib
     for key in ("bibgroup", "bibgroup_facet"):
         if db_record.get("nonbib_data", {}).get(key):
             out[key] = db_record["nonbib_data"][key]
-
-
-    # Add handling for the new links structure
-    if (
-        db_record.get("nonbib_data", None) 
-        and db_record["nonbib_data"].get("links", None)
-    ):
-        # Always use links from nonbib_data when available
-        out["links"] = db_record["nonbib_data"]["links"]
 
 
     # Compute doctype scores on the fly
