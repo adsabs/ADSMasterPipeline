@@ -384,62 +384,42 @@ def transform_json_record(db_record):
     timestamps = []
     for k, v in DB_COLUMN_DESTINATIONS:
         ts = db_record.get(k + "_updated", None)
-        if ts:
-            ts = time.mktime(ts.timetuple())
-        else:
-            ts = sys.maxsize  # default to use option without timestamp
+        ts = time.mktime(ts.timetuple()) if ts else sys.maxsize # default to use option without timestamp
         timestamps.append((k, v, ts))
     timestamps.sort(key=lambda x: x[2])
 
     # merge data based on timestamps
-    for field, target, _ in timestamps:
+    for field, target, ts in timestamps: # fields = {bib_data, nonbib_data, orcid_claims, metrics ..}
         if db_record.get(field, None):
-            if target:
+            if not target: # bib_data
+                out.update(db_record.get(field))
+            else:
                 if callable(target):
-                    x = target(
+                    enriched_data = target(
                         db_record.get(field), out
                     )  # in the interest of speed, don't create copy of out
-                    if x:
-                        out.update(x)
-                else:
-                    out[target] = db_record.get(field)
-            else:
-                if target is None:
-                    continue
-
-                out.update(db_record.get(field))
-
-        elif field.startswith("#"):
+                    if enriched_data:
+                        out.update(enriched_data)
+                else: # id 
+                    out[target] = db_record.get(field)      
+        elif field.startswith("#"): # timestamps
             if callable(target):
-                x = target(
+                enriched_data = target(
                     db_record, out
                 )  # in the interest of speed, don't create copy of out
-                if x:
-                    out.update(x)
+                if enriched_data:
+                    out.update(enriched_data)
 
-    # override temporal priority for links data
-    if (
-        db_record.get("bib_data", None)
-        and db_record.get("nonbib_data", None)
-        and db_record["bib_data"].get("links_data", None)
-        and db_record["nonbib_data"].get("links_data", None)
+    # If both bib and nonbib pipeline provided links data
+    # use nonbib data even if it is older
+    if all(
+        db_record.get(key, {}).get("links_data")
+        for key in ("bib_data", "nonbib_data")
     ):
-        # here if both bib and nonbib pipeline provided links data
-        # use nonbib data even if it is older
+       
         out["links_data"] = db_record["nonbib_data"]["links_data"]
-
-    # override temporal priority for bibgroup and bibgroup_facet, prefer nonbib
-    if db_record.get("nonbib_data", None) and db_record["nonbib_data"].get(
-        "bibgroup", None
-    ):
-        out["bibgroup"] = db_record["nonbib_data"]["bibgroup"]
-    if db_record.get("nonbib_data", None) and db_record["nonbib_data"].get(
-        "bibgroup_facet", None
-    ):
-        out["bibgroup_facet"] = db_record["nonbib_data"]["bibgroup_facet"]
-    
-    # if only bib data is available, use it to compute property
-    if db_record.get("nonbib_data", None) is None and db_record.get("bib_data", None):
+    # Else if only bib pipeline provided links data
+    elif db_record.get("bib_data", {}).get("links_data"):
         links_data = db_record["bib_data"].get("links_data", None)
         if links_data:
             try:
@@ -466,11 +446,27 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
+
     out["scix_id"] = None
     if db_record.get("scix_id", None):
         out["scix_id"] = db_record.get("scix_id")
+        
+    # override temporal priority for bibgroup and bibgroup_facet, prefer nonbib
+    for key in ("bibgroup", "bibgroup_facet"):
+        if db_record.get("nonbib_data", {}).get(key):
+            out[key] = db_record["nonbib_data"][key]
 
-        # Compute doctype scores on the fly
+
+    # Add handling for the new links structure
+    if (
+        db_record.get("nonbib_data", None) 
+        and db_record["nonbib_data"].get("links", None)
+    ):
+        # Always use links from nonbib_data when available
+        out["links"] = db_record["nonbib_data"]["links"]
+
+
+    # Compute doctype scores on the fly
     out["doctype_boost"] = None
 
     if config.get("DOCTYPE_RANKING", False):

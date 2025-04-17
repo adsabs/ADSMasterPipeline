@@ -55,6 +55,88 @@ class TestAdsOrcidCelery(unittest.TestCase):
         MetricsBase.metadata.drop_all()
         self.app.close_app()
 
+    @classmethod
+    def get_document_data(cls):
+        """
+        Shared fixture-like method for test data.
+        """
+        return {
+            "bibcode": "2013MNRAS.435.1904M",
+                "identifier": ["2013MNRAS.435.1904M", "2013arXiv1307.6556M", "2013MNRAS.tmp.2206M", "10.1093/mnras/stt1379", "arXiv:1307.6556"],
+                "links": {
+                    "DOI": ["10.1093/mnras/stt1379"],
+                    "ARXIV": ["arXiv:1307.6556"],
+                    "DATA": {
+                        "Chandra": {
+                            "url": ["https://cda.harvard.edu/chaser?obsid=494,493,5290,5289,5286,5288,5287,3666,6162,6159,6163,6160,6161,13413,12028,10900,10898,13416,13414,12029,12027,13417,10899,13412,10901,13415,12026"],
+                            "title": ["Chandra Data Archive ObsIds 494, 493, 5290, 5289, 5286, 5288, 5287, 3666, 6162, 6159, 6163, 6160, 6161, 13413, 12028, 10900, 10898, 13416, 13414, 12029, 12027, 13417, 10899, 13412, 10901, 13415, 12026"],
+                            "count": 1
+                        },
+                        "ESA": {
+                            "url": ["http://archives.esac.esa.int/ehst/#bibcode=2013MNRAS.435.1904M"],
+                            "title": ["European HST References (EHST)"],
+                            "count": 1
+                        },
+                        "HEASARC": {
+                            "url": ["http://heasarc.gsfc.nasa.gov/cgi-bin/W3Browse/biblink.pl?code=2013MNRAS.435.1904M"],
+                            "title": ["http://heasarc.gsfc.nasa.gov/cgi-bin/W3Browse/biblink.pl?code=2013MNRAS.435.1904M"],
+                            "count": 1
+                        },
+                        "Herschel": {
+                            "url": ["http://archives.esac.esa.int/hsa/whsa/?ACTION=PUBLICATION&ID=2013MNRAS.435.1904M"],
+                            "title": ["http://archives.esac.esa.int/hsa/whsa/?ACTION=PUBLICATION&ID=2013MNRAS.435.1904M"],
+                            "count": 1
+                        },
+                        "MAST": {
+                            "url": ["https://archive.stsci.edu/mastbibref.php?bibcode=2013MNRAS.435.1904M"],
+                            "title": ["MAST References (HST, EUVE, GALEX)"],
+                            "count": 3
+                        },
+                        "NED": {
+                            "url": ["https://$NED$/uri/NED::InRefcode/2013MNRAS.435.1904M"],
+                            "title": ["NED Objects (1)"],
+                            "count": 1
+                        },
+                        "SIMBAD": {
+                            "url": ["http://$SIMBAD$/simbo.pl?bibcode=2013MNRAS.435.1904M"],
+                            "title": ["SIMBAD Objects (30)"],
+                            "count": 30
+                        },
+                        "XMM": {
+                            "url": ["https://nxsa.esac.esa.int/nxsa-web/#bibcode=2013MNRAS.435.1904M"],
+                            "title": ["XMM data (1 observations)"],
+                            "count": 1
+                        }
+                    },
+                    "ESOURCE": {
+                        "EPRINT_HTML": {
+                            "url": ["https://arxiv.org/abs/1307.6556"],
+                            "title": ['']
+                        },
+                        "EPRINT_PDF": {
+                            "url": ["https://arxiv.org/pdf/1307.6556"],
+                            "title": ['']
+                        },
+                        "PUB_HTML": {
+                            "url": ["https://doi.org/10.1093%2Fmnras%2Fstt1379"],
+                            "title": ['']
+                        },
+                        "PUB_PDF": {
+                            "url": ["https://academic.oup.com/mnras/pdf-lookup/doi/10.1093/mnras/stt1379"],
+                            "title": ['']
+                        }
+                    },
+                    "CITATIONS": True,
+                    "REFERENCES": True,
+                    "ABSTRACT": True,
+                    "METRICS": False,
+                    "TOC": True, 
+                    "COREAD": True, 
+                    "GRAPHICS": True,
+                    "OPENURL": True,
+            }
+        }
+        
     def test_app(self):
         assert self.app._config.get('SQLALCHEMY_URL') == 'sqlite:///'
         assert self.app.conf.get('SQLALCHEMY_URL') == 'sqlite:///'
@@ -298,19 +380,22 @@ class TestAdsOrcidCelery(unittest.TestCase):
         """
         m = mock.Mock()
         m.status_code = 200
+
+        document_data = self.get_document_data() 
         # init database so timestamps and checksum can be updated
-        nonbib_data = {'data_links_rows': [{'baz': 0}]}
-        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
+        self.app.update_storage('2013MNRAS.435.1904M', 'nonbib_data', document_data['links'])
+
         with mock.patch('requests.put', return_value=m) as p:
-            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
+
+            
             checksum = 'thechecksum'
-            self.app.index_datalinks([datalinks_payload], [checksum])
-            p.assert_called_with('http://localhost:8080/update',
-                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
+            self.app.index_datalinks([document_data], [checksum])
+            p.assert_called_with('http://localhost:8080/update_new',
+                                 data=json.dumps([document_data]),
                                  headers={'Authorization': 'Bearer fixme'})
             self.assertEqual(p.call_count, 1)
             # verify database updated
-            rec = self.app.get_record(bibcode='linkstest')
+            rec = self.app.get_record(bibcode='2013MNRAS.435.1904M')
             self.assertEqual(rec['datalinks_checksum'], 'thechecksum')
             self.assertEqual(rec['solr_checksum'], None)
             self.assertEqual(rec['metrics_checksum'], None)
@@ -323,18 +408,21 @@ class TestAdsOrcidCelery(unittest.TestCase):
         """
         m = mock.Mock()
         m.status_code = 500
+
+        document_data = self.get_document_data()
+        
         # init database so timestamps and checksum can be updated
-        nonbib_data = {'data_links_rows': [{'baz': 0}]}
-        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
+        self.app.update_storage('2013MNRAS.435.1904M', 'nonbib_data', document_data['links'])
+
         with mock.patch('requests.put', return_value=m) as p:
-            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
+                
             checksum = 'thechecksum'
-            self.app.index_datalinks([datalinks_payload], [checksum])
-            p.assert_called_with('http://localhost:8080/update',
-                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
+            self.app.index_datalinks([document_data], [checksum])
+            p.assert_called_with('http://localhost:8080/update_new',
+                                 data=json.dumps([document_data]),
                                  headers={'Authorization': 'Bearer fixme'})
 
-            rec = self.app.get_record(bibcode='linkstest')
+            rec = self.app.get_record(bibcode='2013MNRAS.435.1904M')
             self.assertEqual(p.call_count, 2)
             self.assertEqual(rec['datalinks_checksum'], None)
             self.assertEqual(rec['solr_checksum'], None)
@@ -344,23 +432,26 @@ class TestAdsOrcidCelery(unittest.TestCase):
 
     def test_index_datalinks_service_only_batch_failure(self):
         # init database so timestamps and checksum can be updated
-        nonbib_data = {'data_links_rows': [{'baz': 0}]}
-        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
+
+        document_data = self.get_document_data()
+        self.app.update_storage('2013MNRAS.435.1904M', 'nonbib_data', document_data['links'])
         with mock.patch('requests.put') as p:
             bad = mock.Mock()
             bad.status_code = 500
+
             good = mock.Mock()
             good.status_code = 200
+
             p.side_effect = [bad, good]
-            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
+
             checksum = 'thechecksum'
-            self.app.index_datalinks([datalinks_payload], [checksum])
-            p.assert_called_with('http://localhost:8080/update',
-                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
+            self.app.index_datalinks([document_data], [checksum])
+            p.assert_called_with('http://localhost:8080/update_new',
+                                 data=json.dumps([document_data]),
                                  headers={'Authorization': 'Bearer fixme'})
             self.assertEqual(p.call_count, 2)
             # verify database updated
-            rec = self.app.get_record(bibcode='linkstest')
+            rec = self.app.get_record(bibcode='2013MNRAS.435.1904M')
             self.assertEqual(rec['datalinks_checksum'], 'thechecksum')
             self.assertEqual(rec['solr_checksum'], None)
             self.assertEqual(rec['metrics_checksum'], None)
@@ -371,17 +462,17 @@ class TestAdsOrcidCelery(unittest.TestCase):
         m = mock.Mock()
         m.status_code = 200
         # init database so timestamps and checksum can be updated
-        nonbib_data = {'data_links_rows': [{'baz': 0}]}
-        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
+        document_data = self.get_document_data()
+
+        self.app.update_storage('2013MNRAS.435.1904M', 'nonbib_data', document_data['links'])
         with mock.patch('requests.put', return_value=m) as p:
-            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
             checksum = 'thechecksum'
-            self.app.index_datalinks([datalinks_payload], [checksum], update_processed=False)
-            p.assert_called_with('http://localhost:8080/update',
-                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
+            self.app.index_datalinks([document_data], [checksum], update_processed=False)
+            p.assert_called_with('http://localhost:8080/update_new',
+                                 data=json.dumps([document_data]),
                                  headers={'Authorization': 'Bearer fixme'})
             # verify database updated
-            rec = self.app.get_record(bibcode='linkstest')
+            rec = self.app.get_record(bibcode='2013MNRAS.435.1904M')
             self.assertEqual(rec['datalinks_checksum'], None)
             self.assertEqual(rec['solr_checksum'], None)
             self.assertEqual(rec['metrics_checksum'], None)
@@ -478,7 +569,8 @@ class TestAdsOrcidCelery(unittest.TestCase):
                                     'DATA': {'SIMBAD': {'url': ['https://simbad.u-strasbg.fr/simbad/sim-id?Ident=2025XYZ1234'], 'title': ['SIMBAD Astronomical Database'], 'count': 1}, 
                                              'VIZIER': {'url': ['https://vizier.u-strasbg.fr/viz-bin/VizieR', 'https://vizier.u-strasbg.fr/viz-bin/VizieR-2'], 'title': ['VizieR Catalog Entry 1', 'VizieR Catalog Entry 2'], 'count': 2}}, 
                                     'ESOURCE': {'PUBLISHER': {'url': ['https://journalpublisher.com/paper/2025XYZ1234'], 'title': ['Published Paper'], 'count': 1}}, 
-                                    'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
+                                    'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 
+                                    'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
                                     'LIBRARYCATALOG': {'url': ['https://library.university.edu/catalog/2025XYZ1234'], 'title': ['University Library Catalog Entry'], 'count': 1}, 
                                     'PRESENTATION': {'url': ['https://conference.org/2025/presentation123', 'https://conference.org/2025/slides123'], 'title': ['Conference Presentation', 'Presentation Slides'], 'count': 2}, 
                                     'ABSTRACT': False, 
@@ -489,7 +581,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
                                     'REFERENCES': False, 
                                     'TOC': False, 
                                     'COREAD': True}, 
-                                    'identifier': ['2025arXiv250220510L']}
+                            'identifier': ['2025arXiv250220510L']}
         self.assertEqual(links, expected_links)
 
         only_bib = {'bibcode': 'asdf',
