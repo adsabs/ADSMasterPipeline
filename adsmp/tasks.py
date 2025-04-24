@@ -92,9 +92,6 @@ def task_update_record(msg):
             logger.info(f'message to JSON: {msg.toJSON(including_default_value_fields=True)}')
             payload = msg.toJSON(including_default_value_fields=True)
             payload = payload['collections']
-
-            # record = app.update_storage(msg.bibcode, 'classify',
-            #                             msg.toJSON(including_default_value_fields=True))
             record = app.update_storage(msg.bibcode, 'classify',payload)
             if record:
                 logger.debug('Saved classify message: %s', msg)

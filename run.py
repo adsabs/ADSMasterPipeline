@@ -629,14 +629,13 @@ if __name__ == '__main__':
         print('Running Classifier')
 
         if args.classify_verify:
-            print('Include manual verification step - check output file an resubmit using the Classifier Pipeline')
+            print('Include manual verification step - check output file and resubmit using the Classifier Pipeline')
             operation_step = 'classify_verify'
         elif args.classify:
             print('Skipping manual verification')
             operation_step = 'classify'
         else:
             print('Select classsification process')
-        # import pdb;pdb.set_trace()
         if args.validate_classifier:
             data = None
             check_boolean = True
@@ -644,29 +643,21 @@ if __name__ == '__main__':
             data = None
             check_boolean = False
         if args.manual:
-            # if args.filename or data is not None:
             if args.filename:
                 # filename should be checked
                 filename = args.filename
-                # import pdb;pdb.set_trace()
-                # print('classifying bibcodes from file via queue')
+                print('classifying bibcodes from file via queue')
                 logger.info('Classifying records from file via queue')
                 keywords_dictionary = {"filename": filename, "mode": "manual", "data": data, "check_boolean": check_boolean, "operation_step" : operation_step}
-                # import pdb;pdb.set_trace()
-                # app.request_classify(filename=filename,mode='manual',data=data,check_boolean=check_boolean)
         else:
             if args.filename:
                 with open(args.filename, 'r') as f:
                     for line in f:
                         bibcode = line.strip()
-                        # import pdb;pdb.set_trace()
                         if bibcode:
                             keywords_dictionary = {"bibcode": bibcode, "mode": "auto", "operation_step" : operation_step}
-                            # app.request_classify(bibcode=bibcode,mode='auto')
 
-        # import pdb;pdb.set_trace()
         app.request_classify(**keywords_dictionary)
-                # app.request_classify(args.filename)
 
     elif args.rebuild_collection:
         rebuild_collection(args.solr_collection, args.batch_size)

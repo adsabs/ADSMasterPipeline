@@ -170,8 +170,6 @@ def extract_classifications_pipeline(db_classifications, solrdoc):
         return {"database" : solrdoc.get("database", None)}
 
     # Append classifier results to classic collections
-    # classifications = db_classifications("classifications", solrdoc.get("database", []))
-    # classifications = set(db_classifications + solrdoc.get("database", []))
     return {
         "database" : list(set(db_classifications + solrdoc.get("database", [])))
     }
