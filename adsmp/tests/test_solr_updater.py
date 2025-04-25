@@ -592,6 +592,7 @@ class TestSolrUpdater(unittest.TestCase):
         self.assertEqual(
             db_record["nonbib_data"]["links_data"], solr_record["links_data"]
         )
+        self.assertEqual(solr_record["has"], [])
 
         db_record = {
             "bibcode": "foo",
