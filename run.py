@@ -27,7 +27,7 @@ proj_home = os.path.realpath(os.path.dirname(__file__))
 config = load_config(proj_home=proj_home)
 
 logger = setup_logging('run.py', proj_home=proj_home,
-                       level=config.get('LOGGING_LEVEL', 'INFO'),
+                       level=config.get('LOGGING_LEVEL', 'DEBUG'),
                        attach_stdout=config.get('LOG_STDOUT', False))
 
 app = tasks.app
@@ -291,11 +291,15 @@ def delete_obsolete_records(older_than, batch_size=1000):
     logger.info("Deleted {} obsolete records".format(deleted))
 
 def process_all_scixid(batch_size, flag):
+    logger.info('Starting process_all_scixid with flag: %s', flag)
     if flag == 'update-all':
         flag = 'update'
     elif flag == 'force-all':
         flag = 'force'
-
+    elif flag == 'reset-all':
+        flag = 'reset'
+    logger.info('Converted flag to: %s', flag)
+    
     sent = 0
     batch = []
     _tasks = []
@@ -310,16 +314,19 @@ def process_all_scixid(batch_size, flag):
                 logger.debug('Sending %s records', sent)
 
             batch.append(rec.bibcode)
-            if len(batch) > batch_size:
+            if len(batch) >= batch_size:
+                logger.info('Sending batch of %s records with flag %s', len(batch), flag)
                 t = tasks.task_update_scixid.delay(batch, flag)
                 _tasks.append(t)
                 batch = []
     
     if len(batch) > 0:
+        logger.info('Sending final batch of %s records with flag %s', len(batch), flag)
         t = tasks.task_update_scixid.delay(batch, flag)
         logger.debug('Sending %s records', len(batch))
         _tasks.append(t)
-    
+    logger.info('Completed process_all_scixid, sent total of %s records', sent)
+
 
 def rebuild_collection(collection_name, batch_size):
     """
@@ -563,8 +570,8 @@ if __name__ == '__main__':
     parser.add_argument('--scix-id-flag',
                         default=False,
                         dest='scix_id_flag',
-                        choices=['update', 'update-all', 'force', 'force-all'],
-                        help='update records to be assigned a new scix_id, update all records in recordsDB with new scix_id, force reset scix_id and assign new scix_ids, force all records in recordsDB with new scix_id')
+                        choices=['update', 'update-all', 'force', 'force-all', 'reset', 'reset-all'],
+                        help='update records to be assigned a new scix_id, update all records in recordsDB with new scix_id, force reset scix_id and assign new scix_ids, force all records in recordsDB with new scix_id, reset scix_id to None, reset all scix_id in recordsDB to None')
 
     args = parser.parse_args()
 
@@ -649,8 +656,7 @@ if __name__ == '__main__':
             flag = args.scix_id_flag
         else:
             flag = ''
-
-        if flag == 'update-all' or flag == 'force-all':
+        if flag == 'update-all' or flag == 'force-all' or flag == 'reset-all':
             batch_size = args.batch_size
             process_all_scixid(batch_size, flag)
         else:

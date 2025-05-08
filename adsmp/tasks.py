@@ -1,4 +1,3 @@
-
 from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 import os
@@ -113,41 +112,62 @@ def task_update_scixid(bibcodes, flag):
     bibcodes: single bibcode or list of bibcodes to update
     flag: 'update' - update records to have a new scix_id if they do not already have one
           'force' - force reset scix_id and assign new scix_ids to all bibcodes
+          'reset' - reset scix_id to None for all bibcodes
     """
-    if flag not in ['update', 'force']:
+    logger.info('Starting task_update_scixid with flag: %s for %s bibcodes', flag, len(bibcodes))
+    if flag not in ['update', 'force', 'reset']:
         logger.error('task_update_scixid flag can only have the values "update" or "force"')
+        return
 
     for bibcode in bibcodes:
-        logger.debug('Updating record: %s', bibcode)
+        logger.debug('Processing bibcode: %s with flag: %s', bibcode, flag)
 
         with app.session_scope() as session:
             r = session.query(Records).filter_by(bibcode=bibcode).first()
             if r is None:
                 logger.error('Bibcode %s does not exist in Records DB', bibcode)
-                return
+                continue
+
+            logger.debug('Current scix_id for %s: %s', bibcode, r.scix_id)
+            logger.debug('Has bib_data: %s', bool(r.bib_data))
+
             if flag == 'update':
                 if not r.scix_id:
-                    r.scix_id = "scix:" + app.generate_scix_id(r.id)
+                    if r.bib_data:
+                        r.scix_id = "scix:" + app.generate_scix_id(r.bib_data)
+                        try:
+                            session.commit()
+                            logger.debug('Bibcode %s has been assigned a new scix id: %s', bibcode, r.scix_id)
+                        except exc.IntegrityError:
+                            logger.exception('error in app.update_storage while updating database for bibcode %s', bibcode)
+                            session.rollback()
+                    else:
+                        r.scix_id = None
+                        session.commit()
+                        logger.debug('Bibcode %s has no bib_data, scix_id is set to None', bibcode)
+                else:
+                    logger.debug('Bibcode %s already has a scix id assigned: %s', bibcode, r.scix_id)
+
+            if flag == 'force': 
+                if r.bib_data:
+                    old_id = r.scix_id
+                    r.scix_id = "scix:" + app.generate_scix_id(r.bib_data)
                     try:
                         session.commit()
-                        logger.debug('Bibcode %s has been assigned a new scix id', bibcode)
+                        logger.debug('Bibcode %s scix_id changed from %s to %s', bibcode, old_id, r.scix_id)
                     except exc.IntegrityError:
-                        logger.exception('error in app.update_storage while updating database for bibcode {}, type {}'.format(bibcode, type))
+                        logger.exception('error in app.update_storage while updating database for bibcode %s', bibcode)
                         session.rollback()
                 else:
+                    r.scix_id = None
                     session.commit()
-                    logger.debug('Bibcode %s already has a scix id assigned', bibcode)
-                    session.rollback()
+                    logger.debug('Bibcode %s has no bib_data, scix_id is set to None', bibcode)
 
-            if flag == 'force':
-                r.scix_id = "scix:" + app.generate_scix_id(r.id)
-                try:
-                    session.commit()
-                    logger.debug('Bibcode %s has been assigned a new scix id', bibcode)
-                except exc.IntegrityError:
-                    logger.exception('error in app.update_storage while updating database for bibcode {}, type {}'.format(bibcode, type))
-                    session.rollback()
-
+            if flag == 'reset':
+                old_id = r.scix_id
+                r.scix_id = None
+                session.commit()
+                logger.debug('Bibcode %s scix_id reset from %s to None', bibcode, old_id)
 
 @app.task(queue='rebuild-index')
 def task_rebuild_index(bibcodes, solr_targets=None):
