@@ -17,6 +17,8 @@ This pipeline is collecting results from the sub-ordinate pipelines (bibliograph
     - index-solr: internal queue of records to send to solr
     - index-metrics: internal queue of records to send to metrics on aws
     - index-data-links-resolver: internal queue of records to send to data links resolver
+    - update-scix-id: update `scix_id` field for records with specified bibcodes 
+    - scix-id-flag: flag to set the action for update-scix-id: update specified records, update all records, force update specific scix_ids, force update all scix_ids, reset specific scix_id to None, reset all scix_ids to None
 
 ## Setup (recommended)
 
@@ -55,4 +57,4 @@ Always write unittests (even: always write unitests first!). Travis will run aut
 
 ## Maintainer(s)
 
-Roman, Sergi, Steve
+Mugdha

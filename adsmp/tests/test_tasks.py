@@ -100,7 +100,8 @@ class TestWorkers(unittest.TestCase):
                 tasks.task_update_record(cls(bibcode="bibcode", status="deleted"))
                 self.assertEqual(self.app.get_record("bibcode")[x], None)
                 self.assertTrue(self.app.get_record("bibcode"))
-                self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:0000-0000-0011")
+                # scix_id should be None since there is no bib_data
+                self.assertEqual(self.app.get_record("bibcode")["scix_id"], None)
 
         recs = NonBibRecordList()
         recs.nonbib_records.extend(
@@ -698,21 +699,26 @@ class TestWorkers(unittest.TestCase):
 
     def test_task_update_scixid(self):
         self.app.update_storage("bibcode", "bib_data", {"title":"abc test 123"})
-        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:0000-0000-0011")
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:4KT1-7FJB-EV62")
 
         tasks.task_update_scixid(bibcodes=["bibcode"], flag="force")
-        # bibcode should not change since 'id' has not changed
-        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:0000-0000-0011")
-            
+        # scixid should not change since bib_data has not changed
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:4KT1-7FJB-EV62")
+
+        self.app.update_storage("bibcode", "bib_data", {"title":"abc test 456"})
+        tasks.task_update_scixid(bibcodes=["bibcode"], flag="force")
+        # scix_id should change since bib_data has changed and we used the force flag to create a new scix_id
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:6DAH-FKYA-94NW")
+        
+
         with self.app.session_scope() as session:
             r = session.query(Records).filter_by(bibcode="bibcode").first()
-            r.scix_id = None
             session.commit()
             session.rollback()
 
         tasks.task_update_scixid(bibcodes=["bibcode"], flag="update")
-        # bibcode should still be the same as above since 'id' has not changed
-        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:0000-0000-0011")
+        # bibcode should still be the same as above since bib_data has not changed
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:6DAH-FKYA-94NW")
             
         
 
