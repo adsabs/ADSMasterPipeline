@@ -120,8 +120,8 @@ class ADSMasterPipelineCelery(ADSCelery):
             out = r.toJSON()
             try:
                 session.flush()
-                if not r.scix_id:
-                    r.scix_id = "scix:" + str(self.generate_scix_id(r.id))
+                if not r.scix_id and r.bib_data:
+                    r.scix_id = "scix:" + str(self.generate_scix_id(r.bib_data))
                     out = r.toJSON()
                 session.commit()
                 return out
@@ -130,8 +130,8 @@ class ADSMasterPipelineCelery(ADSCelery):
                 session.rollback()
                 raise
 
-    def generate_scix_id(self, number):
-        return scix_id.encode(number) 
+    def generate_scix_id(self, bib_data):
+        return scix_id.generate_scix_id(bib_data) 
 
     def delete_by_bibcode(self, bibcode):
         with self.session_scope() as session:

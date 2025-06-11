@@ -12,13 +12,11 @@ down_revision = '2d2af8a9c996'
 
 from alembic import op
 from sqlalchemy import Column, String, Integer, TIMESTAMP, DateTime, Text, Index, Boolean
-
-                               
-
+from adsmp.models import Records
+from adsmp import tasks
 
 def upgrade():
     op.add_column('records', Column('scix_id', String(19), nullable = True, default=None, unique=True))
-    
 
 def downgrade():
     op.drop_column('records', 'scix_id')
