@@ -36,11 +36,11 @@ def task_update_record(msg):
         - and specific payload
     """
     # logger.debug('Updating record: %s', msg)
-    logger.info('Updating record: %s', msg)
+    logger.debug('Updating record: %s', msg)
     status = app.get_msg_status(msg)
-    logger.info(f'Message status: {status}')
+    logger.debug(f'Message status: {status}')
     type = app.get_msg_type(msg)
-    logger.info(f'Message type: {type}')
+    logger.debug(f'Message type: {type}')
     bibcodes = []
 
     if status == 'deleted':
@@ -89,7 +89,7 @@ def task_update_record(msg):
                 logger.debug('Saved augment message: %s', msg)
         elif type == 'classify':
             bibcodes.append(msg.bibcode)
-            logger.info(f'message to JSON: {msg.toJSON(including_default_value_fields=True)}')
+            logger.debug(f'message to JSON: {msg.toJSON(including_default_value_fields=True)}')
             payload = msg.toJSON(including_default_value_fields=True)
             payload = payload['collections']
             record = app.update_storage(msg.bibcode, 'classify',payload)
