@@ -100,6 +100,8 @@ class TestWorkers(unittest.TestCase):
                 tasks.task_update_record(cls(bibcode="bibcode", status="deleted"))
                 self.assertEqual(self.app.get_record("bibcode")[x], None)
                 self.assertTrue(self.app.get_record("bibcode"))
+                # scix_id should be None since there is no bib_data
+                self.assertEqual(self.app.get_record("bibcode")["scix_id"], None)
 
         recs = NonBibRecordList()
         recs.nonbib_records.extend(
@@ -537,7 +539,7 @@ class TestWorkers(unittest.TestCase):
             tasks.task_index_records(["foo"], force=True)
 
             self.assertEqual(update_solr.call_count, 1)
-            self._check_checksum("foo", solr="0x8f51bd8d")
+            self._check_checksum("foo", solr="0x50f123c")
 
             # now change metrics (solr shouldn't be called)
             getter.return_value = {
@@ -545,7 +547,7 @@ class TestWorkers(unittest.TestCase):
                 "metrics_updated": get_date("1972-04-02"),
                 "bib_data_updated": get_date("1972-04-01"),
                 "metrics": {},
-                "solr_checksum": "0x8f51bd8d",
+                "solr_checksum": "0x50f123c",
             }
             tasks.task_index_records(["foo"], force=True)
             self.assertEqual(update_solr.call_count, 1)
@@ -563,7 +565,7 @@ class TestWorkers(unittest.TestCase):
                 "bibcode": "foo",
                 "metrics_updated": get_date("1972-04-02"),
                 "bib_data_updated": get_date("1972-04-01"),
-                "solr_checksum": "0x8f51bd8d",
+                "solr_checksum": "0x50f123c",
             }
 
             # update with matching checksum and then update and ignore checksums
@@ -694,6 +696,33 @@ class TestWorkers(unittest.TestCase):
         ) as x:
             tasks.task_index_records(["noMetrics"], ignore_checksums=True)
             x.assert_not_called()
+
+    def test_task_update_scixid(self):
+        self.app.update_storage("bibcode", "bib_data", {"title":"abc test 123"})
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:4KT1-7FJB-EV62")
+
+        tasks.task_update_scixid(bibcodes=["bibcode"], flag="force")
+        # scixid should not change since bib_data has not changed
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:4KT1-7FJB-EV62")
+
+        self.app.update_storage("bibcode", "bib_data", {"title":"abc test 456"})
+        tasks.task_update_scixid(bibcodes=["bibcode"], flag="force")
+        # scix_id should change since bib_data has changed and we used the force flag to create a new scix_id
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:6DAH-FKYA-94NW")
+        
+
+        with self.app.session_scope() as session:
+            r = session.query(Records).filter_by(bibcode="bibcode").first()
+            session.commit()
+            session.rollback()
+
+        tasks.task_update_scixid(bibcodes=["bibcode"], flag="update")
+        # bibcode should still be the same as above since bib_data has not changed
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:6DAH-FKYA-94NW")
+            
+        
+
+
 
 
 if __name__ == "__main__":

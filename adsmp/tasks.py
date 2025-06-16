@@ -1,12 +1,15 @@
-
 from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 import os
 import adsputils
 from adsmp import app as app_module
 from adsmp import solr_updater
+from adsmp.models import Records
 from kombu import Queue
 from adsmsg.msg import Msg
+from sqlalchemy import exc
+from sqlalchemy.orm import load_only
+
 
 # ============================= INITIALIZATION ==================================== #
 
@@ -22,6 +25,7 @@ app.conf.CELERY_QUEUES = (
     Queue('index-solr', app.exchange, routing_key='index-solr'),
     Queue('index-metrics', app.exchange, routing_key='index-metrics'),
     Queue('index-data-links-resolver', app.exchange, routing_key='index-data-links-resolver'),
+    Queue('update-scixid', app.exchange, routing_key='update-scixid'),
 )
 
 
@@ -110,6 +114,70 @@ def task_update_record(msg):
     else:
         logger.error('Received a message with unclear status: %s', msg)
 
+@app.task(queue='update-scixid')
+def task_update_scixid(bibcodes, flag):
+    """Receives bibcodes to add scix id to the record.
+
+    @param 
+    bibcodes: single bibcode or list of bibcodes to update
+    flag: 'update' - update records to have a new scix_id if they do not already have one
+          'force' - force reset scix_id and assign new scix_ids to all bibcodes
+          'reset' - reset scix_id to None for all bibcodes
+    """
+    logger.info('Starting task_update_scixid with flag: %s for %s bibcodes', flag, len(bibcodes))
+    if flag not in ['update', 'force', 'reset']:
+        logger.error('task_update_scixid flag can only have the values "update" or "force"')
+        return
+
+    for bibcode in bibcodes:
+        logger.debug('Processing bibcode: %s with flag: %s', bibcode, flag)
+
+        with app.session_scope() as session:
+            r = session.query(Records).filter_by(bibcode=bibcode).first()
+            if r is None:
+                logger.error('Bibcode %s does not exist in Records DB', bibcode)
+                continue
+
+            logger.debug('Current scix_id for %s: %s', bibcode, r.scix_id)
+            logger.debug('Has bib_data: %s', bool(r.bib_data))
+
+            if flag == 'update':
+                if not r.scix_id:
+                    if r.bib_data:
+                        r.scix_id = "scix:" + app.generate_scix_id(r.bib_data)
+                        try:
+                            session.commit()
+                            logger.debug('Bibcode %s has been assigned a new scix id: %s', bibcode, r.scix_id)
+                        except exc.IntegrityError:
+                            logger.exception('error in app.update_storage while updating database for bibcode %s', bibcode)
+                            session.rollback()
+                    else:
+                        r.scix_id = None
+                        session.commit()
+                        logger.debug('Bibcode %s has no bib_data, scix_id is set to None', bibcode)
+                else:
+                    logger.debug('Bibcode %s already has a scix id assigned: %s', bibcode, r.scix_id)
+
+            if flag == 'force': 
+                if r.bib_data:
+                    old_id = r.scix_id
+                    r.scix_id = "scix:" + app.generate_scix_id(r.bib_data)
+                    try:
+                        session.commit()
+                        logger.debug('Bibcode %s scix_id changed from %s to %s', bibcode, old_id, r.scix_id)
+                    except exc.IntegrityError:
+                        logger.exception('error in app.update_storage while updating database for bibcode %s', bibcode)
+                        session.rollback()
+                else:
+                    r.scix_id = None
+                    session.commit()
+                    logger.debug('Bibcode %s has no bib_data, scix_id is set to None', bibcode)
+
+            if flag == 'reset':
+                old_id = r.scix_id
+                r.scix_id = None
+                session.commit()
+                logger.debug('Bibcode %s scix_id reset from %s to None', bibcode, old_id)
 
 @app.task(queue='rebuild-index')
 def task_rebuild_index(bibcodes, solr_targets=None):
@@ -236,7 +304,7 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
                     solr_payload['identifier'] = []
                 if 'bibcode' in solr_payload and solr_payload['bibcode'] not in solr_payload['identifier']:
                     solr_payload['identifier'].append(solr_payload['bibcode'])
-                logger.debug('Built SOLR: %s', solr_payload)
+                logger.debug('Built SOLR record for %s', solr_payload['bibcode'])
                 solr_checksum = app.checksum(solr_payload)
                 if ignore_checksums or r.get('solr_checksum', None) != solr_checksum:
                     solr_records.append(solr_payload)
