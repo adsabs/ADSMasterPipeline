@@ -570,7 +570,7 @@ if __name__ == '__main__':
     parser.add_argument('--scix-id-flag',
                         default=False,
                         dest='scix_id_flag',
-                        choices=['update', 'updte-all', 'force', 'force-all', 'reset', 'reset-all']
+                        choices=['update', 'update-all', 'force', 'force-all', 'reset', 'reset-all'],
                         help='update records to be assigned a new scix_id, update all records in recordsDB with new scix_id, force reset scix_id and assign new scix_ids, force all records in recordsDB with new scix_id, reset scix_id to None, reset all scix_id in recordDB to None')
 
     parser.add_argument('--classify_verify',
