@@ -573,7 +573,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
                                     'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
                                     'LIBRARYCATALOG': {'url': ['https://library.university.edu/catalog/2025XYZ1234'], 'title': ['University Library Catalog Entry'], 'count': 1}, 
                                     'PRESENTATION': {'url': ['https://conference.org/2025/presentation123', 'https://conference.org/2025/slides123'], 'title': ['Conference Presentation', 'Presentation Slides'], 'count': 2}, 
-                                    'ABSTRACT': False, 
+                                    'ABSTRACT': True, 
                                     'CITATIONS': False, 
                                     'GRAPHICS': True, 
                                     'METRICS': False, 
@@ -597,7 +597,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
                                                         'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
                                                         'LIBRARYCATALOG': {'url': [], 'title': [], 'count': 0}, 
                                                         'PRESENTATION': {'url': [], 'title': [], 'count': 0}, 
-                                                        'ABSTRACT': False, 
+                                                        'ABSTRACT': True, 
                                                         'CITATIONS': False, 
                                                         'GRAPHICS': True, 
                                                         'METRICS': False, 
@@ -623,7 +623,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
                                     'ESOURCE': {'EPRINT_HTML': {'url': ['http://returnthis'], 'title': [], 'count': 0}}, 
                                     'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
                                     'LIBRARYCATALOG': {'url': [], 'title': [], 'count': 0}, 'PRESENTATION': {'url': [], 'title': [], 'count': 0}, 
-                                    'ABSTRACT': False, 
+                                    'ABSTRACT': True, 
                                     'CITATIONS': False, 
                                     'GRAPHICS': True, 
                                     'METRICS': False, 
@@ -676,7 +676,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
                                                                    'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 
                                                                    'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
                                                                    'LIBRARYCATALOG': {'url': [], 'title': [], 'count': 0}, 
-                                                                   'PRESENTATION': {'url': [], 'title': [], 'count': 0}, 'ABSTRACT': False, 'CITATIONS': False, 'GRAPHICS': True, 'METRICS': False, 'OPENURL': True, 'REFERENCES': False, 'TOC': False, 'COREAD': True}, 'identifier': ['asdf']}
+                                                                   'PRESENTATION': {'url': [], 'title': [], 'count': 0}, 'ABSTRACT': True, 'CITATIONS': False, 'GRAPHICS': True, 'METRICS': False, 'OPENURL': True, 'REFERENCES': False, 'TOC': False, 'COREAD': True}, 'identifier': ['asdf']}
         
         self.assertEqual(links, expected_links)
 

@@ -638,10 +638,10 @@ class ADSMasterPipelineCelery(ADSCelery):
                         "CITATIONS": False,
                         "GRAPHICS": False,
                         "METRICS": False,
-                        "OPENURL": True, 
+                        "OPENURL": False, 
                         "REFERENCES": False,
                         "TOC": False,
-                        "COREAD": True 
+                        "COREAD": False 
                     }
         
         for row in data_links_rows:
@@ -800,9 +800,8 @@ class ADSMasterPipelineCelery(ADSCelery):
         # Populate identifiers and extract ARXIV and DOI links
         links = self._populate_identifiers(record, resolver_record, links)
             
-        # Set ABSTRACT flag if abstract is present in bib_data
-        if 'abstract' in bib_data and bib_data['abstract']:
-            links['ABSTRACT'] = True
+        # Always set ABSTRACT to True
+        links['ABSTRACT'] = True
 
         # Set CITATIONS flag if citations are present in metrics or nonbib
         if ('citation_num' in metrics and metrics['citation_num'] > 0) or \

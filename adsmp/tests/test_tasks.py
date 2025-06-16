@@ -486,13 +486,13 @@ class TestWorkers(unittest.TestCase):
                        "INSPIRE": {"url": [], "title": [], "count": 0}, 
                        "LIBRARYCATALOG": {"url": [], "title": [], "count": 0}, 
                        "PRESENTATION": {"url": [], "title": [], "count": 0}, 
-                       "ABSTRACT": False, "CITATIONS": False, "GRAPHICS": True, "METRICS": False, "OPENURL": True, "REFERENCES": False, "TOC": False, "COREAD": True},
+                       "ABSTRACT": True, "CITATIONS": False, "GRAPHICS": True, "METRICS": False, "OPENURL": True, "REFERENCES": False, "TOC": False, "COREAD": True},
                        "identifier": ["linkstest"]}]
                 ),
                 headers={"Authorization": "Bearer api_token"})
 
         rec = self.app.get_record(bibcode="linkstest")
-        self.assertEqual(rec["datalinks_checksum"], "0xd3836004")
+        self.assertEqual(rec["datalinks_checksum"], "0xfed29826")
         self.assertEqual(rec["solr_checksum"], None)
         self.assertEqual(rec["metrics_checksum"], None)
 
@@ -608,7 +608,7 @@ class TestWorkers(unittest.TestCase):
                 "bib_data_updated": get_date(),
                 "nonbib_data_updated": get_date(),
                 "processed": get_date(str(future_year)),
-                "datalinks_checksum": "0xd3836004",
+                "datalinks_checksum": "0xfed29826",
             },
         ), patch(
             "adsmp.tasks.task_index_data_links_resolver.apply_async",
