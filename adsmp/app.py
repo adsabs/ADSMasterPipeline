@@ -3,7 +3,7 @@ from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 from . import exceptions
 from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records
-from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord
+from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session, contextmanager
 from sqlalchemy.orm import load_only as _load_only
@@ -19,7 +19,9 @@ import requests
 from copy import deepcopy
 import sys
 from sqlalchemy.dialects.postgresql import insert
+import csv
 from SciXPipelineUtils import scix_id
+
 
 class ADSMasterPipelineCelery(ADSCelery):
 
@@ -113,6 +115,12 @@ class ADSMasterPipelineCelery(ADSCelery):
                 oldval = 'not-stored'
                 r.augments = payload
                 r.augments_updated = now
+            elif type == 'classify':
+                # payload contains new value for collections field
+                # r.augments holds a list, save it in database
+                oldval = 'not-stored'
+                r.classifications = payload
+                r.classifications_updated = now
             else:
                 raise Exception('Unknown type: %s' % type)
             session.add(ChangeLog(key=bibcode, type=type, oldvalue=oldval))
@@ -221,6 +229,8 @@ class ADSMasterPipelineCelery(ADSCelery):
             return 'metrics_records'
         elif isinstance(msg, AugmentAffiliationResponseRecord):
             return 'augment'
+        elif isinstance(msg, ClassifyResponseRecord):
+            return 'classify'
 
         else:
             raise exceptions.IgnorableException('Unkwnown type {0} submitted for update'.format(repr(msg)))
@@ -514,6 +524,106 @@ class ADSMasterPipelineCelery(ADSCelery):
             self.logger.debug('sent augment affiliation request for bibcode {}'.format(bibcode))
         else:
             self.logger.debug('request_aff_augment called but bibcode {} has no aff data'.format(bibcode))
+
+    def prepare_bibcode(self, bibcode):
+        """prepare data for classifier pipeline
+        
+        Parameters
+        ----------
+        bibcode = reference ID for record (Needs to include SciXID)
+
+        """
+        if rec is None:
+            self.logger.warning('request_classifier called but no data at all for bibcode {}'.format(bibcode))
+            return
+        bib_data = rec.get('bib_data', None)
+        if bib_data is None:
+            self.logger.warning('request_classifier called but no bib data for bibcode {}'.format(bibcode))
+            return
+        title = bib_data.get('title', '')
+        abstract = bib_data.get('abstract', '')
+        data = {
+            'bibcode': bibcode,
+            'title': title,
+            'abstract': abstract,
+        }
+        return data
+
+    def request_classify(self, bibcode=None,scix_id = None, filename=None,mode='auto', batch_size=500, data=None, check_boolean=False, operation_step=None):
+        """ send classifier request for bibcode to classifier pipeline
+
+        set data parameter to provide test data
+
+        Parameters
+        ----------
+        bibcode = reference ID for record (Needs to include SciXID)
+        scix_id = reference ID for record
+        filename : filename of input file with list of records to classify 
+        mode : 'auto' (default) assumes single record input from master, 'manual' assumes multiple records input at command line
+        batch_size : size of batch for large input files
+        check_boolean : Used for testing - writes the message to file
+        operation_step: string - defines mode of operation: classify, classify_verify, or verify
+        
+        """
+        self.logger.info('request_classify called with bibcode={}, filename={}, mode={}, batch_size={}, data={}, validate={}'.format(bibcode, filename, mode, batch_size, data, check_boolean))
+
+        if not self._config.get('OUTPUT_TASKNAME_CLASSIFIER'):
+            self.logger.warning('request_classifier called but no classifier taskname in config')
+            return
+        if not self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER'):
+            self.logger.warning('request_classifier called but no classifier broker in config')
+            return
+
+        if bibcode is not None and mode == 'auto':
+            if data is None:
+                data = self.prepare_bibcode(bibcode)
+            if data and data.get('title'):
+                data['operation_step'] = operation_step
+                message = ClassifyRequestRecord(**data) # Maybe make as one element list check protobuf
+                self.forward_message(message, pipeline='classifier')
+                self.logger.debug('sent classifier request for bibcode {}'.format(bibcode))
+            else:
+                self.logger.debug('request_classifier called but bibcode {} has no title data'.format(bibcode))
+        if filename is not None and mode == 'manual':
+            batch_idx = 0
+            batch_list = []
+            self.logger.info('request_classifier called with filename {}'.format(filename))
+            with open(filename, 'r') as f:
+                reader = csv.DictReader(f)
+                bibcodes =  [row for row in reader]
+            while batch_idx < len(bibcodes):
+                bibcodes_batch = bibcodes[batch_idx:batch_idx+batch_size]
+                for record in bibcodes_batch:
+                    if record.get('title') or record.get('abstract'):
+                        data = record
+                    else:
+                        data = self.prepare_bibcode(record)
+                    if data and data.get('title'):
+                        batch_list.append(data)
+                if len(batch_list) > 0:
+                    message = ClassifyRequestRecordList() 
+                    for item in batch_list:
+                        entry = message.classify_requests.add()
+                        entry.bibcode = item.get('bibcode')
+                        entry.title = item.get('title')
+                        entry.abstract = item.get('abstract')
+                    output_taskname=self._config.get('OUTPUT_TASKNAME_CLASSIFIER')
+                    output_broker=self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER')
+                    if check_boolean is True:
+                        # Save message to file 
+                        # with open('classifier_request.json', 'w') as f:
+                        #     f.write(str(message))
+                        json_message = MessageToJson(message)
+                        with open('classifier_request.json', 'w') as f:
+                            f.write(json_message)
+                    else:
+                        self.logger.info('Sending message for batch')
+                        self.logger.info('sending message {}'.format(message))
+                        self.forward_message(message, pipeline='classifier')
+                        self.logger.debug('sent classifier request for batch {}'.format(batch_idx))
+
+                batch_idx += batch_size
+                batch_list = []
 
     def generate_links_for_resolver(self, record):
         """use nonbib or bib elements of database record and return links for resolver and checksum"""

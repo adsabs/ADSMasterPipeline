@@ -162,6 +162,18 @@ def extract_augments_pipeline(db_augments, solrdoc):
         "institution": db_augments.get("institution", None),
     }
 
+def extract_classifications_pipeline(db_classifications, solrdoc):
+    """retrieve expected classifier collections
+
+    classifications is a solr virtual field so it should never be set"""
+    if db_classifications is None or len(db_classifications) == 0:
+        return {"database" : solrdoc.get("database", None)}
+
+    # Append classifier results to classic collections
+    return {
+        "database" : list(set(db_classifications + solrdoc.get("database", [])))
+    }
+
 
 def extract_fulltext(data, solrdoc):
     out = {}
@@ -311,6 +323,7 @@ DB_COLUMN_DESTINATIONS = [
     ("fulltext", extract_fulltext),
     ("#timestamps", get_timestamps),  # use 'id' to be always called
     ("augments", extract_augments_pipeline),  # over aff field, adds aff_*
+    ("classifications", extract_classifications_pipeline), # overwrites databse field in bib_data 
 ]
 
 
@@ -470,7 +483,8 @@ def transform_json_record(db_record):
     if db_record.get("scix_id", None):
         out["scix_id"] = db_record.get("scix_id")
 
-        # Compute doctype scores on the fly
+
+    # Compute doctype scores on the fly
     out["doctype_boost"] = None
 
     if config.get("DOCTYPE_RANKING", False):
