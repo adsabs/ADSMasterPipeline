@@ -699,16 +699,16 @@ class TestWorkers(unittest.TestCase):
 
     def test_task_update_scixid(self):
         self.app.update_storage("bibcode", "bib_data", {"title":"abc test 123"})
-        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:4KT1-7FJB-EV62")
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:5RNB-CG0M-EQYN")
 
         tasks.task_update_scixid(bibcodes=["bibcode"], flag="force")
         # scixid should not change since bib_data has not changed
-        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:4KT1-7FJB-EV62")
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:5RNB-CG0M-EQYN")
 
         self.app.update_storage("bibcode", "bib_data", {"title":"abc test 456"})
         tasks.task_update_scixid(bibcodes=["bibcode"], flag="force")
         # scix_id should change since bib_data has changed and we used the force flag to create a new scix_id
-        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:6DAH-FKYA-94NW")
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:3BPZ-TQ3C-HFMU")
         
 
         with self.app.session_scope() as session:
@@ -718,7 +718,7 @@ class TestWorkers(unittest.TestCase):
 
         tasks.task_update_scixid(bibcodes=["bibcode"], flag="update")
         # bibcode should still be the same as above since bib_data has not changed
-        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:6DAH-FKYA-94NW")
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:3BPZ-TQ3C-HFMU")
             
         
 
