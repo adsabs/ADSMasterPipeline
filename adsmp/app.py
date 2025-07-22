@@ -580,7 +580,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                 data = self.prepare_bibcode(bibcode)
             if data and data.get('title'):
                 data['operation_step'] = operation_step
-		self.logger.DEBUG(f'Converting {data} to protobuf')
+                self.logger.DEBUG(f'Converting {data} to protobuf')
                 message = ClassifyRequestRecordList()
                 entry = message.classify_requests.add()
                 entry.bibcode = data.get('bibcode')
