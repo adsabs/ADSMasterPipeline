@@ -611,7 +611,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                     if record.get('title') or record.get('abstract'):
                         data = record
                     else:
-                        data = self.prepare_bibcode(record)
+                        data = self.prepare_bibcode(record['bibcode'])
                     if data and data.get('title'):
                         batch_list.append(data)
                 if len(batch_list) > 0:
@@ -619,7 +619,10 @@ class ADSMasterPipelineCelery(ADSCelery):
                     for item in batch_list:
                         entry = message.classify_requests.add()
                         entry.bibcode = item.get('bibcode')
-                        entry.title = item.get('title')
+                        title = item.get('title')
+                        if isinstance(title, (list, tuple)):
+                            title = title[0]
+                        entry.title = title
                         entry.abstract = item.get('abstract')
                     output_taskname=self._config.get('OUTPUT_TASKNAME_CLASSIFIER')
                     output_broker=self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER')
