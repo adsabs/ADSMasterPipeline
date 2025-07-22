@@ -533,6 +533,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         bibcode = reference ID for record (Needs to include SciXID)
 
         """
+        rec = self.get_record(bibcode)
         if rec is None:
             self.logger.warning('request_classifier called but no data at all for bibcode {}'.format(bibcode))
             return
@@ -579,7 +580,20 @@ class ADSMasterPipelineCelery(ADSCelery):
                 data = self.prepare_bibcode(bibcode)
             if data and data.get('title'):
                 data['operation_step'] = operation_step
-                message = ClassifyRequestRecord(**data) # Maybe make as one element list check protobuf
+		self.logger.DEBUG(f'Converting {data} to protobuf')
+                message = ClassifyRequestRecordList()
+                entry = message.classify_requests.add()
+                entry.bibcode = data.get('bibcode')
+                title = data.get('title')
+                if isinstance(title, (list,tuple)):
+                    title = title[0]
+                entry.title = title
+                entry.abstract = data.get('abstract')
+                entry.operation_step = data.get('operation_step')
+                output_taskname=self._config.get('OUTPUT_TASKNAME_CLASSIFIER')
+                output_broker=self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER')
+                self.logger.DEBUG('Sending message for batch - bibcode only input')
+                self.logger.DEBUG('sending message {}'.format(message))
                 self.forward_message(message, pipeline='classifier')
                 self.logger.debug('sent classifier request for bibcode {}'.format(bibcode))
             else:
