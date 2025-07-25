@@ -303,6 +303,15 @@ class TestSolrUpdater(unittest.TestCase):
                 "grants": ["2419335 g", "3111723 g*"],
                 "citation_count": 6,
                 "citation_count_norm": 0.2,
+                "reference_count": 17,
+                "mention": [
+                    "1977JAP....48.4729M",
+                ],
+                "mention_count": 1,
+                "credit": [
+                    "1981psd..book.....S",
+                ],
+                "credit_count": 1,
             },
         )
         rec = self.app.get_record("bibcode")
@@ -415,6 +424,10 @@ class TestSolrUpdater(unittest.TestCase):
                 "citation_count": 6,
                 "citation_count_norm": 0.2,
                 "cite_read_boost": 0.1899999976158142,
+                "credit": [
+                    "1981psd..book.....S",
+                ],
+                "credit_count": 1,
                 "data": ["MAST:3", "SIMBAD:1"],
                 "data_facet": ["MAST", "SIMBAD"],
                 "database": ["astronomy"],
@@ -436,6 +449,10 @@ class TestSolrUpdater(unittest.TestCase):
                 "links_data": "",
                 "orcid_other": ["-", "-", "0000-0003-2377-2356", "-"],
                 "orcid_pub": ["-", "-", "-", "-"],
+                "mention": [
+                    "1977JAP....48.4729M",
+                ],
+                "mention_count": 1,
                 "nedid": ["2419335", "3111723"],
                 "nedtype": ["HII Region", "Other"],
                 "ned_object_facet_hier": [
@@ -469,6 +486,7 @@ class TestSolrUpdater(unittest.TestCase):
                     "2005PhRvB..72s5208M",
                     "2006ApPhL..89l3505L",
                 ],
+                "reference_count": 17,
                 "simbid": ["2419335", "3111723"],
                 "simbtype": ["Other", "Star"],
                 "simbad_object_facet_hier": [
