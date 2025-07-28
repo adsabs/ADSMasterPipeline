@@ -26,6 +26,14 @@ def extract_data_pipeline(data, solrdoc):
     reader = data.get("readers", [])
     read_count = len(reader)
 
+    reference = data.get("reference", [])
+    reference_count = data.get("reference_count", len(reference))
+
+    credit = data.get("credit", [])
+    credit_count = data.get("credit_count", len(credit))
+    mention = data.get("mention", [])
+    mention_count = data.get("mention_count", len(mention))
+
     grant = []
     grant_facet_hier = []
     for x in data.get("grants", []):
@@ -114,7 +122,8 @@ def extract_data_pipeline(data, solrdoc):
         read_count=read_count,
         cite_read_boost=data.get("boost", 0.0),
         classic_factor=data.get("norm_cites", 0.0),
-        reference=data.get("reference", []),
+        reference=reference,
+        reference_count=reference_count,
         data=data.get("data", []),
         data_facet=[x.split(":")[0] for x in data.get("data", [])],
         esources=data.get("esource", []),
@@ -136,6 +145,10 @@ def extract_data_pipeline(data, solrdoc):
         ned_object_facet_hier=ned_object_facet_hier,
         citation_count=data.get("citation_count", 0),
         citation_count_norm=data.get("citation_count_norm", 0),
+        credit=credit,
+        credit_count=credit_count,
+        mention=mention,
+        mention_count=mention_count,
     )
     if data.get("links_data", None):
         d["links_data"] = data["links_data"]
