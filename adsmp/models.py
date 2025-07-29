@@ -158,9 +158,10 @@ class SitemapInfo(Base):
 
     __tablename__ = 'sitemap'
 
-    id = Column(Integer, primary_key=True) #bigint
-    record_id = Column(Integer, ForeignKey('records.id')) #TODO: Should foreign key be used for a primary key?
-    bibcode = Column(String(255))
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True) #bigint
+    record_id = Column(BigInteger, ForeignKey('records.id'), nullable=False) 
+    bibcode = Column(String(255), nullable=False)
+    scix_id = Column(String(255), nullable=True)
     bib_data_updated = Column(UTCDateTime, default=None)
     sitemap_filename = Column(String(255))
     filename_lastmoddate = Column(UTCDateTime, default=get_date)
