@@ -1,6 +1,8 @@
-
 from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
+import os
+from collections import defaultdict
+from itertools import chain
 from . import exceptions
 from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records
 from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord
@@ -11,6 +13,7 @@ from sqlalchemy import Table, bindparam
 import adsputils
 import json
 from adsmp import solr_updater
+from adsmp import templates
 from adsputils import serializer
 from sqlalchemy import exc
 from multiprocessing.util import register_after_fork
@@ -72,6 +75,11 @@ class ADSMasterPipelineCelery(ADSCelery):
                 'rn_citation_data': getattr(self._metrics_table_upsert.excluded, 'rn_citation_data')}
             self._metrics_table_upsert = self._metrics_table_upsert.on_conflict_do_update(index_elements=['bibcode'], set_=update_columns)
 
+    @property
+    def sitemap_dir(self):
+        """Get the sitemap directory from configuration"""
+        return self.conf.get('SITEMAP_DIR', '/app/logs/sitemap/')
+
     def update_storage(self, bibcode, type, payload):
         """Update the document in the database, every time
         empty the solr/metrics processed timestamps.
@@ -81,43 +89,45 @@ class ADSMasterPipelineCelery(ADSCelery):
             payload = json.dumps(payload)
 
         with self.session_scope() as session:
-            r = session.query(Records).filter_by(bibcode=bibcode).first()
-            if r is None:
-                r = Records(bibcode=bibcode)
-                session.add(r)
+            record = session.query(Records).filter_by(bibcode=bibcode).first()
+            if record is None:
+                record = Records(bibcode=bibcode)
+                session.add(record)
             now = adsputils.get_date()
             oldval = None
             if type == 'metadata' or type == 'bib_data':
-                oldval = r.bib_data
-                r.bib_data = payload
-                r.bib_data_updated = now
+                oldval = record.bib_data
+                record.bib_data = payload
+                record.bib_data_updated = now
+                # tasks.populate_sitemap_table(record, 'add') #TODO: Review this 
             elif type == 'nonbib_data':
-                oldval = r.nonbib_data
-                r.nonbib_data = payload
-                r.nonbib_data_updated = now
+                oldval = record.nonbib_data
+                record.nonbib_data = payload
+                record.nonbib_data_updated = now
             elif type == 'orcid_claims':
-                oldval = r.orcid_claims
-                r.orcid_claims = payload
-                r.orcid_claims_updated = now
+                oldval = record.orcid_claims
+                record.orcid_claims = payload
+                record.orcid_claims_updated = now
             elif type == 'fulltext':
                 oldval = 'not-stored'
-                r.fulltext = payload
-                r.fulltext_updated = now
+                record.fulltext = payload
+                record.fulltext_updated = now
             elif type == 'metrics':
                 oldval = 'not-stored'
-                r.metrics = payload
-                r.metrics_updated = now
+                record.metrics = payload
+                record.metrics_updated = now
             elif type == 'augment':
                 # payload contains new value for affilation fields
                 # r.augments holds a dict, save it in database
                 oldval = 'not-stored'
-                r.augments = payload
-                r.augments_updated = now
+                record.augments = payload
+                record.augments_updated = now
             else:
                 raise Exception('Unknown type: %s' % type)
             session.add(ChangeLog(key=bibcode, type=type, oldvalue=oldval))
-            r.updated = now
-            out = r.toJSON()
+
+            record.updated = now
+            out = record.toJSON()
             try:
                 session.flush()
                 if not r.scix_id and r.bib_data:
@@ -560,3 +570,354 @@ class ADSMasterPipelineCelery(ADSCelery):
                     # here if record holds unexpected value
                     self.logger.error('invalid value in bib data, bibcode = {}, type = {}, value = {}'.format(bibcode, type(bib_links_record), bib_links_record))
         return resolver_record
+
+    
+    def populate_sitemap_table(self, sitemap_record, sitemap_info=None): 
+        """Populate the sitemap with the given record id and action. 
+        Only used for 'add' and 'force-update' actions. 
+
+        :param sitemap_record: dictionary with record data
+        :param sitemap_info: existing SitemapInfo object if updating
+        """
+
+        with self.session_scope() as session:
+            # If the sitemap_record is new, add it to the database 
+            if sitemap_info is None:
+                sitemap_info = SitemapInfo(
+                    record_id=sitemap_record.get('record_id'),
+                    bibcode=sitemap_record.get('bibcode'),
+                    scix_id=sitemap_record.get('scix_id'),
+                    bib_data_updated=sitemap_record.get('bib_data_updated'),
+                    sitemap_filename=sitemap_record.get('sitemap_filename'),
+                    filename_lastmoddate=sitemap_record.get('filename_lastmoddate'),
+                    update_flag=sitemap_record.get('update_flag', False)
+                )
+                session.add(sitemap_info)
+                
+                # Handle sitemap filename assignment for new records
+                # get list of all sitemap filenames from the SiteMapInfo table
+                sitemap_files = session.query(SitemapInfo.sitemap_filename).all()
+                
+                # flatten the list of tuples into a list of strings
+                sitemap_files = list(chain.from_iterable(sitemap_files))
+                
+                # remove None values from the list
+                sitemap_files = list(filter(lambda sitemap_file: sitemap_file is not None, sitemap_files))
+
+                if sitemap_files:
+                    # split all the filenames to get the index of the latest sitemap file
+                    sitemap_file_indices = [int(sitemap_file.split('_bib_')[-1].split('.')[0]) for sitemap_file in sitemap_files]
+                    latest_index = max(sitemap_file_indices)
+                    sitemap_file_latest = 'sitemap_bib_{}.xml'.format(latest_index)
+
+                    # Check the number of records assigned to sitemap_file_latest
+                    sitemap_file_latest_count = session.query(SitemapInfo).filter_by(sitemap_filename=sitemap_file_latest).count()
+                
+                    # TODO: Why is the max number of records per sitemap file so low? 
+                    if sitemap_file_latest_count >= self.conf.get('MAX_RECORDS_PER_SITEMAP', 3): 
+                        latest_index += 1
+                        sitemap_filename = 'sitemap_bib_{}.xml'.format(latest_index)
+                    else:
+                        sitemap_filename = sitemap_file_latest
+                    
+                    sitemap_info.sitemap_filename = sitemap_filename
+                else:
+                    sitemap_info.sitemap_filename = 'sitemap_bib_1.xml'
+                    
+                
+            else:
+                # For existing records, update only the fields that can change
+                # The sitemap_record already contains the preserved values from sitemap_info
+                update_data = {}
+                
+                # Always update these fields if they exist in sitemap_record
+                for field in ['bib_data_updated', 'sitemap_filename', 'filename_lastmoddate']:
+                    if field in sitemap_record:
+                        update_data[field] = sitemap_record[field]
+                
+                # Always update update_flag (this is the key field for force-update)
+                update_data['update_flag'] = sitemap_record.get('update_flag', False)
+                
+                session.query(SitemapInfo).filter_by(record_id=sitemap_record['record_id']).update(update_data)
+               
+            try:
+                session.commit() 
+            except exc.IntegrityError as e:
+                self.logger.error('Could not update sitemap table for record_id: %s', sitemap_record['record_id'])
+                session.rollback()
+                raise
+            except Exception as e:
+                session.rollback()
+                raise
+
+    # def update_sitemap_files(self):
+    #     """Update sitemap files for all configured sites"""
+    #     sites_config = self.conf.get('SITES', {})
+    #     if not sites_config:
+    #         self.logger.error('No SITES configuration found')
+    #         return
+            
+    #     sites_to_process = list(sites_config.keys())
+    #     self.logger.info('Updating sitemap files for sites: %s', ', '.join(sites_to_process))
+        
+    #     # Update files for each site
+    #     for site_key in sites_to_process:
+    #         self._update_sitemap_files_for_site(site_key)
+        
+    #     # Update database records once after all sites are processed
+    #     self._update_sitemap_database_records()
+
+    # def _update_sitemap_files_for_site(self, site):
+    #     """Update sitemap files for a specific site"""
+    #     sites_config = self.conf.get('SITES', {})
+    #     site_config = sites_config.get(site, {})
+    #     abs_url_pattern = site_config.get('abs_url_pattern', 'https://ui.adsabs.harvard.edu/abs/{bibcode}/abstract')
+    #     sitemap_dir = self.sitemap_dir
+        
+    #     self.logger.info('Processing sitemap files for site: %s', site_config.get('name', site))
+        
+    #     try:
+    #         with self.session_scope() as session:
+    #             # Get all filenames for files that have at least one update_flag=True
+    #             files_needing_update_subquery = (
+    #                 session.query(SitemapInfo.sitemap_filename.distinct())
+    #                 .filter(SitemapInfo.update_flag == True)
+    #             )
+                
+    #             # Get all sitemap records in files that have at least one update_flag=True record
+    #             all_records = (
+    #                 session.query(SitemapInfo)
+    #                 .filter(SitemapInfo.sitemap_filename.in_(files_needing_update_subquery))
+    #                 .all()
+    #             )
+                
+    #             if not all_records:
+    #                 self.logger.info('No sitemap files need updating for site %s', site)
+    #                 return
+                
+    #             self.logger.info('Found %d records to process in sitemap files for site %s', len(all_records), site)
+                
+    #             # Group records by filename
+    #             files_dict = defaultdict(list)
+    #             for record in all_records:
+    #                 if record.sitemap_filename:
+    #                     files_dict[record.sitemap_filename].append(record)
+                
+    #             # Process each file and create site-specific version
+    #             successful_files = 0
+    #             for sitemap_filename, file_records in files_dict.items():
+    #                 try:
+    #                     # Create site-specific directory and use original filename
+    #                     site_output_dir = os.path.join(sitemap_dir, site)
+    #                     os.makedirs(site_output_dir, exist_ok=True)
+    #                     site_filename = os.path.join(site_output_dir, sitemap_filename)
+                        
+    #                     url_entries = []
+    #                     for info in file_records:
+    #                         lastmod_date = info.bib_data_updated.date() if info.bib_data_updated else adsputils.get_date().date()
+    #                         url_entry = templates.format_url_entry(info.bibcode, lastmod_date, abs_url_pattern)
+    #                         url_entries.append(url_entry)
+                        
+    #                     # Write the site-specific XML file
+    #                     sitemap_content = templates.render_sitemap_file(''.join(url_entries))
+    #                     with open(site_filename, 'w', encoding='utf-8') as file:
+    #                         file.write(sitemap_content)
+                        
+    #                     self.logger.debug('Successfully wrote %d records to %s for site %s', len(url_entries), site_filename, site)
+    #                     successful_files += 1
+                        
+    #                 except Exception as e:
+    #                     self.logger.error('Failed to process sitemap file %s for site %s: %s', sitemap_filename, site, str(e))
+    #                     continue
+                
+    #             self.logger.info('Sitemap file update completed for site %s: %d files processed successfully', site, successful_files)
+                
+    #     except Exception as e:
+    #         self.logger.error('Error in update_sitemap_files for site %s: %s', site, str(e))
+    #         raise
+    
+    # def _update_sitemap_database_records(self):
+    #     """Update database records after sitemap files have been generated for all sites"""
+    #     try:
+    #         with self.session_scope() as session:
+    #             # Find all records that had update_flag=True and update them
+    #             updated_records = session.query(SitemapInfo).filter(
+    #                 SitemapInfo.update_flag == True
+    #             ).all()
+                
+    #             if not updated_records:
+    #                 return
+                    
+    #             current_time = adsputils.get_date()
+    #             for record in updated_records:
+    #                 record.filename_lastmoddate = current_time
+    #                 record.update_flag = False
+                
+    #             session.commit()
+    #             self.logger.info('Updated %d database records after sitemap generation', len(updated_records))
+                
+    #     except Exception as e:
+    #         self.logger.error('Error updating sitemap database records: %s', str(e))
+    #         raise
+        
+    # def get_sitemap_info(self, bibcode):
+    #     """Get sitemap info for given bibcode.
+
+    #     :param bibcode: bibcode of record to be updated
+    #     """
+    #     with self.session_scope() as session:
+    #         info = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
+    #         if info is None:
+    #             return None
+    #         return info.toJSON()
+        
+    # def delete_contents(self, table):
+    #     """Delete all contents of the table
+
+    #     :param table: string, name of the table
+    #     """
+    #     with self.session_scope() as session:
+    #         session.query(table).delete()
+    #         session.commit()
+    
+    # def backup_sitemap_files(self, directory):
+    #     """Backup the sitemap files to the given directory
+
+    #     :param dir: string, directory to backup the sitemap files
+    #     """
+
+    #     # move dir to /app/tmp 
+    #     date = adsputils.get_date()
+    #     tmpdir = '/app/logs/tmp/sitemap_{}_{}_{}-{}/'.format(date.year, date.month, date.day, date.time())
+    #     os.system('mkdir -p {}'.format(tmpdir))
+    #     os.system('mv {}/* {}/'.format(directory, tmpdir))
+    #     return
+    
+    # def create_robot_txt_file(self, site=None):
+    #     """Create robots.txt files for specified sites
+
+    #     :param site: Site identifier(s) - can be a string ('ads'), list (['ads', 'scix']), or None (defaults to all sites)
+    #     """
+    #     sites_config = self.conf.get('SITES', {})
+    #     if not sites_config:
+    #         self.logger.error('No SITES configuration found')
+    #         return
+            
+    #     # Default to all sites if none specified
+    #     if site is None:
+    #         sites_to_process = list(sites_config.keys())
+    #     elif isinstance(site, str):
+    #         sites_to_process = [site] if site in sites_config else []
+    #         if not sites_to_process:
+    #             self.logger.error('Site %s not found in config. Available: %s', site, list(sites_config.keys()))
+    #             return
+    #     elif isinstance(site, list):
+    #         sites_to_process = [s for s in site if s in sites_config]
+    #         invalid_sites = [s for s in site if s not in sites_config]
+    #         if invalid_sites:
+    #             self.logger.warning('Invalid sites ignored: %s. Available: %s', invalid_sites, list(sites_config.keys()))
+    #     else:
+    #         self.logger.error('Site parameter must be string, list, or None')
+    #         return
+            
+    #     sitemap_dir = self.sitemap_dir
+        
+    #     for site_key in sites_to_process:
+    #         site_config = sites_config[site_key]
+    #         sitemap_url = site_config['sitemap_url']
+    #         robots_content = templates.render_robots_txt(sitemap_url)
+            
+    #         # Create site-specific directory
+    #         site_output_dir = os.path.join(sitemap_dir, site_key)
+    #         os.makedirs(site_output_dir, exist_ok=True)
+    #         robots_filepath = os.path.join(site_output_dir, 'robots.txt')
+            
+    #         with open(robots_filepath, 'w') as file:
+    #             file.write(robots_content)
+                
+    #         self.logger.info('Created robots.txt for site %s at %s', site_config['name'], robots_filepath)
+    #     return
+    
+    # def create_sitemap_index(self, site=None):
+    #     """Create sitemap index files for specified sites
+
+    #     :param site: Site identifier(s) - can be a string ('ads'), list (['ads', 'scix']), or None (defaults to all sites in config)
+    #     """
+    #     sites_config = self.conf.get('SITES', {})
+    #     if not sites_config:
+    #         self.logger.error('No SITES configuration found')
+    #         return
+            
+    #     # Default to all sites if none specified
+    #     if site is None:
+    #         sites_to_process = list(sites_config.keys())
+    #     elif isinstance(site, str):
+    #         sites_to_process = [site] if site in sites_config else []
+    #         if not sites_to_process:
+    #             self.logger.error('Site %s not found in config. Available: %s', site, list(sites_config.keys()))
+    #             return
+    #     elif isinstance(site, list):
+    #         sites_to_process = [s for s in site if s in sites_config]
+    #         invalid_sites = [s for s in site if s not in sites_config]
+    #         if invalid_sites:
+    #             self.logger.warning('Invalid sites ignored: %s. Available: %s', invalid_sites, list(sites_config.keys()))
+    #     else:
+    #         self.logger.error('Site parameter must be string, list, or None')
+    #         return
+            
+    #     sitemap_dir = self.sitemap_dir
+        
+    #     for site_key in sites_to_process:
+    #         site_config = sites_config[site_key]
+    #         sitemap_url = site_config['sitemap_url']
+            
+    #         sitemap_entries = []
+    #         with self.session_scope() as session:
+    #             # Get unique sitemap filenames 
+    #             sitemapinfo = session.query(SitemapInfo.sitemap_filename,func.count('*').label('count')).group_by(
+    #                                         SitemapInfo.sitemap_filename).order_by(
+    #                                             func.min(SitemapInfo.id).asc()).all()
+
+    #             #unique sitemap filenames  
+    #             sitemap_filenames = list(map(lambda item: item[0], sitemapinfo))
+
+    #             for filename in sitemap_filenames:
+    #                 # Get the last modified date of the sitemap file
+    #                 lastmoddate = session.query(SitemapInfo.filename_lastmoddate).filter_by(sitemap_filename=filename).first()
+                    
+    #                 # Format the sitemap entry
+    #                 try:
+    #                     entry = templates.format_sitemap_entry(sitemap_url, filename, str(lastmoddate[0].date()))
+    #                     sitemap_entries.append(entry)
+    #                 except:
+    #                     self.logger.error('Error processing %s for sitemap_index.xml for site %s', filename, site_key)
+    #                     continue
+            
+    #         sitemap_content = templates.render_sitemap_index(''.join(sitemap_entries))
+            
+    #         # Create site-specific directory and use standard filename
+    #         site_output_dir = os.path.join(sitemap_dir, site_key)
+    #         os.makedirs(site_output_dir, exist_ok=True)
+    #         index_filepath = os.path.join(site_output_dir, 'sitemap_index.xml')
+            
+    #         with open(index_filepath, 'w') as file:
+    #             file.write(sitemap_content)
+                
+    #         self.logger.info('Created sitemap_index.xml for site %s at %s with %d sitemap files', 
+    #                        site_config['name'], index_filepath, len(sitemap_entries))
+    #     return
+    
+    # def generate_all_sitemap_files(self):
+    #     """Generate all sitemap files, indexes, and robots.txt for all sites"""
+    #     self.logger.info('Starting complete sitemap generation for all sites')
+        
+    #     # 1. Update sitemap files for all sites
+    #     self.update_sitemap_files()
+        
+    #     # 2. Create sitemap indexes for all sites  
+    #     self.create_sitemap_index()
+        
+    #     # 3. Create robots.txt files for all sites
+    #     self.create_robot_txt_file()
+        
+    #     self.logger.info('Completed sitemap generation for all sites')

@@ -437,6 +437,19 @@ def reindex_failed_bibcodes(app, update_processed=True):
             bibs = []
         logger.info('Done reindexing %s previously failed bibcodes', count)
 
+def populate_sitemap_table(bibcodes, action):
+    """
+    actions: 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
+            'delete-table': delete all contents of sitemap table
+            'force-update': force update sitemap table entries for given bibcodes  
+    """
+    tasks.task_populate_sitemap_table(bibcodes, action)
+
+# def update_sitemap_files():
+#     """
+#     Update all sitemap files for records with update_flag = True
+#     """
+#     tasks.task_update_sitemap_files()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process user input.')
@@ -572,6 +585,17 @@ if __name__ == '__main__':
                         dest='scix_id_flag',
                         choices=['update', 'update-all', 'force', 'force-all', 'reset', 'reset-all'],
                         help='update records to be assigned a new scix_id, update all records in recordsDB with new scix_id, force reset scix_id and assign new scix_ids, force all records in recordsDB with new scix_id, reset scix_id to None, reset all scix_id in recordsDB to None')
+                        dest='populate_sitemap_table',
+                        help='populate sitemap table for list of bibcodes')
+    parser.add_argument('--action',
+                        default=False,
+                        choices=['add', 'delete-table', 'force-update', 'remove'],
+                        help='action for populate sitemap table function')
+    # parser.add_argument('--update-sitemap-files',
+    #                     action='store_true',
+    #                     default=False,
+    #                     dest='update_sitemap_files',
+    #                     help='update sitemap files for records with update_flag = True in sitemap table')
 
     args = parser.parse_args()
 
@@ -618,7 +642,7 @@ if __name__ == '__main__':
     elif args.delete:
         if args.filename:
             print('deleting bibcodes from file via queue')
-            bibs = []
+            bibcodes = []
             with open(args.filename, 'r') as f:
                 for line in f:
                     bibcode = line.strip()
@@ -642,14 +666,24 @@ if __name__ == '__main__':
         rebuild_collection(args.solr_collection, args.batch_size)
     elif args.index_failed:
         reindex_failed_bibcodes(app, args.update_processed)
-    elif args.update_scixid:
+    elif args.populate_sitemap_table:
+
+        # Validate required action parameter
+        if not args.action:
+            print("Error: --action is required when using --populate-sitemap-table")
+            print("Available actions: add, remove, force-update, delete-table")
+            sys.exit(1)
+        
+        action = args.action
+        
+        # Get bibcodes from file or command line
+        bibcodes = []
         if args.filename:
-            bibs = []
             with open(args.filename) as f:
                 for line in f:
                     bibcode = line.strip()
                     if bibcode:
-                        bibs.append(bibcode)
+                        bibcodes.append(bibcode)
         elif args.bibcodes:
             bibs = args.bibcodes
         if args.scix_id_flag:
@@ -661,6 +695,19 @@ if __name__ == '__main__':
             process_all_scixid(batch_size, flag)
         else:
             tasks.task_update_scixid(bibs, flag = flag)
+            bibcodes = args.bibcodes
+        
+        # Validate that actions requiring bibcodes have them
+        if action in ['add', 'remove', 'force-update']:
+            if not bibcodes:
+                print(f"Error: --action {action} requires bibcodes")
+                print("Provide bibcodes using --bibcodes or --filename")
+                sys.exit(1)
+        
+        #TODO: Make it async?
+        populate_sitemap_table(bibcodes, action)
+    # elif args.update_sitemap_files:
+    #     update_sitemap_files()
     elif args.reindex:
         update_solr = 's' in args.reindex.lower()
         update_metrics = 'm' in args.reindex.lower()
@@ -670,15 +717,15 @@ if __name__ == '__main__':
 
         if args.filename:
             print('sending bibcodes from file to the queue for reindexing')
-            bibs = []
+            bibcodes = []
             with open(args.filename) as f:
                 for line in f:
                     bibcode = line.strip()
                     if bibcode:
-                        bibs.append(bibcode)
-                    if len(bibs) >= 100:
+                        bibcodes.append(bibcode)
+                    if len(bibcodes) >= 100:
                         tasks.task_index_records.apply_async(
-                            args=(bibs,),
+                            args=(bibcodes,),
                             kwargs={
                                 'force': True,
                                 'update_solr': update_solr,
@@ -691,10 +738,10 @@ if __name__ == '__main__':
                             },
                             priority=args.priority
                         )
-                        bibs = []
-                if len(bibs) > 0:
+                        bibcodes = []
+                if len(bibcodes) > 0:
                     tasks.task_index_records.apply_async(
-                        args=(bibs,),
+                        args=(bibcodes,),
                         kwargs={
                             'force': True,
                             'update_solr': update_solr,
@@ -707,7 +754,7 @@ if __name__ == '__main__':
                         },
                         priority=args.priority
                     )
-                    bibs = []
+                    bibcodes = []
         else:
             print('sending bibcode since date to the queue for reindexing')
             reindex(since=args.since, batch_size=args.batch_size, force_indexing=args.force_indexing,

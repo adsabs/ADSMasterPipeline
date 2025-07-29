@@ -32,6 +32,25 @@ SOLR_URL_OLD = "http://localhost:9984/solr/collection1/query"
 LINKS_RESOLVER_UPDATE_URL = "http://localhost:8080/update"
 ADS_API_TOKEN = "fixme"
 
+MAX_RECORDS_PER_SITEMAP = 3
+
+SITEMAP_DIR = '/app/logs/sitemap/'
+
+# Site configurations for multi-site sitemap generation
+SITES = {
+    'ads': {
+        'name': 'ADS',
+        'base_url': 'https://ui.adsabs.harvard.edu',
+        'sitemap_url': 'https://ui.adsabs.harvard.edu/sitemap',
+        'abs_url_pattern': 'https://ui.adsabs.harvard.edu/abs/{bibcode}/abstract'
+    },
+    'scix': {
+        'name': 'SciX Explorer', 
+        'base_url': 'https://scixplorer.org',
+        'sitemap_url': 'https://scixplorer.org/sitemap',
+        'abs_url_pattern': 'https://scixplorer.org/abs/{bibcode}/abstract'
+    }
+}
 
 ENABLE_HAS = True
 

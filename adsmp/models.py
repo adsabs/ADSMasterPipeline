@@ -144,6 +144,47 @@ class IdentifierMapping(Base):
     def toJSON(self):
         return {'key': self.key, 'target': self.target}
 
+<<<<<<< HEAD
+=======
+class SitemapInfo(Base):
+    """
+    Maps each bibcode to a sitemap file and tracks the last modification date of the file.
+
+    Attributes:
+        id (int): The unique identifier for the sitemap.
+        record_id (int): The foreign key referencing the associated record.
+        sitemap_filename (str): The filename of the sitemap.
+        filename_lastmoddate (datetime): The last modification date of the filename.
+        update_flag (bool): A flag indicating whether the sitemap needs to be updated.
+    """
+
+    __tablename__ = 'sitemap'
+
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True) #bigint
+    record_id = Column(BigInteger, ForeignKey('records.id'), nullable=False) 
+    bibcode = Column(String(255), nullable=False)
+    scix_id = Column(String(255), nullable=True)
+    bib_data_updated = Column(UTCDateTime, default=None)
+    sitemap_filename = Column(String(255))
+    filename_lastmoddate = Column(UTCDateTime, default=get_date)
+    update_flag = Column(Boolean, default=False)
+
+    def toJSON(self):
+        """
+        Converts the SitemapInfo object to a JSON representation.
+
+        Returns:
+            dict: A dictionary containing the JSON representation of the object.
+        """
+        return {
+            'id': self.id,
+            'record_id': self.record_id,
+            'bibcode': self.bibcode,
+            'sitemap_filename': self.sitemap_filename, 
+            'filename_lastmoddate': self.filename_lastmoddate, 
+            'update_flag': self.update_flag,           
+        }
+>>>>>>> e16cc59 (sitemap updates populate_sitemap_table task)
 
 ## This definition is copied directly from: https://github.com/adsabs/metrics_service/blob/master/service/models.py
 ## We need to have it when we are sending/writing data into the metrics database
