@@ -12,7 +12,7 @@ from sqlalchemy.orm import load_only as _load_only
 from sqlalchemy import Table, bindparam
 import adsputils
 import json
-from adsmp import solr_updater, tasks
+from adsmp import solr_updater
 from adsmp import templates
 from adsputils import serializer
 from sqlalchemy import exc
@@ -99,7 +99,6 @@ class ADSMasterPipelineCelery(ADSCelery):
                 oldval = record.bib_data
                 record.bib_data = payload
                 record.bib_data_updated = now
-                tasks.task_populate_sitemap_table(record, 'add') 
             elif type == 'nonbib_data':
                 oldval = record.nonbib_data
                 record.nonbib_data = payload
