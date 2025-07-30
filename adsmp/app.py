@@ -624,6 +624,8 @@ class ADSMasterPipelineCelery(ADSCelery):
                             title = title[0]
                         entry.title = title
                         entry.abstract = item.get('abstract')
+                        entry.operation_step = operation_step
+                        entry.output_path = filename.split('.')[0]
                     output_taskname=self._config.get('OUTPUT_TASKNAME_CLASSIFIER')
                     output_broker=self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER')
                     if check_boolean is True:
