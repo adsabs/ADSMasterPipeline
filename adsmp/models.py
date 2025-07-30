@@ -166,7 +166,7 @@ class SitemapInfo(Base):
     scix_id = Column(String(255), nullable=True)
     bib_data_updated = Column(UTCDateTime, default=None)
     sitemap_filename = Column(String(255))
-    filename_lastmoddate = Column(UTCDateTime, default=get_date)
+    filename_lastmoddate = Column(UTCDateTime, default=None)
     update_flag = Column(Boolean, default=False)
 
     def toJSON(self):
