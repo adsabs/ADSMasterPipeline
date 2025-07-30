@@ -2,6 +2,7 @@
 from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 import os
+import time
 import adsputils
 from adsmp import app as app_module
 from adsmp import solr_updater
@@ -29,6 +30,8 @@ app.conf.CELERY_QUEUES = (
     Queue('index-data-links-resolver', app.exchange, routing_key='index-data-links-resolver'),
     Queue('generate-sitemap', app.exchange, routing_key='generate-sitemap'),
     Queue('generate-single-sitemap', app.exchange, routing_key='generate-single-sitemap'),
+    Queue('update-sitemap-index', app.exchange, routing_key='update-sitemap-index'),
+    Queue('update-robots-files', app.exchange, routing_key='update-robots-files'),
 )
 
 
@@ -315,6 +318,13 @@ def task_delete_documents(bibcode):
 def task_populate_sitemap_table(bibcodes, action):
     """
     Populate the sitemap table for the given bibcodes
+    
+    Actions:
+    - 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
+    - 'force-update': force update sitemap table entries for given bibcodes
+    - 'remove': remove bibcodes from sitemap table (TODO: not implemented)
+    - 'delete-table': delete all contents of sitemap table and backup files
+    - 'update-robots': force update robots.txt files for all sites
     """
 
     sitemap_dir = app.sitemap_dir
@@ -325,6 +335,18 @@ def task_populate_sitemap_table(bibcodes, action):
 
         # move all sitemap files to a backup directory
         app.backup_sitemap_files(sitemap_dir)
+        return
+    
+    elif action == 'update-robots':
+        # Force update robots.txt files for all sites
+        logger.info('Force updating robots.txt files for all sites')
+        result = task_update_robots_files.apply_async(args=(True,))  # force_update=True
+        success = result.get(timeout=60)  # Wait up to 60 seconds
+        if success:
+            logger.info('robots.txt files updated successfully')
+        else:
+            logger.error('Failed to update robots.txt files')
+            raise Exception('Failed to update robots.txt files')
         return
     
     # TODO: Implement 'remove' action
@@ -368,7 +390,7 @@ def task_populate_sitemap_table(bibcodes, action):
                 if sitemap_info is None:            
                     sitemap_record['update_flag'] = True
                     sitemap_records.append((sitemap_record['record_id'], sitemap_record['bibcode']))
-                    app.populate_sitemap_table(sitemap_record) 
+                    app._populate_sitemap_table(sitemap_record) 
                     
 
                 else:
@@ -388,7 +410,7 @@ def task_populate_sitemap_table(bibcodes, action):
                         if file_modified is None or (file_modified and bib_data_updated and bib_data_updated > file_modified):
                             sitemap_record['update_flag'] = True
                     
-                    app.populate_sitemap_table(sitemap_record, sitemap_info)
+                    app._populate_sitemap_table(sitemap_record, sitemap_info)
                 
                 successful_count += 1
                 logger.debug('Successfully processed sitemap for bibcode: %s', bibcode)
@@ -403,126 +425,322 @@ def task_populate_sitemap_table(bibcodes, action):
                     successful_count, failed_count, len(bibcodes)) 
         logger.info('%s Total sitemap records created: %s', len(sitemap_records), sitemap_records)
 
-# @app.task(queue='generate-single-sitemap')
-# def task_generate_single_sitemap(sitemap_filename, record_ids):
-#     """Worker task: Generate a single sitemap file from the given record IDs"""
+# TODO: Add directory names: about, help, blog  
+# TODO: Need to query github to find when above dirs are updated: https://docs.github.com/en/rest?apiVersion=2022-11-28
+# TODO: Need to generate an API token from ADStailor (maybe)
+@app.task(queue='update-robots-files') 
+def task_update_robots_files(force_update=False):
+    """Task: Create or update robots.txt files for all configured sites (only when necessary)"""
     
-#     try:
-#         with app.session_scope() as session:
-#             # Get all records for this specific file
-#             file_records = (
-#                 session.query(SitemapInfo)
-#                 .filter(SitemapInfo.id.in_(record_ids))
-#                 .all()
-#             )
+    try:
+        # Get sites configuration
+        sites_config = app.conf.get('SITES', {})
+        if not sites_config:
+            logger.error('No SITES configuration found for robots.txt generation')
+            return False
             
-#             if not file_records:
-#                 logger.warning('No records found for sitemap file %s', sitemap_filename)
-#                 return False
-            
-#             logger.debug('Processing sitemap file %s with %d records', sitemap_filename, len(file_records))
-            
-#             url_entries = []
-            
-#             for info in file_records:
-#                 # Update database record
-#                 info.filename_lastmoddate = adsputils.get_date()
-#                 lastmod_date = info.bib_data_updated.date() if info.bib_data_updated else adsputils.get_date().date()
-#                 # Use ADS URL pattern for tasks (could be made configurable)
-#                 url_entry = templates.format_url_entry(info.bibcode, lastmod_date)
-#                 url_entries.append(url_entry)
-#                 info.update_flag = False
-            
-#             # Write the XML file
-#             sitemap_content = templates.render_sitemap_file(''.join(url_entries))
-#             with open(sitemap_filename, 'w', encoding='utf-8') as file:
-#                 file.write(sitemap_content)
-            
-#             session.commit()
-#             logger.debug('Successfully generated %s with %d records', sitemap_filename, len(url_entries))
-#             return True
-            
-#     except Exception as e:
-#         logger.error('Failed to generate sitemap file %s: %s', sitemap_filename, str(e))
-#         return False
+        sitemap_dir = app.sitemap_dir
+        updated_sites = 0
+        
+        for site_key, site_config in sites_config.items():
+            try:
+                # Create site-specific directory if it doesn't exist
+                site_output_dir = os.path.join(sitemap_dir, site_key)
+                if not os.path.exists(site_output_dir):
+                    os.makedirs(site_output_dir)
+                
+                robots_filepath = os.path.join(site_output_dir, 'robots.txt')
+                sitemap_url = site_config.get('sitemap_url', '')
+                
+                # Check if robots.txt needs updating
+                needs_update = force_update or not os.path.exists(robots_filepath)
+                
+                if not needs_update:
+                    # Check if content has changed
+                    try:
+                        with open(robots_filepath, 'r', encoding='utf-8') as f:
+                            existing_content = f.read()
+                        expected_content = templates.render_robots_txt(sitemap_url)
+                        needs_update = existing_content.strip() != expected_content.strip()
+                    except Exception:
+                        needs_update = True  # If we can't read it, recreate it
+                
+                if needs_update:
+                    robots_content = templates.render_robots_txt(sitemap_url)
+                    with open(robots_filepath, 'w', encoding='utf-8') as f:
+                        f.write(robots_content)
+                    
+                    logger.info('Updated robots.txt for site %s at %s', 
+                              site_config.get('name', site_key), robots_filepath)
+                    updated_sites += 1
+                else:
+                    logger.debug('robots.txt for site %s is up to date', site_config.get('name', site_key))
+                    
+            except Exception as e:
+                logger.error('Failed to update robots.txt for site %s: %s', site_key, str(e))
+                continue
+        
+        logger.info('Robots.txt update completed: %d sites updated', updated_sites)
+        return True
+        
+    except Exception as e:
+        logger.error('Failed to update robots.txt files: %s', str(e))
+        return False
 
-# @app.task(queue='update-sitemap-files') 
-# def task_update_sitemap_files():
-#     """Orchestrator task: Spawns parallel tasks for each sitemap file"""
+@app.task(queue='update-sitemap-index')
+def task_update_sitemap_index():
+    """Task: Generate sitemap index files for all configured sites"""
     
-#     try:
-#         logger.info('Starting sitemap file generation')
-        
-#         # Find files that need updating
-#         with app.session_scope() as session:
-#             files_needing_update_subquery = (
-#                 session.query(SitemapInfo.sitemap_filename.distinct())
-#                 .filter(SitemapInfo.update_flag == True)
-#             )
+    try:
+        # Get sites configuration
+        sites_config = app.conf.get('SITES', {})
+        if not sites_config:
+            logger.error('No SITES configuration found for sitemap index generation')
+            return False
             
-#             all_records = (
-#                 session.query(SitemapInfo)
-#                 .filter(SitemapInfo.sitemap_filename.in_(files_needing_update_subquery))
-#                 .all()
-#             )
+        sitemap_dir = app.sitemap_dir
+        updated_sites = 0
+        
+        with app.session_scope() as session:
+            # Get all distinct sitemap filenames from database
+            sitemap_files = (
+                session.query(SitemapInfo.sitemap_filename.distinct())
+                .filter(SitemapInfo.sitemap_filename.isnot(None))
+                .all()
+            )
             
-#             if not all_records:
-#                 logger.info('No sitemap files need updating')
-#                 return
+            if not sitemap_files:
+                logger.warning('No sitemap files found in database for index generation')
+                return True
             
-#             logger.info('Found %d records to process in sitemap files', len(all_records))
+            # Flatten the list of tuples into a list of strings
+            sitemap_filenames = [filename[0] for filename in sitemap_files]
             
-#             # Group records by filename
-#             files_dict = defaultdict(list)
-#             for record in all_records:
-#                 files_dict[record.sitemap_filename].append(record.id)  
+            for site_key, site_config in sites_config.items():
+                try:
+                    # Create site-specific directory if it doesn't exist
+                    site_output_dir = os.path.join(sitemap_dir, site_key)
+                    if not os.path.exists(site_output_dir):
+                        os.makedirs(site_output_dir)
+                    
+                    # Build sitemap entries for this site
+                    base_url = site_config.get('base_url', 'https://ui.adsabs.harvard.edu/')
+                    sitemap_entries = []
+                    
+                    for filename in sitemap_filenames:
+                        # Check if the actual sitemap file exists for this site
+                        sitemap_filepath = os.path.join(site_output_dir, filename)
+                        if os.path.exists(sitemap_filepath):
+                            # Get file modification time
+                            mtime = os.path.getmtime(sitemap_filepath)
+                            lastmod_date = time.strftime('%Y-%m-%d', time.gmtime(mtime))
+                            
+                            # Create sitemap entry
+                            sitemap_url = f"{base_url.rstrip('/')}"
+                            entry = templates.format_sitemap_entry(sitemap_url, filename, lastmod_date)
+                            sitemap_entries.append(entry)
+                    
+                    if sitemap_entries:
+                        # Generate sitemap index content
+                        index_content = templates.render_sitemap_index(''.join(sitemap_entries))
+                        
+                        # Write sitemap index file
+                        # Ex: <sitemap><loc>https://ui.adsabs.harvard.edu/sitemap/sitemap_bib_1.xml</loc><lastmod>2023-01-01</lastmod></sitemap>
+                        index_filepath = os.path.join(site_output_dir, 'sitemap_index.xml')
+                        with open(index_filepath, 'w', encoding='utf-8') as f:
+                            f.write(index_content)
+                        
+                        logger.info('Generated sitemap index for site %s with %d entries at %s', 
+                                  site_config.get('name', site_key), len(sitemap_entries), index_filepath)
+                        updated_sites += 1
+                    else:
+                        logger.warning('No sitemap files found for site %s', site_config.get('name', site_key))
+                        
+                except Exception as e:
+                    logger.error('Failed to generate sitemap index for site %s: %s', site_key, str(e))
+                    continue
         
-#         # Spawn parallel Celery tasks - one per file
-#         logger.info('Spawning %d parallel tasks for sitemap files', len(files_dict))
-#         task_results = []
+        logger.info('Sitemap index generation completed: %d sites updated', updated_sites)
+        return True
         
-#         for sitemap_filename, record_ids in files_dict.items():
-#             # Launch async task for this file
-#             result = task_generate_single_sitemap.apply_async(
-#                 args=(sitemap_filename, record_ids)
-#             )
-#             task_results.append((sitemap_filename, result))
-#             logger.debug('Spawned task for %s with %d records', sitemap_filename, len(record_ids))
+    except Exception as e:
+        logger.error('Failed to generate sitemap index files: %s', str(e))
+        return False
+ 
+@app.task(queue='generate-single-sitemap')
+def task_generate_single_sitemap(sitemap_filename, record_ids):
+    """Worker task: Generate a single sitemap file for all configured sites given record ids"""
+    
+    try:
+        # Get sites configuration
+        sites_config = app.conf.get('SITES', {})
+        if not sites_config:
+            logger.error('No SITES configuration found')
+            return False
+            
+        sitemap_dir = app.sitemap_dir
         
-#         # Wait for all parallel tasks to complete
-#         successful_files = 0
-#         failed_files = 0
-        
-#         for sitemap_filename, result in task_results:
-#             try:
-#                 # Wait for this specific task to complete (with timeout)
-#                 success = result.get(timeout=300)  # 5 minute timeout per file
-#                 if success:
-#                     successful_files += 1
-#                     logger.debug('Successfully completed %s', sitemap_filename)
-#                 else:
-#                     failed_files += 1
-#                     logger.error('Task returned False for %s', sitemap_filename)
-#             except Exception as e:
-#                 failed_files += 1
-#                 logger.error('Task failed for %s: %s', sitemap_filename, str(e))
-        
-#         logger.info('Sitemap generation completed: %d successful, %d failed', 
-#                    successful_files, failed_files)
-        
-#         # Generate index files after all individual files are done
-#         logger.info('Generating sitemap index and robots.txt files')
-#         app.create_robot_txt_file()
-#         app.create_sitemap_index()
-        
-#     except Exception as e:
-#         logger.error('Error in orchestrator task: %s', str(e))
-#         raise
+        with app.session_scope() as session:
+            # Get all records for this specific file
+            file_records = (
+                session.query(SitemapInfo)
+                .filter(SitemapInfo.id.in_(record_ids))
+                .all()
+            )
+            
+            if not file_records:
+                logger.warning('No records found for sitemap file %s', sitemap_filename)
+                return False
+            
+            logger.debug('Processing sitemap file %s with %d records', sitemap_filename, len(file_records))
+            
+            # Generate file for each configured site
+            successful_sites = 0
+            for site_key, site_config in sites_config.items():
+                try:
+                    # Create site-specific directory only if it doesn't exist
+                    # Ex: /app/logs/sitemap/ads/ or /app/logs/sitemap/scix/
+                    site_output_dir = os.path.join(sitemap_dir, site_key) 
+                    if not os.path.exists(site_output_dir):
+                        os.makedirs(site_output_dir)
+                    
+                    # Ex: /app/logs/sitemap/ads/sitemap_bib_1.xml or /app/logs/sitemap/scix/sitemap_bib_1.xml
+                    site_filepath = os.path.join(site_output_dir, sitemap_filename)
+                    
+                    # Ex: https://ui.adsabs.harvard.edu/abs/{bibcode}
+                    # Get site-specific URL pattern
+                    abs_url_pattern = site_config.get('abs_url_pattern', 'https://ui.adsabs.harvard.edu/abs/{bibcode}')
+                    
+                    url_entries = []
+                    for info in file_records:
+                        # Grab the lastmod date from the bib_data_updated field, if present
+                        lastmod_date = info.bib_data_updated.date() if info.bib_data_updated else adsputils.get_date().date()
+                        # Use site-specific URL pattern
+                        # Ex: https://ui.adsabs.harvard.edu/abs/2023ApJ...123..456A/abstract
+                        url_entry = templates.format_url_entry(info.bibcode, lastmod_date, abs_url_pattern)
+                        url_entries.append(url_entry)
+                    
+                    # Write the site-specific XML file
+                    # Ex: <url><loc>https://ui.adsabs.harvard.edu/abs/2023ApJ...123..456A/abstract</loc><lastmod>2023-01-01</lastmod></url>
+                    sitemap_content = templates.render_sitemap_file(''.join(url_entries))
+                    with open(site_filepath, 'w', encoding='utf-8') as file:
+                        file.write(sitemap_content)
+                    
+                    logger.debug('Successfully generated %s for site %s with %d records', 
+                               site_filepath, site_config.get('name', site_key), len(url_entries))
+                    successful_sites += 1
+                    
+                except Exception as e:
+                    logger.error('Failed to generate sitemap file %s for site %s: %s', 
+                               sitemap_filename, site_key, str(e))
+                    continue
+            
+            # Update database records only after all sites are processed successfully
+            if successful_sites > 0:
+                for info in file_records:
+                    # Filename lastmoddate is updated to current date and time
+                    info.filename_lastmoddate = adsputils.get_date()
+                    info.update_flag = False
+                
+                session.commit()
+                logger.debug('Successfully generated %s for %d sites', sitemap_filename, successful_sites)
+                return True
+            else:
+                logger.error('Failed to generate %s for any sites', sitemap_filename)
+                return False
+            
+    except Exception as e:
+        logger.error('Failed to generate sitemap file %s: %s', sitemap_filename, str(e))
+        return False
 
-#         # TODO: add directory names : about, help, blog  
-#         # TODO: need to query github to find when above dirs are updated: https://docs.github.com/en/rest?apiVersion=2022-11-28
-#         # TODO: need to generate an API token from ADStailor (maybe)
-#         # TODO: OTHER -- do this for ADS and SciX 
+@app.task(queue='update-sitemap-files') 
+def task_update_sitemap_files():
+    """Orchestrator task: Updates robots.txt first, then spawns parallel tasks for each sitemap file"""
+    
+    try:
+        logger.info('Starting sitemap workflow')
+        
+        # Step 1: Update robots.txt files (only if necessary)
+        logger.info('Updating robots.txt files...')
+        robots_result = task_update_robots_files.apply_async()
+        robots_success = robots_result.get(timeout=30)  # Wait up to 30 seconds for robots.txt
+        
+        if not robots_success:
+            logger.warning('robots.txt update failed, but continuing with sitemap generation')
+        
+        # Step 2: Generate sitemap files
+        logger.info('Starting sitemap file generation')
+        
+        # Find distinct sitemap files that need updating
+        with app.session_scope() as session:
+            files_needing_update_subquery = (
+                session.query(SitemapInfo.sitemap_filename.distinct())
+                .filter(SitemapInfo.update_flag == True)
+            )
+            # Get all records for all the sitemap files above (even if they do not need updating)
+            all_records = (
+                session.query(SitemapInfo)
+                .filter(SitemapInfo.sitemap_filename.in_(files_needing_update_subquery))
+                .all()
+            )
+            
+            if not all_records:
+                logger.info('No sitemap files need updating')
+                return
+            
+            logger.info('Found %d records to process in sitemap files', len(all_records))
+            
+            # Group records by filename. Ex: {'sitemap_bib_1.xml': [1, 2, 3], 'sitemap_bib_2.xml': [4, 5, 6]}
+            files_dict = defaultdict(list)
+            for record in all_records:
+                files_dict[record.sitemap_filename].append(record.id)  
+        
+        # Spawn parallel Celery tasks - one per file
+        logger.info('Spawning %d parallel tasks for sitemap files', len(files_dict))
+        task_results = []
+        
+        for sitemap_filename, record_ids in files_dict.items():
+            # Launch async task for this file
+            result = task_generate_single_sitemap.apply_async(
+                args=(sitemap_filename, record_ids)
+            )
+            task_results.append((sitemap_filename, result))
+            logger.debug('Spawned task for %s with %d records', sitemap_filename, len(record_ids))
+        
+        # Wait for all parallel tasks to complete
+        successful_files = 0
+        failed_files = 0
+        
+        for sitemap_filename, result in task_results:
+            try:
+                # Wait for this specific task to complete (with timeout)
+                success = result.get(timeout=300)  # 5 minute timeout per file
+                if success:
+                    successful_files += 1
+                    logger.debug('Successfully completed %s', sitemap_filename)
+                else:
+                    failed_files += 1
+                    logger.error('Task returned False for %s', sitemap_filename)
+            except Exception as e:
+                failed_files += 1
+                logger.error('Task failed for %s: %s', sitemap_filename, str(e))
+        
+        logger.info('Sitemap generation completed: %d successful, %d failed', 
+                   successful_files, failed_files)
+        
+        # Generate index files after all individual files are done
+        logger.info('Generating sitemap index files')
+        index_result = task_update_sitemap_index.apply_async()
+        index_success = index_result.get(timeout=60)  # Wait up to 60 seconds for index generation
+        
+        if not index_success:
+            logger.error('Sitemap index generation failed')
+        else:
+            logger.info('Sitemap workflow completed successfully')
+        
+    except Exception as e:
+        logger.error('Error in orchestrator task: %s', str(e))
+        raise
 
 if __name__ == '__main__':
     app.start()

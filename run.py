@@ -16,7 +16,7 @@ except ImportError:
     from urlparse import urlparse
 
 from adsputils import setup_logging, get_date, load_config
-from adsmp.models import KeyValue, Records, SitemapInfo
+from adsmp.models import KeyValue, Records
 from adsmp import tasks, solr_updater, validate
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import InstrumentedAttribute
@@ -401,17 +401,22 @@ def reindex_failed_bibcodes(app, update_processed=True):
 
 def populate_sitemap_table(bibcodes, action):
     """
-    actions: 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
-            'delete-table': delete all contents of sitemap table
-            'force-update': force update sitemap table entries for given bibcodes  
+    Populate the sitemap table for the given bibcodes
+    
+    Actions:
+    - 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
+    - 'force-update': force update sitemap table entries for given bibcodes  
+    - 'remove': remove bibcodes from sitemap table (TODO: not implemented)
+    - 'delete-table': delete all contents of sitemap table and backup files
+    - 'update-robots': force update robots.txt files for all sites
     """
     tasks.task_populate_sitemap_table(bibcodes, action)
 
-# def update_sitemap_files():
-#     """
-#     Update all sitemap files for records with update_flag = True
-#     """
-#     tasks.task_update_sitemap_files()
+def update_sitemap_files():
+    """
+    Update all sitemap files for records with update_flag = True
+    """
+    tasks.task_update_sitemap_files()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process user input.')
@@ -544,13 +549,13 @@ if __name__ == '__main__':
                         help='populate sitemap table for list of bibcodes')
     parser.add_argument('--action',
                         default=False,
-                        choices=['add', 'delete-table', 'force-update', 'remove'],
-                        help='action for populate sitemap table function')
-    # parser.add_argument('--update-sitemap-files',
-    #                     action='store_true',
-    #                     default=False,
-    #                     dest='update_sitemap_files',
-    #                     help='update sitemap files for records with update_flag = True in sitemap table')
+                        choices=['add', 'delete-table', 'force-update', 'remove', 'update-robots'],
+                        help='action: add (add bibcodes), force-update (force update bibcodes), remove (remove bibcodes), delete-table (clear sitemap table), update-robots (force update robots.txt files)')
+    parser.add_argument('--update-sitemap-files',
+                        action='store_true',
+                        default=False,
+                        dest='update_sitemap_files',
+                        help='update sitemap files for records with update_flag = True in sitemap table')
 
     args = parser.parse_args()
 
@@ -626,7 +631,7 @@ if __name__ == '__main__':
         # Validate required action parameter
         if not args.action:
             print("Error: --action is required when using --populate-sitemap-table")
-            print("Available actions: add, remove, force-update, delete-table")
+            print("Available actions: add, remove, force-update, delete-table, update-robots")
             sys.exit(1)
         
         action = args.action
@@ -651,8 +656,8 @@ if __name__ == '__main__':
         
         #TODO: Make it async?
         populate_sitemap_table(bibcodes, action)
-    # elif args.update_sitemap_files:
-    #     update_sitemap_files()
+    elif args.update_sitemap_files:
+        update_sitemap_files()
     elif args.reindex:
         update_solr = 's' in args.reindex.lower()
         update_metrics = 'm' in args.reindex.lower()
