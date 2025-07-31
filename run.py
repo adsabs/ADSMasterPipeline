@@ -658,6 +658,12 @@ if __name__ == '__main__':
                         default=False,
                         help='Allow the classifier to be run in manual mode')
 
+    parser.add_argument('--classifier_batch',
+                        dest='classifier_batch',
+                        action='store',
+                        default=500,
+                        help='Number of records sent to clssifier per batch')
+
     parser.add_argument('--validate_classifier',
                         dest='validate_classifier',
                         action='store_true',
@@ -741,6 +747,10 @@ if __name__ == '__main__':
             operation_step = 'classify'
         else:
             print('Select classsification process')
+        if args.classifier_batch:
+            classifier_batch = int(args.classifier_batch)
+        else:
+            classifier_batch = 500
         if args.validate_classifier:
             data = None
             check_boolean = True
@@ -753,7 +763,7 @@ if __name__ == '__main__':
                 filename = args.filename
                 print('classifying bibcodes from file via queue')
                 logger.info('Classifying records from file via queue')
-                keywords_dictionary = {"filename": filename, "mode": "manual", "data": data, "check_boolean": check_boolean, "operation_step" : operation_step}
+                keywords_dictionary = {"filename": filename, "mode": "manual", "batch_size":classifier_batch, "data": data, "check_boolean": check_boolean, "operation_step" : operation_step}
         else:
             if args.filename:
                 with open(args.filename, 'r') as f:
