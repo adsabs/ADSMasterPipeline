@@ -3,6 +3,8 @@ import json
 import os
 import unittest
 from datetime import datetime, timedelta
+import tempfile
+import time
 
 import mock
 from adsmsg import (
@@ -20,9 +22,6 @@ from mock import Mock, patch
 
 from adsmp import app, tasks
 from adsmp.models import Base, Records, SitemapInfo
-
-        
-
 def unwind_task_index_solr_apply_async(args=None, kwargs=None, priority=None):
     tasks.task_index_solr(args[0], args[1], kwargs)
 
@@ -855,24 +854,46 @@ class TestSitemapWorkflow(TestWorkers):
         first_batch = ['2023ApJ...123..456A', '2023ApJ...123..457B']
         tasks.task_populate_sitemap_table(first_batch, 'add')
         
-        # Add second batch (one new, one existing)
-        second_batch = ['2023ApJ...123..457B', '2023ApJ...123..458C']  # B exists, C is new
+        # Create a record that will have sitemap files already generated
+        existing_with_files = ['2023ApJ...123..459D']
+        tasks.task_populate_sitemap_table(existing_with_files, 'add')
+        
+        # Generate sitemap files for record D to simulate it already having files
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Get record D info and generate its sitemap file
+            with self.app.session_scope() as session:
+                info_d = session.query(SitemapInfo).filter_by(bibcode='2023ApJ...123..459D').first()
+                record_ids = [info_d.id]
+                sitemap_filename = info_d.sitemap_filename
+            
+            # Generate the sitemap file - this will set filename_lastmoddate and update_flag=False
+            tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
+        
+        # Add second batch (one existing without files, one new, one existing with files)
+        second_batch = ['2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']  
+        # B exists but no files, C is new, D exists with files already generated
         tasks.task_populate_sitemap_table(second_batch, 'add')
         
-        # Should have 3 total records (A, B, C)
+        # Should have 4 total records (A, B, C, D)
         with self.app.session_scope() as session:
             sitemap_infos = session.query(SitemapInfo).order_by(SitemapInfo.bibcode).all()
             
             bibcodes = [info.bibcode for info in sitemap_infos]
             
-            self.assertEqual(len(sitemap_infos), 3)
+            self.assertEqual(len(sitemap_infos), 4)
             self.assertIn('2023ApJ...123..456A', bibcodes)
             self.assertIn('2023ApJ...123..457B', bibcodes)
             self.assertIn('2023ApJ...123..458C', bibcodes)
+            self.assertIn('2023ApJ...123..459D', bibcodes)
             
             # Check that all records have the expected sitemap filename
             for sitemap_info in sitemap_infos:
-                self.assertEqual(sitemap_info.sitemap_filename, 'sitemap_bib_1.xml')
+                if sitemap_info.bibcode == '2023ApJ...123..458C':
+                    self.assertEqual(sitemap_info.sitemap_filename, 'sitemap_bib_2.xml')
+                else:
+                    self.assertEqual(sitemap_info.sitemap_filename, 'sitemap_bib_1.xml')
             
             # Check update_flag values for each specific record
             sitemap_info_map = {info.bibcode: info for info in sitemap_infos}
@@ -881,14 +902,30 @@ class TestSitemapWorkflow(TestWorkers):
             self.assertTrue(sitemap_info_map['2023ApJ...123..456A'].update_flag, 
                            "New record A should have update_flag=True")
             
-            # B: Existing record from second batch, but not force-updated -> update_flag should be False
-            # (since filename_lastmoddate exists and bib_data_updated is not newer)
-            self.assertFalse(sitemap_info_map['2023ApJ...123..457B'].update_flag, 
-                            "Existing record B should have update_flag=False when not force-updated")
+            # B: Existing record from second batch, but no files generated yet -> update_flag should be True
+            # (since filename_lastmoddate is None)
+            self.assertTrue(sitemap_info_map['2023ApJ...123..457B'].update_flag, 
+                            "Existing record B should have update_flag=True when no files generated yet")
             
             # C: New record from second batch -> update_flag should be True  
             self.assertTrue(sitemap_info_map['2023ApJ...123..458C'].update_flag, 
                            "New record C should have update_flag=True")
+            
+            # D: Existing record with files already generated, data hasn't changed -> update_flag should be False
+            self.assertFalse(sitemap_info_map['2023ApJ...123..459D'].update_flag, 
+                            "Existing record D should have update_flag=False when files exist and data unchanged")
+            
+            # Verify that D has filename_lastmoddate set (files were generated)
+            self.assertIsNotNone(sitemap_info_map['2023ApJ...123..459D'].filename_lastmoddate,
+                                "Record D should have filename_lastmoddate set after file generation")
+            
+            # Verify that A, B, C still have filename_lastmoddate as None (no files generated for them)
+            self.assertIsNone(sitemap_info_map['2023ApJ...123..456A'].filename_lastmoddate,
+                             "Record A should have filename_lastmoddate=None until files are generated")
+            self.assertIsNone(sitemap_info_map['2023ApJ...123..457B'].filename_lastmoddate,
+                             "Record B should have filename_lastmoddate=None until files are generated")
+            self.assertIsNone(sitemap_info_map['2023ApJ...123..458C'].filename_lastmoddate,
+                             "Record C should have filename_lastmoddate=None until files are generated")
     
     
     def test_force_update_workflow(self):
@@ -1069,7 +1106,9 @@ class TestSitemapWorkflow(TestWorkers):
         # Mock backup_sitemap_files to avoid file system operations
         with patch.object(self.app, 'backup_sitemap_files') as mock_backup:
             tasks.task_populate_sitemap_table([], 'delete-table')
-            mock_backup.assert_called_once()
+            # Assert the backup method was called exactly once
+            self.assertTrue(mock_backup.called)
+            self.assertEqual(mock_backup.call_count, 1)
         
         # Verify all records deleted
         with self.app.session_scope() as session:
@@ -1081,7 +1120,7 @@ class TestSitemapWorkflow(TestWorkers):
         bibcode = '2023ApJ...123..456A'
         
         # Mock a database error in populate_sitemap_table
-        with patch.object(self.app, 'populate_sitemap_table') as mock_populate:
+        with patch.object(self.app, '_populate_sitemap_table') as mock_populate:
             mock_populate.side_effect = Exception("DB Error")
             
             # Should handle the error gracefully and continue with other bibcodes
@@ -1266,65 +1305,527 @@ class TestSitemapWorkflow(TestWorkers):
             # Restore original MAX_RECORDS_PER_SITEMAP
             self.app.conf['MAX_RECORDS_PER_SITEMAP'] = original_max
 
-    # @patch('adsmp.templates.render_sitemap_file')
-    # @patch('adsmp.templates.render_sitemap_index')
-    # @patch('adsmp.templates.render_robots_txt')
-    # def test_sitemap_file_generation_workflow(self, mock_robots, mock_index, mock_file):
-    #     """Test the complete sitemap file generation workflow"""
+    def test_task_update_robots_files_creation(self):
+        """Test task_update_robots_files creates robots.txt files when they don't exist"""
         
-    #     # Set up mock returns
-    #     mock_robots.return_value = 'User-agent: *\nSitemap: test'
-    #     mock_index.return_value = '<?xml version="1.0"?><sitemapindex></sitemapindex>'
-    #     mock_file.return_value = '<?xml version="1.0"?><urlset></urlset>'
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Update app config to use temp directory
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Call the task
+            result = tasks.task_update_robots_files()
+            self.assertTrue(result)
+            
+            # Verify files were created for both sites
+            ads_robots = os.path.join(temp_dir, 'ads', 'robots.txt')
+            scix_robots = os.path.join(temp_dir, 'scix', 'robots.txt')
+            
+            self.assertTrue(os.path.exists(ads_robots))
+            self.assertTrue(os.path.exists(scix_robots))
+            
+            # Verify content is correct for each site
+            with open(ads_robots, 'r') as f:
+                ads_content = f.read()
+            with open(scix_robots, 'r') as f:
+                scix_content = f.read()
+            
+            self.assertIn('https://ui.adsabs.harvard.edu/sitemap_index.xml', ads_content)
+            self.assertIn('https://scixplorer.org/sitemap_index.xml', scix_content)
+
+    def test_task_update_robots_files_smart_updates(self):
+        """Test task_update_robots_files smart update logic - only updates when content changes"""
+
         
-    #     # Add records to sitemap table
-    #     bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-    #     tasks.task_populate_sitemap_table(bibcodes, 'add')
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # First call - should create files
+            result1 = tasks.task_update_robots_files()
+            self.assertTrue(result1)
+            
+            ads_robots = os.path.join(temp_dir, 'ads', 'robots.txt')
+            original_mtime = os.path.getmtime(ads_robots)
+            
+            # Small delay to ensure different mtime if file is rewritten
+            time.sleep(0.1)
+            
+            # Second call - should NOT update (content unchanged)
+            result2 = tasks.task_update_robots_files()
+            self.assertTrue(result2)
+            
+            # File should not have been modified
+            new_mtime = os.path.getmtime(ads_robots)
+            self.assertEqual(original_mtime, new_mtime, "File should not be updated when content is unchanged")
+
+    def test_task_update_robots_files_force_update(self):
+        """Test task_update_robots_files force update functionality"""
         
-    #     # Create temp directory for sitemap generation
-    #     with tempfile.TemporaryDirectory() as temp_dir:
-    #         # Update app config to use temp directory
-    #         self.app.conf['SITEMAP_DIR'] = temp_dir
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
             
-    #         # Run sitemap file generation
-    #         self.app.update_sitemap_files()
+            # Create initial file
+            tasks.task_update_robots_files()
             
-    #         # Verify directory structure created
-    #         ads_dir = os.path.join(temp_dir, 'ads')
-    #         scix_dir = os.path.join(temp_dir, 'scix')
-    #         self.assertTrue(os.path.exists(ads_dir))
-    #         self.assertTrue(os.path.exists(scix_dir))
+            ads_robots = os.path.join(temp_dir, 'ads', 'robots.txt')
+            original_mtime = os.path.getmtime(ads_robots)
             
-    #         # Check robots.txt generation was called
-    #         self.assertGreater(mock_robots.call_count, 0)
+            time.sleep(0.1)
             
-    #         # Verify database records updated after file generation
-    #         with self.app.session_scope() as session:
-    #             sitemap_infos = session.query(SitemapInfo).filter(
-    #                 SitemapInfo.bibcode.in_(bibcodes)
-    #             ).all()
+            # Force update should always update
+            result = tasks.task_update_robots_files(force_update=True)
+            self.assertTrue(result)
+            
+            new_mtime = os.path.getmtime(ads_robots)
+            self.assertGreater(new_mtime, original_mtime, "Force update should always update the file")
+
+    def test_task_generate_single_sitemap_multi_site(self):
+        """Test task_generate_single_sitemap generates files for both ADS and SciX"""
+        
+        # Add test records to sitemap table first
+        bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
+        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Get record IDs from database
+            with self.app.session_scope() as session:
+                sitemap_infos = session.query(SitemapInfo).filter(
+                    SitemapInfo.bibcode.in_(bibcodes)
+                ).all()
+                record_ids = [info.id for info in sitemap_infos]
+                sitemap_filename = sitemap_infos[0].sitemap_filename
+            
+            # Call the task
+            result = tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
+            self.assertTrue(result)
+            
+            # Verify files were created for both sites
+            ads_sitemap = os.path.join(temp_dir, 'ads', sitemap_filename)
+            scix_sitemap = os.path.join(temp_dir, 'scix', sitemap_filename)
+            
+            self.assertTrue(os.path.exists(ads_sitemap))
+            self.assertTrue(os.path.exists(scix_sitemap))
+            
+            # Verify content contains correct URLs for each site
+            with open(ads_sitemap, 'r') as f:
+                ads_content = f.read()
+            with open(scix_sitemap, 'r') as f:
+                scix_content = f.read()
+            
+            self.assertIn('https://ui.adsabs.harvard.edu/abs/', ads_content)
+            self.assertIn('https://scixplorer.org/abs/', scix_content)
+            self.assertIn('2023ApJ...123..456A', ads_content)
+            self.assertIn('2023ApJ...123..456A', scix_content)
+
+            self.assertEqual('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n\n<url><loc>https://ui.adsabs.harvard.edu/abs/2023ApJ...123..456A</loc><lastmod>2025-07-31</lastmod></url>\n<url><loc>https://ui.adsabs.harvard.edu/abs/2023ApJ...123..457B</loc><lastmod>2025-07-30</lastmod></url>\n</urlset>', ads_content)
+            self.assertEqual('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n\n<url><loc>https://scixplorer.org/abs/2023ApJ...123..456A</loc><lastmod>2025-07-31</lastmod></url>\n<url><loc>https://scixplorer.org/abs/2023ApJ...123..457B</loc><lastmod>2025-07-30</lastmod></url>\n</urlset>', scix_content)
+
+    def test_task_generate_single_sitemap_database_updates(self):
+        """Test task_generate_single_sitemap updates database records correctly"""
+        
+        # Add test records
+        bibcodes = ['2023ApJ...123..456A']
+        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Get record info
+            with self.app.session_scope() as session:
+                info = session.query(SitemapInfo).filter_by(bibcode=bibcodes[0]).first()
+                record_ids = [info.id]
+                sitemap_filename = info.sitemap_filename
                 
-    #             for info in sitemap_infos:
-    #                 # update_flag should be reset to False after generation
-    #                 self.assertFalse(info.update_flag)
-    #                 # filename_lastmoddate should be updated
-    #                 self.assertIsNotNone(info.filename_lastmoddate)
-
-    # def test_configuration_validation(self):
-    #     """Test validation of required configuration"""
-    #     # Test missing SITES configuration
-    #     original_sites = self.app.conf.get('SITES', {})
-    #     self.app.conf['SITES'] = {}
-        
-    #     with self.assertLogs('adsmp.app', level='ERROR') as log:
-    #         self.app.update_sitemap_files()
+                # Verify initial state
+                self.assertTrue(info.update_flag) # Should be True
+                self.assertIsNone(info.filename_lastmoddate, "filename_lastmoddate should be None until XML files are generated")
             
-    #     # Should log error about missing configuration
-    #     self.assertTrue(any("No SITES configuration found" in message for message in log.output))
-        
-    #     # Restore original configuration
-    #     self.app.conf['SITES'] = original_sites
+            # Generate sitemap
+            result = tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
+            self.assertTrue(result)
+            
+            # Assert that files were actually created in the corresponding folders
+            ads_sitemap = os.path.join(temp_dir, 'ads', sitemap_filename)
+            scix_sitemap = os.path.join(temp_dir, 'scix', sitemap_filename)
+            self.assertTrue(os.path.exists(ads_sitemap), f"ADS sitemap file should exist: {ads_sitemap}")
+            self.assertTrue(os.path.exists(scix_sitemap), f"SciX sitemap file should exist: {scix_sitemap}")
+            
+            # Verify database was updated
+            with self.app.session_scope() as session:
+                updated_info = session.query(SitemapInfo).filter_by(bibcode=bibcodes[0]).first()
+                self.assertFalse(updated_info.update_flag, "update_flag should be False after generation")
+                self.assertIsNotNone(updated_info.filename_lastmoddate)
 
+    def test_task_update_sitemap_index_generation(self):
+        """Test task_update_sitemap_index generates index files correctly"""
+        import tempfile
+        
+        # Add test records and generate sitemap files
+        bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
+        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Get sitemap info and generate individual files first
+            with self.app.session_scope() as session:
+                sitemap_infos = session.query(SitemapInfo).filter(
+                    SitemapInfo.bibcode.in_(bibcodes)
+                ).all()
+                
+                # Group by filename and generate sitemap files
+                files_dict = {}
+                for info in sitemap_infos:
+                    filename = info.sitemap_filename
+                    if filename not in files_dict:
+                        files_dict[filename] = []
+                    files_dict[filename].append(info.id)
+                
+                # Generate the individual sitemap files
+                for filename, record_ids in files_dict.items():
+                    tasks.task_generate_single_sitemap(filename, record_ids)
+            
+            # Now test index generation
+            result = tasks.task_update_sitemap_index()
+            self.assertTrue(result)
+            
+            # Verify index files were created for both sites
+            ads_index = os.path.join(temp_dir, 'ads', 'sitemap_index.xml')
+            scix_index = os.path.join(temp_dir, 'scix', 'sitemap_index.xml')
+            
+            self.assertTrue(os.path.exists(ads_index))
+            self.assertTrue(os.path.exists(scix_index))
+            
+            # Verify index content
+            with open(ads_index, 'r') as f:
+                ads_index_content = f.read()
+            with open(scix_index, 'r') as f:
+                scix_index_content = f.read()
+            
+            self.assertIn('<sitemapindex', ads_index_content)
+            self.assertIn('<sitemapindex', scix_index_content)
+            self.assertIn('sitemap_bib_', ads_index_content)
+            self.assertIn('sitemap_bib_', scix_index_content)
+
+    def test_task_update_sitemap_files_full_workflow(self):
+        """Test the complete task_update_sitemap_files workflow"""
+        
+        # Configure Celery for synchronous execution
+        original_eager = self.app.conf.get('CELERY_TASK_ALWAYS_EAGER', False)
+        original_propagate = self.app.conf.get('CELERY_TASK_EAGER_PROPAGATES', False)
+        
+        self.app.conf['CELERY_TASK_ALWAYS_EAGER'] = True
+        self.app.conf['CELERY_TASK_EAGER_PROPAGATES'] = True
+        
+        try:
+            # Add test records
+            bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
+            tasks.task_populate_sitemap_table(bibcodes, 'add')
+            
+            with tempfile.TemporaryDirectory() as temp_dir:
+                self.app.conf['SITEMAP_DIR'] = temp_dir
+                
+                with mock.patch.object(tasks.task_update_robots_files, 'apply_async') as mock_robots, \
+                     mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate, \
+                     mock.patch.object(tasks.task_update_sitemap_index, 'apply_async') as mock_index:
+                    
+                    # Configure mocks to return mock results that simulate successful execution
+                    mock_robots_result = mock.Mock()
+                    mock_robots_result.get.return_value = True
+                    mock_robots.return_value = mock_robots_result
+                    
+                    mock_generate_result = mock.Mock()  
+                    mock_generate_result.get.return_value = True
+                    mock_generate.return_value = mock_generate_result
+                    
+                    mock_index_result = mock.Mock()
+                    mock_index_result.get.return_value = True
+                    mock_index.return_value = mock_index_result
+                    
+                    # Set up side effects to actually call the tasks
+                    def robots_side_effect(*args, **kwargs):
+                        # For robots task, no arguments needed
+                        tasks.task_update_robots_files()
+                        return mock_robots_result
+                    
+                    def generate_side_effect(*args, **kwargs):
+                        # Extract args from apply_async call
+                        task_args = kwargs.get('args', args)
+                        if task_args:
+                            tasks.task_generate_single_sitemap(*task_args)
+                        else:
+                            tasks.task_generate_single_sitemap()
+                        return mock_generate_result
+                        
+                    def index_side_effect(*args, **kwargs):
+                        # For index task, no arguments needed
+                        tasks.task_update_sitemap_index()
+                        return mock_index_result
+                    
+                    mock_robots.side_effect = robots_side_effect
+                    mock_generate.side_effect = generate_side_effect
+                    mock_index.side_effect = index_side_effect
+                    
+                    # Run the actual orchestrator workflow
+                    tasks.task_update_sitemap_files()
+                
+                # Verify all expected files were created for both sites
+                for site in ['ads', 'scix']:
+                    site_dir = os.path.join(temp_dir, site)
+                    self.assertTrue(os.path.exists(site_dir))
+                    
+                    # Check robots.txt
+                    robots_file = os.path.join(site_dir, 'robots.txt')
+                    self.assertTrue(os.path.exists(robots_file))
+                    
+                    # Check sitemap index
+                    index_file = os.path.join(site_dir, 'sitemap_index.xml')
+                    self.assertTrue(os.path.exists(index_file))
+                    
+                    # Check at least one sitemap file exists
+                    sitemap_files = [f for f in os.listdir(site_dir) if f.startswith('sitemap_bib_')]
+                    self.assertGreater(len(sitemap_files), 0, f"Should have sitemap files in {site} directory")
+                    
+                # Verify database state was updated correctly
+                with self.app.session_scope() as session:
+                    infos = session.query(SitemapInfo).filter(
+                        SitemapInfo.bibcode.in_(bibcodes)
+                    ).all()
+                    
+                    for info in infos:
+                        # After workflow completion, update_flag should be False
+                        self.assertFalse(info.update_flag, f"Record {info.bibcode} should have update_flag=False after workflow")
+                        # filename_lastmoddate should be set after file generation
+                        self.assertIsNotNone(info.filename_lastmoddate, f"Record {info.bibcode} should have filename_lastmoddate set")
+        
+        finally:
+            # Restore original Celery configuration
+            self.app.conf['CELERY_TASK_ALWAYS_EAGER'] = original_eager
+            self.app.conf['CELERY_TASK_EAGER_PROPAGATES'] = original_propagate
+
+    def test_task_robots_files_error_handling(self):
+        """Test error handling in robots.txt generation"""
+        # Test with invalid configuration
+        original_sites = self.app.conf.get('SITES', {})
+        self.app.conf['SITES'] = {}
+        
+        try:
+            result = tasks.task_update_robots_files()
+            self.assertFalse(result, "Should return False when SITES config is missing")
+        finally:
+            # Restore configuration
+            self.app.conf['SITES'] = original_sites
+
+    def test_task_sitemap_index_empty_database(self):
+        """Test sitemap index generation with empty database"""
+        
+        # Clear any existing sitemap records
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).delete()
+            session.commit()
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Should handle empty database gracefully
+            result = tasks.task_update_sitemap_index()
+            self.assertTrue(result, "Should succeed even with empty database")
+
+    def test_directory_creation_permissions(self):
+        """Test that directories are created correctly and only when needed"""
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Initially, no directories should exist
+            ads_dir = os.path.join(temp_dir, 'ads')
+            scix_dir = os.path.join(temp_dir, 'scix')
+            self.assertFalse(os.path.exists(ads_dir))
+            self.assertFalse(os.path.exists(scix_dir))
+            
+            # Generate robots.txt - should create directories
+            tasks.task_update_robots_files()
+            
+            self.assertTrue(os.path.exists(ads_dir))
+            self.assertTrue(os.path.exists(scix_dir))
+            
+            # Subsequent calls should not fail
+            result = tasks.task_update_robots_files()
+            self.assertTrue(result)
+
+    def test_app_utility_methods(self):
+        """Test the uncommented utility methods in app"""
+        
+        # Test get_sitemap_info
+        bibcodes = ['2023ApJ...123..456A']
+        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        
+        sitemap_info = self.app.get_sitemap_info(bibcodes[0])
+        self.assertIsNotNone(sitemap_info)
+        self.assertEqual(sitemap_info['bibcode'], bibcodes[0])
+        
+        # Test with non-existent bibcode
+        nonexistent_info = self.app.get_sitemap_info('NONEXISTENT')
+        self.assertIsNone(nonexistent_info)
+
+    def test_delete_contents_method(self):
+        """Test the delete_contents utility method"""
+        
+        # Add some test records
+        bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
+        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        
+        # Verify records exist
+        with self.app.session_scope() as session:
+            count_before = session.query(SitemapInfo).count()
+            self.assertGreater(count_before, 0)
+        
+        # Delete all contents
+        self.app.delete_contents(SitemapInfo)
+        
+        # Verify records are deleted
+        with self.app.session_scope() as session:
+            count_after = session.query(SitemapInfo).count()
+            self.assertEqual(count_after, 0)
+
+    def test_backup_sitemap_files_method(self):
+        """Test the backup_sitemap_files utility method"""
+        
+        # Create a temporary sitemap directory with some files
+        with tempfile.TemporaryDirectory() as temp_dir:
+            sitemap_dir = os.path.join(temp_dir, 'sitemap')
+            os.makedirs(sitemap_dir)
+            
+            # Create some test files
+            test_file1 = os.path.join(sitemap_dir, 'test1.xml')
+            test_file2 = os.path.join(sitemap_dir, 'test2.xml')
+            
+            with open(test_file1, 'w') as f:
+                f.write('test content 1')
+            with open(test_file2, 'w') as f:
+                f.write('test content 2')
+            
+            # Verify files exist before backup
+            self.assertTrue(os.path.exists(test_file1))
+            self.assertTrue(os.path.exists(test_file2))
+            
+            # Mock the backup method to use a custom temp directory
+            with patch('os.system') as mock_system:
+                self.app.backup_sitemap_files(sitemap_dir)
+                
+                # Verify os.system was called with mkdir and mv commands
+                self.assertEqual(mock_system.call_count, 2)
+                
+                # Check that mkdir command was called
+                mkdir_call = mock_system.call_args_list[0][0][0]
+                self.assertIn('mkdir -p', mkdir_call)
+                self.assertIn('/app/logs/tmp/sitemap_', mkdir_call)
+                
+                # Check that mv command was called
+                mv_call = mock_system.call_args_list[1][0][0]
+                self.assertIn('mv', mv_call)
+                self.assertIn(sitemap_dir, mv_call)
+
+    def test_template_integration_with_tasks(self):
+        """Test that the template system works correctly with the new tasks"""
+        import tempfile
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Test robots.txt template integration
+            tasks.task_update_robots_files()
+            
+            ads_robots = os.path.join(temp_dir, 'ads', 'robots.txt')
+            with open(ads_robots, 'r') as f:
+                content = f.read()
+            
+            # Verify template was used correctly
+            self.assertIn('User-agent: *', content)
+            self.assertIn('Disallow:', content)
+            self.assertIn('Sitemap:', content)
+            self.assertIn('https://ui.adsabs.harvard.edu/sitemap_index.xml', content)
+
+    def test_error_handling_invalid_record_ids(self):
+        """Test error handling with invalid record IDs in task_generate_single_sitemap"""        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Try to generate sitemap with non-existent record IDs
+            result = tasks.task_generate_single_sitemap('sitemap_bib_999.xml', [99999, 99998])
+            self.assertFalse(result, "Should return False when no records are found")
+
+    def test_update_flag_reset_after_generation(self):
+        """Test that update_flag is properly reset after sitemap generation"""
+        
+        # Add test records
+        bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
+        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Verify initial state - all records should have update_flag=True
+            with self.app.session_scope() as session:
+                infos_before = session.query(SitemapInfo).filter(
+                    SitemapInfo.bibcode.in_(bibcodes)
+                ).all()
+                
+                for info in infos_before:
+                    self.assertTrue(info.update_flag, f"Record {info.bibcode} should initially have update_flag=True")
+            
+            # Run the full workflow with mocked apply_async to avoid broker issues
+            with mock.patch.object(tasks.task_update_robots_files, 'apply_async') as mock_robots, \
+                 mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate, \
+                 mock.patch.object(tasks.task_update_sitemap_index, 'apply_async') as mock_index:
+                
+                # Configure mocks to return mock results that simulate successful execution
+                mock_robots_result = mock.Mock()
+                mock_robots_result.get.return_value = True
+                mock_robots.return_value = mock_robots_result
+                
+                mock_generate_result = mock.Mock()  
+                mock_generate_result.get.return_value = True
+                mock_generate.return_value = mock_generate_result
+                
+                mock_index_result = mock.Mock()
+                mock_index_result.get.return_value = True
+                mock_index.return_value = mock_index_result
+                
+                # Set up side effects to actually call the tasks
+                def robots_side_effect(*args, **kwargs):
+                    tasks.task_update_robots_files()
+                    return mock_robots_result
+                
+                def generate_side_effect(*args, **kwargs):
+                    task_args = kwargs.get('args', args)
+                    if task_args:
+                        tasks.task_generate_single_sitemap(*task_args)
+                    else:
+                        tasks.task_generate_single_sitemap()
+                    return mock_generate_result
+                    
+                def index_side_effect(*args, **kwargs):
+                    tasks.task_update_sitemap_index()
+                    return mock_index_result
+                
+                mock_robots.side_effect = robots_side_effect
+                mock_generate.side_effect = generate_side_effect
+                mock_index.side_effect = index_side_effect
+                
+                tasks.task_update_sitemap_files()
+            
+            # Verify update_flag is reset after generation
+            with self.app.session_scope() as session:
+                infos_after = session.query(SitemapInfo).filter(
+                    SitemapInfo.bibcode.in_(bibcodes)
+                ).all()
+                
+                for info in infos_after:
+                    self.assertFalse(info.update_flag, f"Record {info.bibcode} should have update_flag=False after generation")
+                    self.assertIsNotNone(info.filename_lastmoddate, f"Record {info.bibcode} should have filename_lastmoddate set")
+ 
 
 if __name__ == "__main__":
     unittest.main()

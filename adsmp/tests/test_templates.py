@@ -347,6 +347,134 @@ class TestTemplates(unittest.TestCase):
         # Should not raise exception but won't substitute properly
         self.assertIn('no-placeholder', invalid_entry)
 
+    def test_multi_site_url_patterns(self):
+        """Test URL pattern generation for different sites"""
+        bibcode = '2023ApJ...123..456A'
+        lastmod = '2024-01-15'
+        
+        # Test ADS URL pattern
+        ads_pattern = 'https://ui.adsabs.harvard.edu/abs/{bibcode}'
+        ads_entry = templates.format_url_entry(bibcode, lastmod, ads_pattern)
+        
+        self.assertIn('https://ui.adsabs.harvard.edu/abs/2023ApJ...123..456A', ads_entry)
+        self.assertIn('<lastmod>2024-01-15</lastmod>', ads_entry)
+        
+        # Test SciX URL pattern  
+        scix_pattern = 'https://scixplorer.org/abs/{bibcode}'
+        scix_entry = templates.format_url_entry(bibcode, lastmod, scix_pattern)
+        
+        self.assertIn('https://scixplorer.org/abs/2023ApJ...123..456A', scix_entry)
+        self.assertIn('<lastmod>2024-01-15</lastmod>', scix_entry)
+        
+        # Verify entries are different for different sites
+        self.assertNotEqual(ads_entry, scix_entry)
+
+    def test_robots_txt_multi_site_content(self):
+        """Test robots.txt content for different sites"""
+        
+        # Test ADS robots.txt
+        ads_sitemap_url = 'https://ui.adsabs.harvard.edu/sitemap_index.xml'
+        ads_robots = templates.render_robots_txt(ads_sitemap_url)
+        
+        self.assertIn('User-agent: *', ads_robots)
+        self.assertIn('https://ui.adsabs.harvard.edu/sitemap_index.xml', ads_robots)
+        
+        # Test SciX robots.txt
+        scix_sitemap_url = 'https://scixplorer.org/sitemap_index.xml'
+        scix_robots = templates.render_robots_txt(scix_sitemap_url)
+        
+        self.assertIn('User-agent: *', scix_robots)
+        self.assertIn('https://scixplorer.org/sitemap_index.xml', scix_robots)
+        
+        # Verify content is different for different sites
+        self.assertNotEqual(ads_robots, scix_robots)
+
+    def test_sitemap_index_multi_site_entries(self):
+        """Test sitemap index generation with different base URLs"""
+        
+        # Create sitemap entries for different sites
+        ads_base_url = 'https://ui.adsabs.harvard.edu'
+        scix_base_url = 'https://scixplorer.org'
+        
+        filename = 'sitemap_bib_1.xml'
+        lastmod = '2024-01-15'
+        
+        ads_entry = templates.format_sitemap_entry(ads_base_url, filename, lastmod)
+        scix_entry = templates.format_sitemap_entry(scix_base_url, filename, lastmod)
+        
+        self.assertIn(f'{ads_base_url}/{filename}', ads_entry)
+        self.assertIn(f'{scix_base_url}/{filename}', scix_entry)
+        self.assertIn('<lastmod>2024-01-15</lastmod>', ads_entry)
+        self.assertIn('<lastmod>2024-01-15</lastmod>', scix_entry)
+        
+        # Generate index for each site
+        ads_index = templates.render_sitemap_index(ads_entry)
+        scix_index = templates.render_sitemap_index(scix_entry)
+        
+        self.assertIn('<sitemapindex', ads_index)
+        self.assertIn('<sitemapindex', scix_index)
+        self.assertIn(ads_base_url, ads_index)
+        self.assertIn(scix_base_url, scix_index)
+
+    def test_template_consistency_across_sites(self):
+        """Test that template structure is consistent across different sites"""
+        
+        # Test with multiple entries
+        entries_ads = []
+        entries_scix = []
+        
+        bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C']
+        
+        for bibcode in bibcodes:
+            ads_entry = templates.format_url_entry(
+                bibcode, '2024-01-15', 
+                'https://ui.adsabs.harvard.edu/abs/{bibcode}'
+            )
+            scix_entry = templates.format_url_entry(
+                bibcode, '2024-01-15',
+                'https://scixplorer.org/abs/{bibcode}'
+            )
+            entries_ads.append(ads_entry)
+            entries_scix.append(scix_entry)
+        
+        # Generate sitemap files
+        ads_sitemap = templates.render_sitemap_file(''.join(entries_ads))
+        scix_sitemap = templates.render_sitemap_file(''.join(entries_scix))
+        
+        # Both should have valid XML structure
+        self.assertIn('<?xml version="1.0"', ads_sitemap)
+        self.assertIn('<?xml version="1.0"', scix_sitemap)
+        self.assertIn('<urlset', ads_sitemap)
+        self.assertIn('<urlset', scix_sitemap)
+        
+        # Both should contain all bibcodes
+        for bibcode in bibcodes:
+            self.assertIn(bibcode, ads_sitemap)
+            self.assertIn(bibcode, scix_sitemap)
+        
+        # Should contain correct number of URL entries
+        ads_url_count = ads_sitemap.count('<url>')
+        scix_url_count = scix_sitemap.count('<url>')
+        self.assertEqual(ads_url_count, len(bibcodes))
+        self.assertEqual(scix_url_count, len(bibcodes))
+
+    def test_template_special_characters_handling(self):
+        """Test template handling of bibcodes with special characters"""
+        
+        # Test with bibcode containing special characters
+        special_bibcode = '2023A&A...123..456.'
+        lastmod = '2024-01-15'
+        
+        # Should handle special characters in URL encoding
+        ads_entry = templates.format_url_entry(
+            special_bibcode, lastmod,
+            'https://ui.adsabs.harvard.edu/abs/{bibcode}'
+        )
+        
+        self.assertIn('2023A&A...123..456.', ads_entry)
+        self.assertIn('<url>', ads_entry)
+        self.assertIn('</url>', ads_entry)
+
 
 if __name__ == '__main__':
     unittest.main() 
