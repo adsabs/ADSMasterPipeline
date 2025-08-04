@@ -35,14 +35,15 @@ class TestAdsOrcidCelery(unittest.TestCase):
         unittest.TestCase.setUp(self)
         
         proj_home = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-        self.app = app.ADSMasterPipelineCelery('test', local_config=\
-            {
-            'SQLALCHEMY_URL': 'sqlite:///',
-            'METRICS_SQLALCHEMY_URL': 'postgresql://postgres@127.0.0.1:15678/test',
-            'SQLALCHEMY_ECHO': False,
-            'PROJ_HOME' : proj_home,
-            'TEST_DIR' : os.path.join(proj_home, 'adsmp/tests'),
-            })
+        with mock.patch.dict('os.environ', {'ADS_API_TOKEN': 'fixme'}):
+            self.app = app.ADSMasterPipelineCelery('test', local_config=\
+                {
+                'SQLALCHEMY_URL': 'sqlite:///',
+                'METRICS_SQLALCHEMY_URL': 'postgresql://postgres@127.0.0.1:15678/test',
+                'SQLALCHEMY_ECHO': False,
+                'PROJ_HOME' : proj_home,
+                'TEST_DIR' : os.path.join(proj_home, 'adsmp/tests'),
+                })
         Base.metadata.bind = self.app._session.get_bind()
         Base.metadata.create_all()
         
@@ -78,7 +79,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         self.assertEqual(r['status'], 'solr-failed')
 
     def test_index_solr(self):
-        self.app.update_storage('abc', 'bib_data', {'bibcode': 'abc', 'hey': 1})
+        self.app.update_storage('abc', 'bib_data', {'bibcode': 'abc', 'hey': 1, 'test': 'test'})
         self.app.update_storage('foo', 'bib_data', {'bibcode': 'foo', 'hey': 1})
         
         with mock.patch('adsmp.solr_updater.update_solr', return_value=[200]):
@@ -222,6 +223,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             with self.app.session_scope() as session:
                 r = session.query(models.Records).filter_by(bibcode='abc').first()
                 self.assertTrue(r.id == 1)
+                self.assertTrue(r.scix_id == 'scix:0RW9-X19B-XHYY')
                 j = r.toJSON()
                 self.assertEqual(j[k], {'foo': 'bar', 'hey': 1})
                 t = j[k + '_updated']
@@ -233,6 +235,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             r = session.query(models.Records).filter_by(bibcode='abc').first()
             self.assertTrue(r.id == 1)
+            self.assertTrue(r.scix_id == 'scix:0RW9-X19B-XHYY')
             j = r.toJSON()
             self.assertEqual(j['fulltext'], {'body': 'foo bar'})
             t = j['fulltext_updated']
@@ -240,10 +243,12 @@ class TestAdsOrcidCelery(unittest.TestCase):
         
         r = self.app.get_record('abc')
         self.assertEqual(r['id'], 1)
+        self.assertEqual(r['scix_id'],'scix:0RW9-X19B-XHYY')
         self.assertEqual(r['processed'], None)
         
         r = self.app.get_record(['abc'])
         self.assertEqual(r[0]['id'], 1)
+        self.assertEqual(r[0]['scix_id'],'scix:0RW9-X19B-XHYY')
         self.assertEqual(r[0]['processed'], None)
         
         r = self.app.get_record('abc', load_only=['id'])

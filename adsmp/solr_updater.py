@@ -26,6 +26,14 @@ def extract_data_pipeline(data, solrdoc):
     reader = data.get("readers", [])
     read_count = len(reader)
 
+    reference = data.get("reference", [])
+    reference_count = data.get("reference_count", len(reference))
+
+    credit = data.get("credit", [])
+    credit_count = data.get("credit_count", len(credit))
+    mention = data.get("mention", [])
+    mention_count = data.get("mention_count", len(mention))
+
     grant = []
     grant_facet_hier = []
     for x in data.get("grants", []):
@@ -34,10 +42,10 @@ def extract_data_pipeline(data, solrdoc):
         grant.append(grant_no)
         grant_facet_hier.extend(generate_hier_facet(agency, grant_no))
 
-    gpn = []
-    gpn_id = []
-    gpn_facet_hier_2level = []
-    gpn_facet_hier_3level = []
+    planetary_feature = []
+    planetary_feature_id = []
+    planetary_feature_facet_hier_2level = []
+    planetary_feature_facet_hier_3level = []
 
     featurelist = [
         "albedo feature",
@@ -50,14 +58,14 @@ def extract_data_pipeline(data, solrdoc):
         "satellite feature",
     ]
 
-    for x in data.get("gpn", []):
+    for x in data.get("planetary_feature", []):
         planet, feature, feature_name, id_no = x.split("/", 3)
-        gpn.append("/".join([planet, feature, feature_name]))
-        gpn_id.append(id_no)
-        gpn_facet_hier_3level.extend(generate_hier_facet(planet, feature, feature_name))
+        planetary_feature.append("/".join([planet, feature, feature_name]))
+        planetary_feature_id.append(id_no)
+        planetary_feature_facet_hier_3level.extend(generate_hier_facet(planet, feature, feature_name))
         if feature.lower() in featurelist:
             feature_name = " ".join([feature, feature_name])
-        gpn_facet_hier_2level.extend(generate_hier_facet(planet, feature_name))
+        planetary_feature_facet_hier_2level.extend(generate_hier_facet(planet, feature_name))
 
     uat = []
     uat_id = []
@@ -114,15 +122,16 @@ def extract_data_pipeline(data, solrdoc):
         read_count=read_count,
         cite_read_boost=data.get("boost", 0.0),
         classic_factor=data.get("norm_cites", 0.0),
-        reference=data.get("reference", []),
+        reference=reference,
+        reference_count=reference_count,
         data=data.get("data", []),
         data_facet=[x.split(":")[0] for x in data.get("data", [])],
         esources=data.get("esource", []),
         property=data.get("property", []),
-        gpn=gpn,
-        gpn_id=gpn_id,
-        gpn_facet_hier_2level=gpn_facet_hier_2level,
-        gpn_facet_hier_3level=gpn_facet_hier_3level,
+        planetary_feature=planetary_feature,
+        planetary_feature_id=planetary_feature_id,
+        planetary_feature_facet_hier_2level=planetary_feature_facet_hier_2level,
+        planetary_feature_facet_hier_3level=planetary_feature_facet_hier_3level,
         uat=uat,
         uat_id=uat_id,
         uat_facet_hier=uat_facet_hier,
@@ -136,6 +145,10 @@ def extract_data_pipeline(data, solrdoc):
         ned_object_facet_hier=ned_object_facet_hier,
         citation_count=data.get("citation_count", 0),
         citation_count_norm=data.get("citation_count_norm", 0),
+        credit=credit,
+        credit_count=credit_count,
+        mention=mention,
+        mention_count=mention_count,
     )
     if data.get("links_data", None):
         d["links_data"] = data["links_data"]
@@ -160,6 +173,18 @@ def extract_augments_pipeline(db_augments, solrdoc):
         "aff_facet_hier": db_augments.get("aff_facet_hier", None),
         "aff_id": db_augments.get("aff_id", None),
         "institution": db_augments.get("institution", None),
+    }
+
+def extract_classifications_pipeline(db_classifications, solrdoc):
+    """retrieve expected classifier collections
+
+    classifications is a solr virtual field so it should never be set"""
+    if db_classifications is None or len(db_classifications) == 0:
+        return {"database" : solrdoc.get("database", None)}
+
+    # Append classifier results to classic collections
+    return {
+        "database" : list(set(db_classifications + solrdoc.get("database", [])))
     }
 
 
@@ -311,6 +336,7 @@ DB_COLUMN_DESTINATIONS = [
     ("fulltext", extract_fulltext),
     ("#timestamps", get_timestamps),  # use 'id' to be always called
     ("augments", extract_augments_pipeline),  # over aff field, adds aff_*
+    ("classifications", extract_classifications_pipeline), # overwrites databse field in bib_data 
 ]
 
 
@@ -437,7 +463,7 @@ def transform_json_record(db_record):
         "bibgroup_facet", None
     ):
         out["bibgroup_facet"] = db_record["nonbib_data"]["bibgroup_facet"]
-
+    
     # if only bib data is available, use it to compute property
     if db_record.get("nonbib_data", None) is None and db_record.get("bib_data", None):
         links_data = db_record["bib_data"].get("links_data", None)
@@ -466,6 +492,27 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
+    out["scix_id"] = None
+    if db_record.get("scix_id", None):
+        out["scix_id"] = db_record.get("scix_id")
+
+
+    # Compute doctype scores on the fly
+    out["doctype_boost"] = None
+
+    if config.get("DOCTYPE_RANKING", False):
+        doctype_rank = config.get("DOCTYPE_RANKING") 
+        unique_ranks = sorted(set(doctype_rank.values()))
+
+        # Map ranks to scores evenly spaced between 0 and 1 (invert: lowest rank gets the highest score)
+        rank_to_score = {rank: 1 - ( i / (len(unique_ranks) - 1)) for i, rank in enumerate(unique_ranks)}
+
+        # Assign scores to each rank
+        doctype_scores = {doctype: rank_to_score[rank] for doctype, rank in doctype_rank.items()}
+
+        if "doctype" in out.keys():
+            out["doctype_boost"] = doctype_scores.get(out["doctype"], None)
+
     if config.get("ENABLE_HAS", False):
         # Read-in names of fields to check for solr "has:" field
         hasfields = sorted(config.get("HAS_FIELDS", []))
