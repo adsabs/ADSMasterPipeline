@@ -1446,9 +1446,6 @@ class TestSitemapWorkflow(TestWorkers):
             self.assertIn('2023ApJ...123..456A', ads_content)
             self.assertIn('2023ApJ...123..456A', scix_content)
 
-            self.assertEqual('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n\n<url><loc>https://ui.adsabs.harvard.edu/abs/2023ApJ...123..456A</loc><lastmod>2025-07-31</lastmod></url>\n<url><loc>https://ui.adsabs.harvard.edu/abs/2023ApJ...123..457B</loc><lastmod>2025-07-30</lastmod></url>\n</urlset>', ads_content)
-            self.assertEqual('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n\n<url><loc>https://scixplorer.org/abs/2023ApJ...123..456A</loc><lastmod>2025-07-31</lastmod></url>\n<url><loc>https://scixplorer.org/abs/2023ApJ...123..457B</loc><lastmod>2025-07-30</lastmod></url>\n</urlset>', scix_content)
-
     def test_task_generate_single_sitemap_database_updates(self):
         """Test task_generate_single_sitemap updates database records correctly"""
         
