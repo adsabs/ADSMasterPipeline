@@ -1512,7 +1512,7 @@ class TestSitemapWorkflow(TestWorkers):
                     tasks.task_generate_single_sitemap(filename, record_ids)
             
             # Now test index generation
-            result = tasks.task_update_sitemap_index()
+            result = tasks.update_sitemap_index()
             self.assertTrue(result)
             
             # Verify index files were created for both sites
@@ -1551,17 +1551,12 @@ class TestSitemapWorkflow(TestWorkers):
             with tempfile.TemporaryDirectory() as temp_dir:
                 self.app.conf['SITEMAP_DIR'] = temp_dir
                 
-                with mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate, \
-                     mock.patch.object(tasks.task_update_sitemap_index, 'apply_async') as mock_index:
+                with mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate:
                     
                     # Configure mocks to return mock results that simulate successful execution
                     mock_generate_result = mock.Mock()  
                     mock_generate_result.get.return_value = True
                     mock_generate.return_value = mock_generate_result
-                    
-                    mock_index_result = mock.Mock()
-                    mock_index_result.get.return_value = True
-                    mock_index.return_value = mock_index_result
                     
                     # Set up side effects to actually call the tasks
                     def generate_side_effect(*args, **kwargs):
@@ -1573,13 +1568,7 @@ class TestSitemapWorkflow(TestWorkers):
                             tasks.task_generate_single_sitemap()
                         return mock_generate_result
                         
-                    def index_side_effect(*args, **kwargs):
-                        # For index task, no arguments needed
-                        tasks.task_update_sitemap_index()
-                        return mock_index_result
-                    
                     mock_generate.side_effect = generate_side_effect
-                    mock_index.side_effect = index_side_effect
                     
                     # Run the actual orchestrator workflow
                     tasks.task_update_sitemap_files()
@@ -1643,7 +1632,7 @@ class TestSitemapWorkflow(TestWorkers):
             self.app.conf['SITEMAP_DIR'] = temp_dir
             
             # Should handle empty database gracefully
-            result = tasks.task_update_sitemap_index()
+            result = tasks.update_sitemap_index()
             self.assertTrue(result, "Should succeed even with empty database")
 
     def test_directory_creation_permissions(self):
@@ -1790,17 +1779,12 @@ class TestSitemapWorkflow(TestWorkers):
                     self.assertTrue(info.update_flag, f"Record {info.bibcode} should initially have update_flag=True")
             
             # Run the full workflow with mocked apply_async to avoid broker issues
-            with mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate, \
-                 mock.patch.object(tasks.task_update_sitemap_index, 'apply_async') as mock_index:
+            with mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate:
                 
                 # Configure mocks to return mock results that simulate successful execution
                 mock_generate_result = mock.Mock()  
                 mock_generate_result.get.return_value = True
                 mock_generate.return_value = mock_generate_result
-                
-                mock_index_result = mock.Mock()
-                mock_index_result.get.return_value = True
-                mock_index.return_value = mock_index_result
                 
                 # Set up side effects to actually call the tasks
                 def generate_side_effect(*args, **kwargs):
@@ -1811,12 +1795,7 @@ class TestSitemapWorkflow(TestWorkers):
                         tasks.task_generate_single_sitemap()
                     return mock_generate_result
                     
-                def index_side_effect(*args, **kwargs):
-                    tasks.task_update_sitemap_index()
-                    return mock_index_result
-                
                 mock_generate.side_effect = generate_side_effect
-                mock_index.side_effect = index_side_effect
                 
                 tasks.task_update_sitemap_files()
             
