@@ -37,8 +37,6 @@ app.conf.CELERY_QUEUES = (
     Queue('update-scixid', app.exchange, routing_key='update-scixid'),
     Queue('generate-sitemap', app.exchange, routing_key='generate-sitemap'),
     Queue('generate-single-sitemap', app.exchange, routing_key='generate-single-sitemap'),
-    Queue('update-sitemap-index', app.exchange, routing_key='update-sitemap-index'),
-    Queue('update-robots-files', app.exchange, routing_key='update-robots-files'),
     Queue('update-scixid', app.exchange, routing_key='update-scixid'),
 )
 
@@ -556,9 +554,8 @@ def update_robots_files(force_update=False):
         logger.error('Failed to update robots.txt files: %s', str(e))
         return False
 
-@app.task(queue='update-sitemap-index')
-def task_update_sitemap_index():
-    """Task: Generate sitemap index files for all configured sites"""
+def update_sitemap_index():
+    """Generate sitemap index files for all configured sites"""
     
     try:
         # Get sites configuration
@@ -798,8 +795,7 @@ def task_update_sitemap_files():
         
         # Generate index files after all individual files are done
         logger.info('Generating sitemap index files')
-        index_result = task_update_sitemap_index.apply_async()
-        index_success = index_result.get(timeout=60)  # Wait up to 60 seconds for index generation
+        index_success = update_sitemap_index()  
         
         if not index_success:
             logger.error('Sitemap index generation failed')
