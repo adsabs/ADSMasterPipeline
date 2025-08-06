@@ -1341,7 +1341,7 @@ class TestSitemapWorkflow(TestWorkers):
             self.app.conf['SITEMAP_DIR'] = temp_dir
             
             # Call the task
-            result = tasks.task_update_robots_files()
+            result = tasks.update_robots_files()
             self.assertTrue(result)
             
             # Verify files were created for both sites
@@ -1368,7 +1368,7 @@ class TestSitemapWorkflow(TestWorkers):
             self.app.conf['SITEMAP_DIR'] = temp_dir
             
             # First call - should create files
-            result1 = tasks.task_update_robots_files()
+            result1 = tasks.update_robots_files()
             self.assertTrue(result1)
             
             ads_robots = os.path.join(temp_dir, 'ads', 'robots.txt')
@@ -1378,7 +1378,7 @@ class TestSitemapWorkflow(TestWorkers):
             time.sleep(0.1)
             
             # Second call - should NOT update (content unchanged)
-            result2 = tasks.task_update_robots_files()
+            result2 = tasks.update_robots_files()
             self.assertTrue(result2)
             
             # File should not have been modified
@@ -1392,7 +1392,7 @@ class TestSitemapWorkflow(TestWorkers):
             self.app.conf['SITEMAP_DIR'] = temp_dir
             
             # Create initial file
-            tasks.task_update_robots_files()
+            tasks.update_robots_files()
             
             ads_robots = os.path.join(temp_dir, 'ads', 'robots.txt')
             original_mtime = os.path.getmtime(ads_robots)
@@ -1400,7 +1400,7 @@ class TestSitemapWorkflow(TestWorkers):
             time.sleep(0.1)
             
             # Force update should always update
-            result = tasks.task_update_robots_files(force_update=True)
+            result = tasks.update_robots_files(force_update=True)
             self.assertTrue(result)
             
             new_mtime = os.path.getmtime(ads_robots)
@@ -1551,15 +1551,10 @@ class TestSitemapWorkflow(TestWorkers):
             with tempfile.TemporaryDirectory() as temp_dir:
                 self.app.conf['SITEMAP_DIR'] = temp_dir
                 
-                with mock.patch.object(tasks.task_update_robots_files, 'apply_async') as mock_robots, \
-                     mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate, \
+                with mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate, \
                      mock.patch.object(tasks.task_update_sitemap_index, 'apply_async') as mock_index:
                     
                     # Configure mocks to return mock results that simulate successful execution
-                    mock_robots_result = mock.Mock()
-                    mock_robots_result.get.return_value = True
-                    mock_robots.return_value = mock_robots_result
-                    
                     mock_generate_result = mock.Mock()  
                     mock_generate_result.get.return_value = True
                     mock_generate.return_value = mock_generate_result
@@ -1569,11 +1564,6 @@ class TestSitemapWorkflow(TestWorkers):
                     mock_index.return_value = mock_index_result
                     
                     # Set up side effects to actually call the tasks
-                    def robots_side_effect(*args, **kwargs):
-                        # For robots task, no arguments needed
-                        tasks.task_update_robots_files()
-                        return mock_robots_result
-                    
                     def generate_side_effect(*args, **kwargs):
                         # Extract args from apply_async call
                         task_args = kwargs.get('args', args)
@@ -1588,7 +1578,6 @@ class TestSitemapWorkflow(TestWorkers):
                         tasks.task_update_sitemap_index()
                         return mock_index_result
                     
-                    mock_robots.side_effect = robots_side_effect
                     mock_generate.side_effect = generate_side_effect
                     mock_index.side_effect = index_side_effect
                     
@@ -1636,7 +1625,7 @@ class TestSitemapWorkflow(TestWorkers):
         self.app.conf['SITES'] = {}
         
         try:
-            result = tasks.task_update_robots_files()
+            result = tasks.update_robots_files()
             self.assertFalse(result, "Should return False when SITES config is missing")
         finally:
             # Restore configuration
@@ -1670,13 +1659,13 @@ class TestSitemapWorkflow(TestWorkers):
             self.assertFalse(os.path.exists(scix_dir))
             
             # Generate robots.txt - should create directories
-            tasks.task_update_robots_files()
+            tasks.update_robots_files()
             
             self.assertTrue(os.path.exists(ads_dir))
             self.assertTrue(os.path.exists(scix_dir))
             
             # Subsequent calls should not fail
-            result = tasks.task_update_robots_files()
+            result = tasks.update_robots_files()
             self.assertTrue(result)
 
     def test_app_utility_methods(self):
@@ -1760,7 +1749,7 @@ class TestSitemapWorkflow(TestWorkers):
             self.app.conf['SITEMAP_DIR'] = temp_dir
             
             # Test robots.txt template integration
-            tasks.task_update_robots_files()
+            tasks.update_robots_files()
             
             ads_robots = os.path.join(temp_dir, 'ads', 'robots.txt')
             with open(ads_robots, 'r') as f:
@@ -1801,15 +1790,10 @@ class TestSitemapWorkflow(TestWorkers):
                     self.assertTrue(info.update_flag, f"Record {info.bibcode} should initially have update_flag=True")
             
             # Run the full workflow with mocked apply_async to avoid broker issues
-            with mock.patch.object(tasks.task_update_robots_files, 'apply_async') as mock_robots, \
-                 mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate, \
+            with mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate, \
                  mock.patch.object(tasks.task_update_sitemap_index, 'apply_async') as mock_index:
                 
                 # Configure mocks to return mock results that simulate successful execution
-                mock_robots_result = mock.Mock()
-                mock_robots_result.get.return_value = True
-                mock_robots.return_value = mock_robots_result
-                
                 mock_generate_result = mock.Mock()  
                 mock_generate_result.get.return_value = True
                 mock_generate.return_value = mock_generate_result
@@ -1819,10 +1803,6 @@ class TestSitemapWorkflow(TestWorkers):
                 mock_index.return_value = mock_index_result
                 
                 # Set up side effects to actually call the tasks
-                def robots_side_effect(*args, **kwargs):
-                    tasks.task_update_robots_files()
-                    return mock_robots_result
-                
                 def generate_side_effect(*args, **kwargs):
                     task_args = kwargs.get('args', args)
                     if task_args:
@@ -1835,7 +1815,6 @@ class TestSitemapWorkflow(TestWorkers):
                     tasks.task_update_sitemap_index()
                     return mock_index_result
                 
-                mock_robots.side_effect = robots_side_effect
                 mock_generate.side_effect = generate_side_effect
                 mock_index.side_effect = index_side_effect
                 
