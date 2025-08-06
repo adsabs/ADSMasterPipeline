@@ -8,7 +8,7 @@ import testing.postgresql
 
 from adsmp import app
 from adsmp.models import Base, Records
-from run import reindex_failed_bibcodes, populate_sitemap_table, update_sitemap_files
+from run import reindex_failed_bibcodes, manage_sitemap, update_sitemap_files
 
 
 class TestFixDbDuplicates(unittest.TestCase):
@@ -132,8 +132,8 @@ class TestSitemapCommandLine(unittest.TestCase):
         
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
         
-        with patch('adsmp.tasks.task_populate_sitemap_table') as mock_task:
-            populate_sitemap_table(bibcodes, 'add')
+        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
+            manage_sitemap(bibcodes, 'add')
             
             # Verify the task was called with correct parameters
             mock_task.assert_called_once_with(bibcodes, 'add')
@@ -143,8 +143,8 @@ class TestSitemapCommandLine(unittest.TestCase):
         
         bibcodes = ['2023ApJ...123..456A']
         
-        with patch('adsmp.tasks.task_populate_sitemap_table') as mock_task:
-            populate_sitemap_table(bibcodes, 'force-update')
+        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
+            manage_sitemap(bibcodes, 'force-update')
             
             mock_task.assert_called_once_with(bibcodes, 'force-update')
 
@@ -152,8 +152,8 @@ class TestSitemapCommandLine(unittest.TestCase):
         """Test populate_sitemap_table function with 'delete-table' action"""
         
         # delete-table doesn't require bibcodes
-        with patch('adsmp.tasks.task_populate_sitemap_table') as mock_task:
-            populate_sitemap_table([], 'delete-table')
+        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
+            manage_sitemap([], 'delete-table')
             
             mock_task.assert_called_once_with([], 'delete-table')
 
@@ -161,8 +161,8 @@ class TestSitemapCommandLine(unittest.TestCase):
         """Test populate_sitemap_table function with 'update-robots' action"""
         
         # update-robots doesn't require bibcodes
-        with patch('adsmp.tasks.task_populate_sitemap_table') as mock_task:
-            populate_sitemap_table([], 'update-robots')
+        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
+            manage_sitemap([], 'update-robots')
             
             mock_task.assert_called_once_with([], 'update-robots')
 
@@ -171,8 +171,8 @@ class TestSitemapCommandLine(unittest.TestCase):
         
         bibcodes = ['2023ApJ...123..456A']
         
-        with patch('adsmp.tasks.task_populate_sitemap_table') as mock_task:
-            populate_sitemap_table(bibcodes, 'remove')
+        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
+            manage_sitemap(bibcodes, 'remove')
             
             mock_task.assert_called_once_with(bibcodes, 'remove')
 
@@ -190,11 +190,11 @@ class TestSitemapCommandLine(unittest.TestCase):
         
         bibcodes = ['2023ApJ...123..456A']
         
-        with patch('adsmp.tasks.task_populate_sitemap_table') as mock_task:
+        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
             mock_task.side_effect = Exception("Task execution failed")
             
             with self.assertRaises(Exception) as context:
-                populate_sitemap_table(bibcodes, 'add')
+                manage_sitemap(bibcodes, 'add')
             
             self.assertEqual(str(context.exception), "Task execution failed")
 
@@ -222,8 +222,8 @@ class TestSitemapCommandLine(unittest.TestCase):
         
         for action, bibcodes in actions_and_bibcodes:
             with self.subTest(action=action):
-                with patch('adsmp.tasks.task_populate_sitemap_table') as mock_task:
-                    populate_sitemap_table(bibcodes, action)
+                with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
+                    manage_sitemap(bibcodes, action)
                     mock_task.assert_called_once_with(bibcodes, action)
 
     def test_integration_with_task_calls(self):
@@ -233,11 +233,11 @@ class TestSitemapCommandLine(unittest.TestCase):
         bibcodes = ['2023ApJ...123..456A']
         
         # Test both functions in sequence to simulate real usage
-        with patch('adsmp.tasks.task_populate_sitemap_table') as mock_populate:
+        with patch('adsmp.tasks.task_manage_sitemap') as mock_populate:
             with patch('adsmp.tasks.task_update_sitemap_files') as mock_update:
                 
                 # First populate sitemap table
-                populate_sitemap_table(bibcodes, 'add')
+                manage_sitemap(bibcodes, 'add')
                 
                 # Then update sitemap files
                 update_sitemap_files()
@@ -341,14 +341,14 @@ class TestSitemapCommandLine(unittest.TestCase):
                 
                 with patch('sys.argv', test_args):
                     with patch('sys.exit') as mock_exit:
-                        with patch('adsmp.tasks.task_populate_sitemap_table') as mock_populate:
+                        with patch('adsmp.tasks.task_manage_sitemap') as mock_populate:
                             with patch('adsmp.tasks.task_update_sitemap_files') as mock_update:
                                 
                                 # Simulate successful validation and execution
                                 if '--populate-sitemap-table' in test_args:
                                     # Has action parameter
                                     if expected_action and expected_bibcodes is not None:
-                                        populate_sitemap_table(expected_bibcodes, expected_action)
+                                        manage_sitemap(expected_bibcodes, expected_action)
                                         mock_populate.assert_called_once_with(expected_bibcodes, expected_action)
                                 elif '--update-sitemap-files' in test_args:
                                     update_sitemap_files()

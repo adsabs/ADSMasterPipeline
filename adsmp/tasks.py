@@ -30,8 +30,9 @@ app.conf.CELERY_QUEUES = (
     Queue('index-solr', app.exchange, routing_key='index-solr'),
     Queue('index-metrics', app.exchange, routing_key='index-metrics'),
     Queue('index-data-links-resolver', app.exchange, routing_key='index-data-links-resolver'),
-    Queue('generate-sitemap', app.exchange, routing_key='generate-sitemap'),
+    Queue('manage-sitemap', app.exchange, routing_key='manage-sitemap'),
     Queue('generate-single-sitemap', app.exchange, routing_key='generate-single-sitemap'),
+    Queue('update-sitemap-files', app.exchange, routing_key='update-sitemap-files'),
     Queue('update-scixid', app.exchange, routing_key='update-scixid'),
 )
 
@@ -389,10 +390,10 @@ def task_delete_documents(bibcode):
     else:
         logger.debug('Failed to deleted metrics record: %s', bibcode)
 
-@app.task(queue='populate-sitemap-table') 
-def task_populate_sitemap_table(bibcodes, action):
+@app.task(queue='manage-sitemap') 
+def task_manage_sitemap(bibcodes, action):
     """
-    Populate the sitemap table for the given bibcodes
+    Executes the actions below for the given bibcodes
     
     Actions:
     - 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate

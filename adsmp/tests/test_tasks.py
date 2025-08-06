@@ -821,7 +821,7 @@ class TestSitemapWorkflow(TestWorkers):
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
         
         # Test the actual task
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         # Verify sitemap info records were created
         with self.app.session_scope() as session:
@@ -845,7 +845,7 @@ class TestSitemapWorkflow(TestWorkers):
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
         
         # First add records normally
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         # Simulate files being generated (set update_flag to False)
         with self.app.session_scope() as session:
@@ -863,7 +863,7 @@ class TestSitemapWorkflow(TestWorkers):
                 self.assertFalse(sitemap_info.update_flag)
         
         # Now force-update - should set update_flag back to True
-        tasks.task_populate_sitemap_table(bibcodes, 'force-update')
+        tasks.task_manage_sitemap(bibcodes, 'force-update')
         
         # Verify all records now have update_flag = True
         with self.app.session_scope() as session:
@@ -880,11 +880,11 @@ class TestSitemapWorkflow(TestWorkers):
         
         # Add first batch
         first_batch = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-        tasks.task_populate_sitemap_table(first_batch, 'add')
+        tasks.task_manage_sitemap(first_batch, 'add')
         
         # Create a record that will have sitemap files already generated
         existing_with_files = ['2023ApJ...123..459D']
-        tasks.task_populate_sitemap_table(existing_with_files, 'add')
+        tasks.task_manage_sitemap(existing_with_files, 'add')
         
         # Generate sitemap files for record D to simulate it already having files
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -902,7 +902,7 @@ class TestSitemapWorkflow(TestWorkers):
         # Add second batch (one existing without files, one new, one existing with files)
         second_batch = ['2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']  
         # B exists but no files, C is new, D exists with files already generated
-        tasks.task_populate_sitemap_table(second_batch, 'add')
+        tasks.task_manage_sitemap(second_batch, 'add')
         
         # Should have 4 total records (A, B, C, D)
         with self.app.session_scope() as session:
@@ -962,7 +962,7 @@ class TestSitemapWorkflow(TestWorkers):
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
         
         # First, add records normally
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         # Simulate sitemap files being generated (set filename_lastmoddate)
         with self.app.session_scope() as session:
@@ -975,7 +975,7 @@ class TestSitemapWorkflow(TestWorkers):
             session.commit()
         
         # Now force-update
-        tasks.task_populate_sitemap_table(bibcodes, 'force-update')
+        tasks.task_manage_sitemap(bibcodes, 'force-update')
         
         # Verify all records have update_flag = True regardless of timestamps
         with self.app.session_scope() as session:
@@ -993,7 +993,7 @@ class TestSitemapWorkflow(TestWorkers):
         bibcode = '2023ApJ...123..456A'
     
         # First add the record
-        tasks.task_populate_sitemap_table([bibcode], 'add')
+        tasks.task_manage_sitemap([bibcode], 'add')
         
 
         # Case 1: filename_lastmoddate = None, new record with no sitemap file 
@@ -1009,7 +1009,7 @@ class TestSitemapWorkflow(TestWorkers):
             session.commit()
         
         # Case 2: bib_data_updated > filename_lastmoddate, file should be updated
-        tasks.task_populate_sitemap_table([bibcode], 'add')
+        tasks.task_manage_sitemap([bibcode], 'add')
         
         with self.app.session_scope() as session:
             info = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
@@ -1022,7 +1022,7 @@ class TestSitemapWorkflow(TestWorkers):
             session.commit()
         
         # Case 3: bib_data_updated <= filename_lastmoddate, file should not be updated
-        tasks.task_populate_sitemap_table([bibcode], 'add')
+        tasks.task_manage_sitemap([bibcode], 'add')
         
         with self.app.session_scope() as session:
             info = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
@@ -1035,7 +1035,7 @@ class TestSitemapWorkflow(TestWorkers):
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']
         
         # Add 3 records with MAX_RECORDS_PER_SITEMAP = 2
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         with self.app.session_scope() as session:
             sitemap_infos = session.query(SitemapInfo).filter(
@@ -1056,7 +1056,7 @@ class TestSitemapWorkflow(TestWorkers):
         """Test batch processing with mix of new and existing records"""
         
         # Add some records first
-        tasks.task_populate_sitemap_table(['2023ApJ...123..456A'], 'add')
+        tasks.task_manage_sitemap(['2023ApJ...123..456A'], 'add')
         
         # Set existing record as already processed
         with self.app.session_scope() as session:
@@ -1067,7 +1067,7 @@ class TestSitemapWorkflow(TestWorkers):
         
         # Now batch process mix of existing and new
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C']
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         with self.app.session_scope() as session:
             sitemap_infos = session.query(SitemapInfo).filter(
@@ -1091,7 +1091,7 @@ class TestSitemapWorkflow(TestWorkers):
         mixed_bibcodes = valid_bibcodes + invalid_bibcodes
         
         # Should not crash and should process valid ones
-        tasks.task_populate_sitemap_table(mixed_bibcodes, 'add')
+        tasks.task_manage_sitemap(mixed_bibcodes, 'add')
         
         with self.app.session_scope() as session:
             # Only valid bibcode should have sitemap info
@@ -1110,7 +1110,7 @@ class TestSitemapWorkflow(TestWorkers):
         """Test handling of empty bibcode list"""        
         # Should not crash with empty list
         try:
-            tasks.task_populate_sitemap_table([], 'add')
+            tasks.task_manage_sitemap([], 'add')
         except Exception as e:
             self.fail(f"Empty bibcode list should not cause exception: {e}")
         
@@ -1124,7 +1124,7 @@ class TestSitemapWorkflow(TestWorkers):
         
         # First add some records
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         # Verify records exist
         with self.app.session_scope() as session:
@@ -1133,7 +1133,7 @@ class TestSitemapWorkflow(TestWorkers):
         
         # Mock backup_sitemap_files to avoid file system operations
         with patch.object(self.app, 'backup_sitemap_files') as mock_backup:
-            tasks.task_populate_sitemap_table([], 'delete-table')
+            tasks.task_manage_sitemap([], 'delete-table')
             # Assert the backup method was called exactly once
             self.assertTrue(mock_backup.called)
             self.assertEqual(mock_backup.call_count, 1)
@@ -1156,7 +1156,7 @@ class TestSitemapWorkflow(TestWorkers):
             
             # Should not crash the entire batch
             try:
-                tasks.task_populate_sitemap_table(mixed_bibcodes, 'add')
+                tasks.task_manage_sitemap(mixed_bibcodes, 'add')
             except Exception as e:
                 self.fail(f"Batch processing should handle individual failures: {e}")
 
@@ -1177,8 +1177,8 @@ class TestSitemapWorkflow(TestWorkers):
         
         # This is a simplified test - in reality would need more complex setup
         # to truly test concurrent access
-        tasks.task_populate_sitemap_table([bibcode], 'add')
-        tasks.task_populate_sitemap_table([bibcode], 'force-update')
+        tasks.task_manage_sitemap([bibcode], 'add')
+        tasks.task_manage_sitemap([bibcode], 'force-update')
         
         # Should not crash and record should exist
         with self.app.session_scope() as session:
@@ -1207,7 +1207,7 @@ class TestSitemapWorkflow(TestWorkers):
         
         # Process large batch
         start_time = time.time()
-        tasks.task_populate_sitemap_table(large_batch, 'add')
+        tasks.task_manage_sitemap(large_batch, 'add')
         end_time = time.time()
         
         # Should complete in reasonable time (adjust threshold as needed)
@@ -1244,7 +1244,7 @@ class TestSitemapWorkflow(TestWorkers):
                 session.commit()
             
             # Process the large batch - should create multiple sitemap files
-            tasks.task_populate_sitemap_table(large_batch, 'add')
+            tasks.task_manage_sitemap(large_batch, 'add')
             
             # Verify records are distributed correctly across multiple files
             with self.app.session_scope() as session:
@@ -1296,7 +1296,7 @@ class TestSitemapWorkflow(TestWorkers):
                 session.commit()
                 
             # Process additional batch - should add to existing files where possible
-            tasks.task_populate_sitemap_table(additional_batch, 'add')
+            tasks.task_manage_sitemap(additional_batch, 'add')
             
             # Verify the additional records were placed correctly
             with self.app.session_scope() as session:
@@ -1411,7 +1411,7 @@ class TestSitemapWorkflow(TestWorkers):
         
         # Add test records to sitemap table first
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         with tempfile.TemporaryDirectory() as temp_dir:
             self.app.conf['SITEMAP_DIR'] = temp_dir
@@ -1451,7 +1451,7 @@ class TestSitemapWorkflow(TestWorkers):
         
         # Add test records
         bibcodes = ['2023ApJ...123..456A']
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         with tempfile.TemporaryDirectory() as temp_dir:
             self.app.conf['SITEMAP_DIR'] = temp_dir
@@ -1488,7 +1488,7 @@ class TestSitemapWorkflow(TestWorkers):
         
         # Add test records and generate sitemap files
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         with tempfile.TemporaryDirectory() as temp_dir:
             self.app.conf['SITEMAP_DIR'] = temp_dir
@@ -1546,7 +1546,7 @@ class TestSitemapWorkflow(TestWorkers):
         try:
             # Add test records
             bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-            tasks.task_populate_sitemap_table(bibcodes, 'add')
+            tasks.task_manage_sitemap(bibcodes, 'add')
             
             with tempfile.TemporaryDirectory() as temp_dir:
                 self.app.conf['SITEMAP_DIR'] = temp_dir
@@ -1662,7 +1662,7 @@ class TestSitemapWorkflow(TestWorkers):
         
         # Test get_sitemap_info
         bibcodes = ['2023ApJ...123..456A']
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         sitemap_info = self.app.get_sitemap_info(bibcodes[0])
         self.assertIsNotNone(sitemap_info)
@@ -1677,7 +1677,7 @@ class TestSitemapWorkflow(TestWorkers):
         
         # Add some test records
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         # Verify records exist
         with self.app.session_scope() as session:
@@ -1764,7 +1764,7 @@ class TestSitemapWorkflow(TestWorkers):
         
         # Add test records
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-        tasks.task_populate_sitemap_table(bibcodes, 'add')
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
         with tempfile.TemporaryDirectory() as temp_dir:
             self.app.conf['SITEMAP_DIR'] = temp_dir

@@ -437,7 +437,7 @@ def reindex_failed_bibcodes(app, update_processed=True):
             bibs = []
         logger.info('Done reindexing %s previously failed bibcodes', count)
 
-def populate_sitemap_table(bibcodes, action):
+def manage_sitemap(bibcodes, action):
     """
     Populate the sitemap table for the given bibcodes
     
@@ -448,7 +448,7 @@ def populate_sitemap_table(bibcodes, action):
     - 'delete-table': delete all contents of sitemap table and backup files
     - 'update-robots': force update robots.txt files for all sites
     """
-    tasks.task_populate_sitemap_table(bibcodes, action)
+    tasks.task_manage_sitemap(bibcodes, action)
 
 def update_sitemap_files():
     """
@@ -580,10 +580,10 @@ if __name__ == '__main__':
                         default=False,
                         dest='update_processed',
                         help='update processed timestamps and other state info in records table when a record is indexed')
-    parser.add_argument('--populate-sitemap-table',
+    parser.add_argument('--manage-sitemap',
                         action='store_true',
                         default=False,
-                        dest='populate_sitemap_table',
+                        dest='manage_sitemap',
                         help='populate sitemap table for list of bibcodes')
     parser.add_argument('--action',
                         default=False,
@@ -733,7 +733,7 @@ if __name__ == '__main__':
         rebuild_collection(args.solr_collection, args.batch_size)
     elif args.index_failed:
         reindex_failed_bibcodes(app, args.update_processed)
-    elif args.populate_sitemap_table:
+    elif args.manage_sitemap:
 
         # Validate required action parameter
         if not args.action:
@@ -762,7 +762,7 @@ if __name__ == '__main__':
                 sys.exit(1)
         
         #TODO: Make it async?
-        populate_sitemap_table(bibcodes, action)
+        manage_sitemap(bibcodes, action)
     elif args.update_sitemap_files:
         update_sitemap_files()
     elif args.update_scixid:
