@@ -39,6 +39,7 @@ app.conf.CELERY_QUEUES = (
     Queue('generate-single-sitemap', app.exchange, routing_key='generate-single-sitemap'),
     Queue('update-sitemap-index', app.exchange, routing_key='update-sitemap-index'),
     Queue('update-robots-files', app.exchange, routing_key='update-robots-files'),
+    Queue('update-scixid', app.exchange, routing_key='update-scixid'),
 )
 
 
@@ -409,10 +410,8 @@ def task_populate_sitemap_table(bibcodes, action):
         return
     
     elif action == 'update-robots':
-        # Force update robots.txt files for all sites
         logger.info('Force updating robots.txt files for all sites')
-        result = task_update_robots_files.apply_async(args=(True,))  # force_update=True
-        success = result.get(timeout=60)  # Wait up to 60 seconds
+        success = update_robots_files(True)
         if success:
             logger.info('robots.txt files updated successfully')
         else:
@@ -499,9 +498,8 @@ def task_populate_sitemap_table(bibcodes, action):
 # TODO: Add directory names: about, help, blog  
 # TODO: Need to query github to find when above dirs are updated: https://docs.github.com/en/rest?apiVersion=2022-11-28
 # TODO: Need to generate an API token from ADStailor (maybe)
-@app.task(queue='update-robots-files') 
-def task_update_robots_files(force_update=False):
-    """Task: Create or update robots.txt files for all configured sites (only when necessary)"""
+def update_robots_files(force_update=False):
+    """Update robots.txt files"""
     
     try:
         # Get sites configuration
@@ -733,10 +731,9 @@ def task_update_sitemap_files():
         
         # Step 1: Update robots.txt files (only if necessary)
         logger.info('Updating robots.txt files...')
-        robots_result = task_update_robots_files.apply_async()
-        robots_success = robots_result.get(timeout=30)  # Wait up to 30 seconds for robots.txt
+        success = update_robots_files(True)  # Simple direct call
         
-        if not robots_success:
+        if not success:
             logger.warning('robots.txt update failed, but continuing with sitemap generation')
         
         # Step 2: Generate sitemap files
