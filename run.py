@@ -439,7 +439,7 @@ def reindex_failed_bibcodes(app, update_processed=True):
 
 def manage_sitemap(bibcodes, action):
     """
-    Populate the sitemap table for the given bibcodes
+    Submit sitemap management task to Celery worker
     
     Actions:
     - 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
@@ -447,14 +447,30 @@ def manage_sitemap(bibcodes, action):
     - 'remove': remove bibcodes from sitemap table (TODO: not implemented)
     - 'delete-table': delete all contents of sitemap table and backup files
     - 'update-robots': force update robots.txt files for all sites
+    
+    Returns:
+        str: Celery task ID for monitoring task progress
     """
-    tasks.task_manage_sitemap(bibcodes, action)
+    result = tasks.task_manage_sitemap.apply_async(args=(bibcodes, action))
+    print(f"Sitemap management task submitted: {result.id}")
+    print(f"Action: {action}")
+    if action in ['add', 'remove', 'force-update']:
+        print(f"Processing {len(bibcodes)} bibcodes")
+    print("Task is running in the background...")
+    return result.id
 
 def update_sitemap_files():
     """
-    Update all sitemap files for records with update_flag = True
+    Submit sitemap files update task to Celery worker
+    Updates all sitemap files for records with update_flag = True
+    
+    Returns:
+        str: Celery task ID for monitoring task progress
     """
-    tasks.task_update_sitemap_files()
+    result = tasks.task_update_sitemap_files.apply_async()
+    print(f"Sitemap files update task submitted: {result.id}")
+    print("Task is running in the background...")
+    return result.id
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process user input.')
@@ -761,7 +777,6 @@ if __name__ == '__main__':
                 print("Provide bibcodes using --bibcodes or --filename")
                 sys.exit(1)
         
-        #TODO: Make it async?
         manage_sitemap(bibcodes, action)
     elif args.update_sitemap_files:
         update_sitemap_files()

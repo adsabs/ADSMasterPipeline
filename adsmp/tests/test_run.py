@@ -1,6 +1,6 @@
 
 import unittest
-from mock import patch
+from mock import patch, Mock
 import os
 import sys
 import io
@@ -132,65 +132,95 @@ class TestSitemapCommandLine(unittest.TestCase):
         
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
         
-        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
-            manage_sitemap(bibcodes, 'add')
+        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+            mock_result = Mock()
+            mock_result.id = 'test-task-123'
+            mock_task.return_value = mock_result
+            
+            result = manage_sitemap(bibcodes, 'add')
             
             # Verify the task was called with correct parameters
-            mock_task.assert_called_once_with(bibcodes, 'add')
+            mock_task.assert_called_once_with(args=(bibcodes, 'add'))
+            self.assertEqual(result, 'test-task-123')
 
     def test_populate_sitemap_table_force_update_action(self):
         """Test populate_sitemap_table function with 'force-update' action"""
         
         bibcodes = ['2023ApJ...123..456A']
         
-        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
-            manage_sitemap(bibcodes, 'force-update')
+        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+            mock_result = Mock()
+            mock_result.id = 'test-task-456'
+            mock_task.return_value = mock_result
             
-            mock_task.assert_called_once_with(bibcodes, 'force-update')
+            result = manage_sitemap(bibcodes, 'force-update')
+            
+            mock_task.assert_called_once_with(args=(bibcodes, 'force-update'))
+            self.assertEqual(result, 'test-task-456')
 
     def test_populate_sitemap_table_delete_table_action(self):
         """Test populate_sitemap_table function with 'delete-table' action"""
         
         # delete-table doesn't require bibcodes
-        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
-            manage_sitemap([], 'delete-table')
+        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+            mock_result = Mock()
+            mock_result.id = 'test-task-789'
+            mock_task.return_value = mock_result
             
-            mock_task.assert_called_once_with([], 'delete-table')
+            result = manage_sitemap([], 'delete-table')
+            
+            mock_task.assert_called_once_with(args=([], 'delete-table'))
+            self.assertEqual(result, 'test-task-789')
 
     def test_populate_sitemap_table_update_robots_action(self):
         """Test populate_sitemap_table function with 'update-robots' action"""
         
         # update-robots doesn't require bibcodes
-        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
-            manage_sitemap([], 'update-robots')
+        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+            mock_result = Mock()
+            mock_result.id = 'test-task-robots'
+            mock_task.return_value = mock_result
             
-            mock_task.assert_called_once_with([], 'update-robots')
+            result = manage_sitemap([], 'update-robots')
+            
+            mock_task.assert_called_once_with(args=([], 'update-robots'))
+            self.assertEqual(result, 'test-task-robots')
 
     def test_populate_sitemap_table_remove_action(self):
         """Test populate_sitemap_table function with 'remove' action (TODO implementation)"""
         
         bibcodes = ['2023ApJ...123..456A']
         
-        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
-            manage_sitemap(bibcodes, 'remove')
+        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+            mock_result = Mock()
+            mock_result.id = 'test-task-remove'
+            mock_task.return_value = mock_result
             
-            mock_task.assert_called_once_with(bibcodes, 'remove')
+            result = manage_sitemap(bibcodes, 'remove')
+            
+            mock_task.assert_called_once_with(args=(bibcodes, 'remove'))
+            self.assertEqual(result, 'test-task-remove')
 
     def test_update_sitemap_files(self):
         """Test update_sitemap_files function"""
         
-        with patch('adsmp.tasks.task_update_sitemap_files') as mock_task:
-            update_sitemap_files()
+        with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_task:
+            mock_result = Mock()
+            mock_result.id = 'test-update-files-123'
+            mock_task.return_value = mock_result
+            
+            result = update_sitemap_files()
             
             # Verify the task was called with no parameters
             mock_task.assert_called_once_with()
+            self.assertEqual(result, 'test-update-files-123')
 
     def test_populate_sitemap_table_with_exception(self):
         """Test populate_sitemap_table handles exceptions gracefully"""
         
         bibcodes = ['2023ApJ...123..456A']
         
-        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
+        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
             mock_task.side_effect = Exception("Task execution failed")
             
             with self.assertRaises(Exception) as context:
@@ -201,7 +231,7 @@ class TestSitemapCommandLine(unittest.TestCase):
     def test_update_sitemap_files_with_exception(self):
         """Test update_sitemap_files handles exceptions gracefully"""
         
-        with patch('adsmp.tasks.task_update_sitemap_files') as mock_task:
+        with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_task:
             mock_task.side_effect = Exception("Sitemap update failed")
             
             with self.assertRaises(Exception) as context:
@@ -222,9 +252,15 @@ class TestSitemapCommandLine(unittest.TestCase):
         
         for action, bibcodes in actions_and_bibcodes:
             with self.subTest(action=action):
-                with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
-                    manage_sitemap(bibcodes, action)
-                    mock_task.assert_called_once_with(bibcodes, action)
+                with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+                    mock_result = Mock()
+                    mock_result.id = f'test-task-{action}'
+                    mock_task.return_value = mock_result
+                    
+                    result = manage_sitemap(bibcodes, action)
+                    
+                    mock_task.assert_called_once_with(args=(bibcodes, action))
+                    self.assertEqual(result, f'test-task-{action}')
 
     def test_integration_with_task_calls(self):
         """Test integration to ensure tasks are called correctly"""
@@ -233,18 +269,31 @@ class TestSitemapCommandLine(unittest.TestCase):
         bibcodes = ['2023ApJ...123..456A']
         
         # Test both functions in sequence to simulate real usage
-        with patch('adsmp.tasks.task_manage_sitemap') as mock_populate:
-            with patch('adsmp.tasks.task_update_sitemap_files') as mock_update:
+        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_populate:
+            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_update:
+                
+                # Set up mock results
+                mock_populate_result = Mock()
+                mock_populate_result.id = 'test-populate-123'
+                mock_populate.return_value = mock_populate_result
+                
+                mock_update_result = Mock()
+                mock_update_result.id = 'test-update-456'  
+                mock_update.return_value = mock_update_result
                 
                 # First populate sitemap table
-                manage_sitemap(bibcodes, 'add')
+                populate_result = manage_sitemap(bibcodes, 'add')
                 
                 # Then update sitemap files
-                update_sitemap_files()
+                update_result = update_sitemap_files()
                 
                 # Verify both tasks were called correctly
-                mock_populate.assert_called_once_with(bibcodes, 'add')
+                mock_populate.assert_called_once_with(args=(bibcodes, 'add'))
                 mock_update.assert_called_once_with()
+                
+                # Verify return values
+                self.assertEqual(populate_result, 'test-populate-123')
+                self.assertEqual(update_result, 'test-update-456')
 
     # Validation tests
     def test_action_validation_missing_action(self):
@@ -341,18 +390,29 @@ class TestSitemapCommandLine(unittest.TestCase):
                 
                 with patch('sys.argv', test_args):
                     with patch('sys.exit') as mock_exit:
-                        with patch('adsmp.tasks.task_manage_sitemap') as mock_populate:
-                            with patch('adsmp.tasks.task_update_sitemap_files') as mock_update:
+                        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_populate:
+                            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_update:
+                                
+                                # Set up mock results
+                                mock_populate_result = Mock()
+                                mock_populate_result.id = 'test-final-populate'
+                                mock_populate.return_value = mock_populate_result
+                                
+                                mock_update_result = Mock()
+                                mock_update_result.id = 'test-final-update'
+                                mock_update.return_value = mock_update_result
                                 
                                 # Simulate successful validation and execution
                                 if '--populate-sitemap-table' in test_args:
                                     # Has action parameter
                                     if expected_action and expected_bibcodes is not None:
-                                        manage_sitemap(expected_bibcodes, expected_action)
-                                        mock_populate.assert_called_once_with(expected_bibcodes, expected_action)
+                                        result = manage_sitemap(expected_bibcodes, expected_action)
+                                        mock_populate.assert_called_once_with(args=(expected_bibcodes, expected_action))
+                                        self.assertEqual(result, 'test-final-populate')
                                 elif '--update-sitemap-files' in test_args:
-                                    update_sitemap_files()
+                                    result = update_sitemap_files()
                                     mock_update.assert_called_once_with()
+                                    self.assertEqual(result, 'test-final-update')
                                 
                                 # Verify sys.exit was NOT called for valid scenarios
                                 mock_exit.assert_not_called()
