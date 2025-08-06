@@ -423,10 +423,42 @@ def task_manage_sitemap(bibcodes, action):
             raise Exception('Failed to update robots.txt files')
         return
     
-    # TODO: Implement 'remove' action
-    elif action == 'remove': 
-        #TODO: how to handle empty files in case of mass deletion?
-        pass 
+    elif action == 'remove':
+        affected_files = set()
+        files_to_delete = set()  # Track files that become empty
+        removed_count = 0
+        
+        with app.session_scope() as session:
+            for bibcode in bibcodes:
+                sitemap_info = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
+                if sitemap_info:
+                    affected_files.add(sitemap_info.sitemap_filename)
+                    session.delete(sitemap_info)
+                    removed_count += 1
+            
+            # Check which files now have 0 records left
+            for filename in affected_files:
+                remaining_count = session.query(SitemapInfo).filter_by(sitemap_filename=filename).count()
+                if remaining_count == 0:
+                    files_to_delete.add(filename)
+                else:
+                    # Mark remaining records for regeneration
+                    session.query(SitemapInfo).filter_by(sitemap_filename=filename).update({'update_flag': True})
+            
+            # Delete empty sitemap files from disk (all sites)
+            if files_to_delete:
+                sites_config = app.conf.get('SITES', {})
+                sitemap_dir = app.sitemap_dir
+                
+                for filename in files_to_delete:
+                    for site_key in sites_config.keys():
+                        site_filepath = os.path.join(sitemap_dir, site_key, filename)
+                        if os.path.exists(site_filepath):
+                            os.remove(site_filepath)
+                            app.logger.info(f'Deleted empty sitemap file: {site_filepath}')
+            
+            app.logger.info(f'Removed {removed_count} bibcodes, deleted {len(files_to_delete)} empty files')
+            session.commit()
 
     elif action in ['add', 'force-update']:
         if isinstance(bibcodes, basestring):

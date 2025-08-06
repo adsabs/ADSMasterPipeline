@@ -1808,7 +1808,241 @@ class TestSitemapWorkflow(TestWorkers):
                 for info in infos_after:
                     self.assertFalse(info.update_flag, f"Record {info.bibcode} should have update_flag=False after generation")
                     self.assertIsNotNone(info.filename_lastmoddate, f"Record {info.bibcode} should have filename_lastmoddate set")
- 
+
+    def test_task_manage_sitemap_remove_action_partial(self):
+        """Test remove action that leaves some records in files"""
+        
+        # First add some records to different files 
+        bibcodes_file1 = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C']
+        bibcodes_file2 = ['2023ApJ...123..459D']  
+        
+        # Add records (will create sitemap_bib_1.xml and sitemap_bib_2.xml)
+        tasks.task_manage_sitemap(bibcodes_file1, 'add')
+        tasks.task_manage_sitemap(bibcodes_file2, 'add')
+        
+        # Simulate sitemap generation (reset update_flag to False)
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).update({'update_flag': False})
+            session.commit()
+        
+        # Verify they were added
+        with self.app.session_scope() as session:
+            all_records = session.query(SitemapInfo).all()
+            self.assertEqual(len(all_records), 4)
+        
+        # Now remove some records (but not all from any file)
+        bibcodes_to_remove = ['2023ApJ...123..456A', '2023ApJ...123..459D']  # One from each file
+        tasks.task_manage_sitemap(bibcodes_to_remove, 'remove')
+        
+        # Verify removal
+        with self.app.session_scope() as session:
+            remaining_records = session.query(SitemapInfo).all()
+            self.assertEqual(len(remaining_records), 2)  # Should have 2 left
+            
+            # Check remaining bibcodes
+            remaining_bibcodes = [r.bibcode for r in remaining_records]
+            expected_remaining = ['2023ApJ...123..457B', '2023ApJ...123..458C']
+            self.assertEqual(set(remaining_bibcodes), set(expected_remaining))
+            
+            # Verify update_flag is set for remaining records in affected files
+            for record in remaining_records:
+                # Both remaining records are in file 1, which had a removal, so they should be marked for update
+                self.assertTrue(record.update_flag, f"Record {record.bibcode} should be marked for update after file 1 had removals")
+
+    def test_task_manage_sitemap_remove_action_complete_file(self):
+        """Test remove action that empties entire files - should delete physical files"""
+        
+        # Add all 4 bibcodes - they will be distributed as:
+        # sitemap_bib_1.xml: ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C']
+        # sitemap_bib_2.xml: ['2023ApJ...123..459D']
+        all_bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']
+        
+        tasks.task_manage_sitemap(all_bibcodes, 'add')
+        
+        # Simulate sitemap generation (reset update_flag to False)
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).update({'update_flag': False})
+            session.commit()
+        
+        # Create test directories and files
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Update app config to use temp directory
+            original_sitemap_dir = self.app.conf.get('SITEMAP_DIR')
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Create site directories and test files
+            for site_key in ['ads', 'scix']:
+                site_dir = os.path.join(temp_dir, site_key)
+                os.makedirs(site_dir, exist_ok=True)
+                
+                # Create test sitemap files that will be deleted
+                file1_path = os.path.join(site_dir, 'sitemap_bib_1.xml')
+                file2_path = os.path.join(site_dir, 'sitemap_bib_2.xml')
+                
+                with open(file1_path, 'w') as f:
+                    f.write('<urlset>test content file 1</urlset>')
+                with open(file2_path, 'w') as f:
+                    f.write('<urlset>test content file 2</urlset>')
+                
+                # Verify files exist
+                self.assertTrue(os.path.exists(file1_path))
+                self.assertTrue(os.path.exists(file2_path))
+            
+            # Remove ALL records from file 2 (only has 1 record: 2023ApJ...123..459D)
+            tasks.task_manage_sitemap(['2023ApJ...123..459D'], 'remove')
+            
+            # Verify database changes
+            with self.app.session_scope() as session:
+                remaining_records = session.query(SitemapInfo).all()
+                self.assertEqual(len(remaining_records), 3)  # Only file 1 records remain
+                
+                remaining_bibcodes = [r.bibcode for r in remaining_records]
+                expected_remaining = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C']
+                self.assertEqual(set(remaining_bibcodes), set(expected_remaining))
+                
+                # File 1 records should NOT be affected (they weren't in the removed file)
+                for record in remaining_records:
+                    # These records weren't affected, so update_flag should remain False
+                    self.assertFalse(record.update_flag, f"Record {record.bibcode} should not be marked for update")
+                    self.assertEqual(record.sitemap_filename, 'sitemap_bib_1.xml')
+            
+            # Verify file cleanup - sitemap_bib_2.xml should be deleted from both sites
+            for site_key in ['ads', 'scix']:
+                file1_path = os.path.join(temp_dir, site_key, 'sitemap_bib_1.xml')
+                file2_path = os.path.join(temp_dir, site_key, 'sitemap_bib_2.xml')
+                
+                self.assertTrue(os.path.exists(file1_path), f"sitemap_bib_1.xml should still exist in {site_key}")
+                self.assertFalse(os.path.exists(file2_path), f"sitemap_bib_2.xml should be deleted from {site_key}")
+            
+            # Restore original config
+            self.app.conf['SITEMAP_DIR'] = original_sitemap_dir
+
+    def test_task_manage_sitemap_remove_action_mixed_scenario(self):
+        """Test remove action with mixed outcome - some files emptied, others partially emptied"""
+        
+        # Add all 4 bibcodes - they will be distributed as:
+        # sitemap_bib_1.xml: ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C'] 
+        # sitemap_bib_2.xml: ['2023ApJ...123..459D']
+        all_bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']
+        
+        tasks.task_manage_sitemap(all_bibcodes, 'add')
+        
+        # Simulate sitemap generation (reset update_flag to False)
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).update({'update_flag': False})
+            session.commit()
+        
+        # Verify initial state
+        with self.app.session_scope() as session:
+            all_records = session.query(SitemapInfo).all()
+            self.assertEqual(len(all_records), 4)
+        
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Update app config
+            original_sitemap_dir = self.app.conf.get('SITEMAP_DIR')
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Create test files
+            for site_key in ['ads', 'scix']:
+                site_dir = os.path.join(temp_dir, site_key)
+                os.makedirs(site_dir, exist_ok=True)
+                
+                for i in range(1, 3):  # Only files 1 and 2 exist
+                    file_path = os.path.join(site_dir, f'sitemap_bib_{i}.xml')
+                    with open(file_path, 'w') as f:
+                        f.write(f'<urlset>test content file {i}</urlset>')
+            
+            # Remove records: 
+            # - One record from file 1 (partial removal)
+            # - The only record from file 2 (complete removal - file gets deleted)
+            bibcodes_to_remove = ['2023ApJ...123..456A', '2023ApJ...123..459D']
+            tasks.task_manage_sitemap(bibcodes_to_remove, 'remove')
+            
+            # Verify database results
+            with self.app.session_scope() as session:
+                remaining_records = session.query(SitemapInfo).all()
+                self.assertEqual(len(remaining_records), 2)  
+                
+                remaining_bibcodes = [r.bibcode for r in remaining_records]
+                expected_remaining = ['2023ApJ...123..457B', '2023ApJ...123..458C']
+                self.assertEqual(set(remaining_bibcodes), set(expected_remaining))
+                
+                # Check update flags and filenames
+                for record in remaining_records:
+                    # Only the remaining records in file 1 should be marked for update (since file 1 was affected)
+                    self.assertEqual(record.sitemap_filename, 'sitemap_bib_1.xml')
+                    self.assertTrue(record.update_flag, f"Record {record.bibcode} should be marked for update since file 1 had removals")
+            
+            # Verify file cleanup
+            for site_key in ['ads', 'scix']:
+                site_dir = os.path.join(temp_dir, site_key)
+                
+                # File 1 should still exist (has remaining records)
+                file1_path = os.path.join(site_dir, 'sitemap_bib_1.xml')
+                self.assertTrue(os.path.exists(file1_path), f"sitemap_bib_1.xml should still exist in {site_key}")
+                
+                # File 2 should be deleted (no remaining records)
+                file2_path = os.path.join(site_dir, 'sitemap_bib_2.xml')
+                self.assertFalse(os.path.exists(file2_path), f"sitemap_bib_2.xml should be deleted from {site_key}")
+            
+            # Restore config
+            self.app.conf['SITEMAP_DIR'] = original_sitemap_dir
+
+    def test_task_manage_sitemap_remove_action_nonexistent_bibcodes(self):
+        """Test remove action with bibcodes that don't exist - should be graceful"""
+        
+        # Add some records first
+        existing_bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
+        tasks.task_manage_sitemap(existing_bibcodes, 'add')
+        
+        # Simulate sitemap generation (reset update_flag to False)
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).update({'update_flag': False})
+            session.commit()
+        
+        # Verify initial state
+        with self.app.session_scope() as session:
+            initial_count = session.query(SitemapInfo).count()
+            self.assertEqual(initial_count, 2)
+        
+        # Try to remove a mix of existing and non-existent bibcodes
+        bibcodes_to_remove = ['2023ApJ...123..456A', '2023ApJ...999..999X', '2023ApJ...888..888Y']
+        tasks.task_manage_sitemap(bibcodes_to_remove, 'remove')
+        
+        # Verify only the existing bibcode was removed
+        with self.app.session_scope() as session:
+            remaining_records = session.query(SitemapInfo).all()
+            self.assertEqual(len(remaining_records), 1)
+            self.assertEqual(remaining_records[0].bibcode, '2023ApJ...123..457B')
+            
+            # Remaining record should be marked for update (since file 1 had a removal)
+            self.assertTrue(remaining_records[0].update_flag, "Remaining record should be marked for update since its file had a removal")
+
+    def test_task_manage_sitemap_remove_action_empty_bibcodes_list(self):
+        """Test remove action with empty bibcodes list - should do nothing"""
+        
+        # Add some records first
+        existing_bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
+        tasks.task_manage_sitemap(existing_bibcodes, 'add')
+        
+        # Verify initial state
+        with self.app.session_scope() as session:
+            initial_records = session.query(SitemapInfo).all()
+            initial_count = len(initial_records)
+            self.assertEqual(initial_count, 2)
+        
+        # Try to remove with empty list
+        tasks.task_manage_sitemap([], 'remove')
+        
+        # Verify nothing changed
+        with self.app.session_scope() as session:
+            final_records = session.query(SitemapInfo).all()
+            self.assertEqual(len(final_records), initial_count)
+            
+            # Records should maintain their original state
+            for record in final_records:
+                self.assertIn(record.bibcode, existing_bibcodes)
+
 
 if __name__ == "__main__":
     unittest.main()
