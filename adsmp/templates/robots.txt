@@ -1,0 +1,24 @@
+Sitemap: {sitemap_url}/sitemap_index.xml
+User-agent: *
+Disallow: /v1/
+Disallow: /resources
+Disallow: /core
+Disallow: /tugboat
+Disallow: /link_gateway/
+Disallow: /search/
+Disallow: /execute-query/
+Disallow: /status
+
+Allow: /help/
+Allow: /about/
+Allow: /blog/
+Allow: /abs/
+
+Disallow: /abs/*/citations
+Disallow: /abs/*/references
+Disallow: /abs/*/coreads
+Disallow: /abs/*/similar
+Disallow: /abs/*/toc
+Disallow: /abs/*/graphics
+Disallow: /abs/*/metrics
+Disallow: /abs/*/exportcitation
