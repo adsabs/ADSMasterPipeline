@@ -18,7 +18,7 @@ except ImportError:
 
 from adsputils import setup_logging, get_date, load_config
 from adsmp.models import KeyValue, Records
-from adsmp import tasks, solr_updater, validate
+from adsmp import tasks, solr_updater, validate #s3_utils
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
@@ -472,6 +472,20 @@ def update_sitemap_files():
     print("Task is running in the background...")
     return result.id
 
+# def sync_sitemap_to_s3():
+#     """
+#     Manually sync all sitemap files to S3
+#     """
+#     sitemap_dir = app.sitemap_dir
+#     print(f"Syncing sitemap files from {sitemap_dir} to S3...")
+    
+    # success = s3_utils.sync_sitemap_files_to_s3(app.conf, sitemap_dir)
+    # if success:
+    #     print("S3 sync completed successfully")
+    # else:
+    #     print("S3 sync failed - check logs for details")
+    #     sys.exit(1)
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process user input.')
 
@@ -603,8 +617,8 @@ if __name__ == '__main__':
                         help='populate sitemap table for list of bibcodes')
     parser.add_argument('--action',
                         default=False,
-                        choices=['add', 'delete-table', 'force-update', 'remove', 'update-robots'],
-                        help='action: add (add bibcodes), force-update (force update bibcodes), remove (remove bibcodes), delete-table (clear sitemap table), update-robots (force update robots.txt files)')
+                        choices=['add', 'delete-table', 'force-update', 'remove', 'update-robots', 'bootstrap'],
+                        help='action: add (add bibcodes), force-update (force update bibcodes), remove (remove bibcodes), delete-table (clear sitemap table), update-robots (force update robots.txt files), bootstrap (initialize sitemaps for all existing records)')
     parser.add_argument('--update-sitemap-files',
                         action='store_true',
                         default=False,
@@ -685,7 +699,7 @@ if __name__ == '__main__':
         # Validate required action parameter
         if not args.action:
             print("Error: --action is required when using --populate-sitemap-table")
-            print("Available actions: add, remove, force-update, delete-table, update-robots")
+            print("Available actions: add, remove, force-update, delete-table, update-robots, bootstrap")
             sys.exit(1)
         
         action = args.action
@@ -721,6 +735,28 @@ if __name__ == '__main__':
         manage_sitemap(bibcodes, action)
     elif args.update_sitemap_files:
         update_sitemap_files()
+    # elif args.sync_sitemap_s3:
+    #     sync_sitemap_to_s3()
+    elif args.update_scixid:
+        if args.filename:
+            bibs = []
+            with open(args.filename) as f:
+                for line in f:
+                    bibcode = line.strip()
+                    if bibcode:
+                        bibs.append(bibcode)
+        elif args.bibcodes:
+            bibs = args.bibcodes
+        if args.scix_id_flag:
+            flag = args.scix_id_flag
+        else:
+            flag = ''
+
+        if flag == 'update-all' or flag == 'force-all' or flag == 'reset-all':
+            batch_size = args.batch_size
+            process_all_scixid(batch_size, flag)
+        else:
+            tasks.task_update_scixid(bibs, flag = flag)
     elif args.reindex:
         update_solr = 's' in args.reindex.lower()
         update_metrics = 'm' in args.reindex.lower()

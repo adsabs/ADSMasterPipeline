@@ -32,8 +32,9 @@ SOLR_URL_OLD = "http://localhost:9984/solr/collection1/query"
 LINKS_RESOLVER_UPDATE_URL = "http://localhost:8080/update"
 ADS_API_TOKEN = "fixme"
 
-MAX_RECORDS_PER_SITEMAP = 3
-
+# Sitemap configuration
+MAX_RECORDS_PER_SITEMAP = 50000
+SITEMAP_BOOTSTRAP_BATCH_SIZE = 50000  # Increased from 10000 for better performance on large datasets
 SITEMAP_DIR = '/app/logs/sitemap/'
 
 # Site configurations for multi-site sitemap generation
@@ -51,6 +52,13 @@ SITES = {
         'abs_url_pattern': 'https://scixplorer.org/abs/{bibcode}/abstract'
     }
 }
+
+# S3 Configuration for sitemap file sync
+SITEMAP_S3_SYNC_ENABLED = True  # Set to True to enable S3 sync
+SITEMAP_S3_BUCKET = 'sitemaps'  # S3 bucket for sitemap files
+AWS_ACCESS_KEY_ID = 'AWS_ACCESS_KEY_ID'
+AWS_SECRET_ACCESS_KEY = 'AWS_SECRET_ACCESS_KEY'
+AWS_DEFAULT_REGION = 'us-east-1'
 
 ENABLE_HAS = True
 

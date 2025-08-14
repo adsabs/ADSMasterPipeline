@@ -13,9 +13,10 @@ from sqlalchemy.orm import load_only
 
 
 from adsmp import templates
+from adsmp import s3_utils
 from kombu import Queue
 from adsmsg.msg import Msg
-from sqlalchemy import create_engine, MetaData, Table, exc
+from sqlalchemy import create_engine, MetaData, Table, exc, insert
 from sqlalchemy.orm import sessionmaker
 from adsmp.models import SitemapInfo
 from collections import defaultdict
@@ -417,10 +418,163 @@ def task_manage_sitemap(bibcodes, action):
             raise Exception('Failed to update robots.txt files')
         return
     
-    # TODO: Implement 'remove' action
-    elif action == 'remove': 
-        #TODO: how to handle empty files in case of mass deletion?
-        pass 
+    elif action == 'bootstrap':
+        logger.info('Bootstrapping sitemaps for all existing records...')
+        
+        with app.session_scope() as session:
+            # Check if SitemapInfo already has records
+            existing_sitemap_count = session.query(SitemapInfo).count()
+            if existing_sitemap_count > 0:
+                logger.warning(f'SitemapInfo table already has {existing_sitemap_count} records')
+                logger.warning('Use "force-update" action if you want to update existing sitemap records')
+                return
+            
+            # Get total count for progress tracking (optional - can be expensive on large tables)
+            try:
+                total_records = session.query(Records).count()
+                logger.info(f'Found {total_records:,} total records in database')
+            except Exception as e:
+                logger.warning(f'Could not get total record count: {e}. Progress tracking disabled.')
+                total_records = None
+            
+            if total_records == 0:
+                logger.info('No records found in Records table - nothing to bootstrap')
+                return
+            
+            batch_size = app.conf.get('SITEMAP_BOOTSTRAP_BATCH_SIZE', 50000)  # Increased from 10000
+            max_records_per_sitemap = app.conf.get('MAX_RECORDS_PER_SITEMAP', 10000)
+            processed = 0
+            successful_count = 0
+            failed_count = 0
+            last_id = 0
+            
+            # Pre-calculate sitemap filename assignments
+            current_file_index = 1
+            records_in_current_file = 0
+            
+            logger.info('Processing records in bulk batches of %d...', batch_size)
+            logger.info('Max records per sitemap file: %d', max_records_per_sitemap)
+            logger.info('Using keyset pagination for efficient processing of large datasets')
+            
+            while True:
+                # Use keyset pagination instead of OFFSET/LIMIT for O(1) performance
+                records_batch = (
+                    session.query(Records.id, Records.bibcode, Records.bib_data_updated)
+                    .filter(Records.id > last_id)
+                    .order_by(Records.id)
+                    .limit(batch_size)
+                    .all()
+                )
+                
+                if not records_batch:
+                    break  # No more records
+                
+                # Prepare bulk insert data
+                bulk_data = []
+                for record in records_batch:
+                    try:
+                        # Calculate sitemap filename efficiently
+                        if records_in_current_file >= max_records_per_sitemap:
+                            current_file_index += 1
+                            records_in_current_file = 0
+                        
+                        sitemap_filename = f'sitemap_bib_{current_file_index}.xml'
+                        records_in_current_file += 1
+                        
+                        # Create bulk insert record
+                        bulk_data.append({
+                            'record_id': record.id,
+                            'bibcode': record.bibcode,
+                            'bib_data_updated': record.bib_data_updated,
+                            'scix_id': None,
+                            'sitemap_filename': sitemap_filename,
+                            'filename_lastmoddate': None,
+                            'update_flag': True
+                        })
+                        successful_count += 1
+                        
+                    except Exception as e:
+                        logger.error('Failed to prepare record %s: %s', record.bibcode, str(e))
+                        failed_count += 1
+                        continue
+                
+                # Bulk insert the entire batch 
+                if bulk_data:
+                    try:
+                        # Use session.execute with insert() for better performance
+                        insert_sitemap = insert(SitemapInfo)
+                        session.execute(insert_sitemap, bulk_data)
+                        session.commit()
+                        logger.debug('Bulk inserted %d records', len(bulk_data))
+                    except Exception as e:
+                        logger.error('Bulk insert failed for batch: %s', str(e))
+                        session.rollback()
+                        failed_count += len(bulk_data)
+                        successful_count -= len(bulk_data)
+                
+                # Update last_id for next iteration
+                last_id = records_batch[-1].id
+                processed += len(records_batch)
+                
+                # Log progress less frequently to reduce overhead
+                if processed % (batch_size * 5) == 0 or not records_batch:  # Log every 5 batches
+                    if total_records:
+                        progress_pct = (processed / total_records) * 100
+                        logger.info('Bootstrapped %d/%d records (%.1f%%) - %d successful, %d failed', 
+                                  processed, total_records, progress_pct, successful_count, failed_count)
+                    else:
+                        logger.info('Bootstrapped %d records - %d successful, %d failed', 
+                                  processed, successful_count, failed_count)
+            
+            logger.info('Bootstrap completed: %d successful, %d failed out of %d total records', 
+                       successful_count, failed_count, processed)
+            logger.info('All records marked with update_flag=True')
+            logger.info('Run --update-sitemap-files to generate sitemap XML files')
+        return
+    
+    elif action == 'remove':
+        affected_files = set()
+        files_to_delete = set()  # Track files that become empty
+        removed_count = 0
+        
+        with app.session_scope() as session:
+            for bibcode in bibcodes:
+                sitemap_info = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
+                if sitemap_info:
+                    affected_files.add(sitemap_info.sitemap_filename)
+                    session.delete(sitemap_info)
+                    removed_count += 1
+            
+            # Check which files now have 0 records left
+            for filename in affected_files:
+                remaining_count = session.query(SitemapInfo).filter_by(sitemap_filename=filename).count()
+                if remaining_count == 0:
+                    files_to_delete.add(filename)
+                else:
+                    # Mark remaining records for regeneration
+                    session.query(SitemapInfo).filter_by(sitemap_filename=filename).update({'update_flag': True})
+            
+            # Delete empty sitemap files from disk (all sites)
+            if files_to_delete:
+                sites_config = app.conf.get('SITES', {})
+                sitemap_dir = app.sitemap_dir
+                
+                for filename in files_to_delete:
+                    for site_key in sites_config.keys():
+                        site_filepath = os.path.join(sitemap_dir, site_key, filename)
+                        if os.path.exists(site_filepath):
+                            os.remove(site_filepath)
+                            app.logger.info(f'Deleted empty sitemap file: {site_filepath}')
+                            
+                            # # Delete from S3 if enabled
+                            # s3_success = s3_utils.delete_sitemap_file_from_s3(
+                            #     app.conf, site_key, filename
+                            # )
+                            # if not s3_success:
+                            #     logger.warning('Failed to delete %s from S3 for site %s', filename, site_key)
+        
+        app.logger.info(f'Removed {removed_count} bibcodes, deleted {len(files_to_delete)} empty files')
+        session.commit()
 
     elif action in ['add', 'force-update']:
         if isinstance(bibcodes, basestring):
@@ -537,6 +691,13 @@ def update_robots_files(force_update=False):
                     with open(robots_filepath, 'w', encoding='utf-8') as f:
                         f.write(robots_content)
                     
+                    # # Upload to S3 if enabled
+                    # s3_success = s3_utils.upload_sitemap_file_to_s3(
+                    #     app.conf, robots_filepath, site_key, 'robots.txt'
+                    # )
+                    # if not s3_success:
+                    #     logger.warning('Failed to upload robots.txt to S3 for site %s', site_key)
+                    
                     logger.info('Updated robots.txt for site %s at %s', 
                               site_config.get('name', site_key), robots_filepath)
                     updated_sites += 1
@@ -611,10 +772,16 @@ def update_sitemap_index():
                         index_content = templates.render_sitemap_index(''.join(sitemap_entries))
                         
                         # Write sitemap index file
-                        # Ex: <sitemap><loc>https://ui.adsabs.harvard.edu/sitemap/sitemap_bib_1.xml</loc><lastmod>2023-01-01</lastmod></sitemap>
                         index_filepath = os.path.join(site_output_dir, 'sitemap_index.xml')
                         with open(index_filepath, 'w', encoding='utf-8') as f:
                             f.write(index_content)
+                        
+                        # # Upload to S3 if enabled
+                        # s3_success = s3_utils.upload_sitemap_file_to_s3(
+                        #     app.conf, index_filepath, site_key, 'sitemap_index.xml'
+                        # )
+                        # if not s3_success:
+                        #     logger.warning('Failed to upload sitemap_index.xml to S3 for site %s', site_key)
                         
                         logger.info('Generated sitemap index for site %s with %d entries at %s', 
                                   site_config.get('name', site_key), len(sitemap_entries), index_filepath)
@@ -691,6 +858,13 @@ def task_generate_single_sitemap(sitemap_filename, record_ids):
                     sitemap_content = templates.render_sitemap_file(''.join(url_entries))
                     with open(site_filepath, 'w', encoding='utf-8') as file:
                         file.write(sitemap_content)
+                    
+                    # # Upload to S3 if enabled
+                    # s3_success = s3_utils.upload_sitemap_file_to_s3(
+                    #     app.conf, site_filepath, site_key, sitemap_filename
+                    # )
+                    # if not s3_success:
+                    #     logger.warning('Failed to upload %s to S3 for site %s', sitemap_filename, site_key)
                     
                     logger.debug('Successfully generated %s for site %s with %d records', 
                                site_filepath, site_config.get('name', site_key), len(url_entries))
