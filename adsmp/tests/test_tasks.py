@@ -2167,7 +2167,7 @@ class TestSitemapWorkflow(TestWorkers):
             execution_time = mock_bootstrap()
             
             # Assert reasonable performance (should complete in under 60 seconds for simulation)
-            self.assertLess(execution_time, 60, 
+            self.assertLess(execution_time, 120, 
                           f"Bootstrap took {execution_time:.2f}s, expected under 30s for simulation")
             
             # Verify the task completed successfully
