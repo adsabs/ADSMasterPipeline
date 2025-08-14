@@ -18,7 +18,7 @@ except ImportError:
 
 from adsputils import setup_logging, get_date, load_config
 from adsmp.models import KeyValue, Records
-from adsmp import tasks, solr_updater, validate
+from adsmp import tasks, solr_updater, validate #s3_utils
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
@@ -437,6 +437,54 @@ def reindex_failed_bibcodes(app, update_processed=True):
             bibs = []
         logger.info('Done reindexing %s previously failed bibcodes', count)
 
+def manage_sitemap(bibcodes, action):
+    """
+    Submit sitemap management task to Celery worker
+    
+    Actions:
+    - 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
+    - 'force-update': force update sitemap table entries for given bibcodes  
+    - 'remove': remove bibcodes from sitemap table (TODO: not implemented)
+    - 'delete-table': delete all contents of sitemap table and backup files
+    - 'update-robots': force update robots.txt files for all sites
+    
+    Returns:
+        str: Celery task ID for monitoring task progress
+    """
+    result = tasks.task_manage_sitemap.apply_async(args=(bibcodes, action))
+    print(f"Sitemap management task submitted: {result.id}")
+    print(f"Action: {action}")
+    if action in ['add', 'remove', 'force-update']:
+        print(f"Processing {len(bibcodes)} bibcodes")
+    print("Task is running in the background...")
+    return result.id
+
+def update_sitemap_files():
+    """
+    Submit sitemap files update task to Celery worker
+    Updates all sitemap files for records with update_flag = True
+    
+    Returns:
+        str: Celery task ID for monitoring task progress
+    """
+    result = tasks.task_update_sitemap_files.apply_async()
+    print(f"Sitemap files update task submitted: {result.id}")
+    print("Task is running in the background...")
+    return result.id
+
+# def sync_sitemap_to_s3():
+#     """
+#     Manually sync all sitemap files to S3
+#     """
+#     sitemap_dir = app.sitemap_dir
+#     print(f"Syncing sitemap files from {sitemap_dir} to S3...")
+    
+    # success = s3_utils.sync_sitemap_files_to_s3(app.conf, sitemap_dir)
+    # if success:
+    #     print("S3 sync completed successfully")
+    # else:
+    #     print("S3 sync failed - check logs for details")
+    #     sys.exit(1)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process user input.')
@@ -562,6 +610,25 @@ if __name__ == '__main__':
                         default=False,
                         dest='update_processed',
                         help='update processed timestamps and other state info in records table when a record is indexed')
+    parser.add_argument('--manage-sitemap',
+                        action='store_true',
+                        default=False,
+                        dest='manage_sitemap',
+                        help='populate sitemap table for list of bibcodes')
+    parser.add_argument('--action',
+                        default=False,
+                        choices=['add', 'delete-table', 'force-update', 'remove', 'update-robots', 'bootstrap'],
+                        help='action: add (add bibcodes), force-update (force update bibcodes), remove (remove bibcodes), delete-table (clear sitemap table), update-robots (force update robots.txt files), bootstrap (initialize sitemaps for all existing records)')
+    parser.add_argument('--update-sitemap-files',
+                        action='store_true',
+                        default=False,
+                        dest='update_sitemap_files',
+                        help='update sitemap files for records with update_flag = True in sitemap table')
+    # parser.add_argument('--sync-sitemap-s3',
+    #                     action='store_true',
+    #                     default=False,
+    #                     dest='sync_sitemap_s3',
+    #                     help='manually sync all sitemap files to S3')
     parser.add_argument('--update-scix-id',
                         action='store_true',
                         default=False,
@@ -643,7 +710,7 @@ if __name__ == '__main__':
     elif args.delete:
         if args.filename:
             print('deleting bibcodes from file via queue')
-            bibs = []
+            bibcodes = []
             with open(args.filename, 'r') as f:
                 for line in f:
                     bibcode = line.strip()
@@ -701,6 +768,39 @@ if __name__ == '__main__':
         rebuild_collection(args.solr_collection, args.batch_size)
     elif args.index_failed:
         reindex_failed_bibcodes(app, args.update_processed)
+    elif args.manage_sitemap:
+
+        # Validate required action parameter
+        if not args.action:
+            print("Error: --action is required when using --populate-sitemap-table")
+            print("Available actions: add, remove, force-update, delete-table, update-robots, bootstrap")
+            sys.exit(1)
+        
+        action = args.action
+        
+        # Get bibcodes from file or command line
+        bibcodes = []
+        if args.filename:
+            with open(args.filename) as f:
+                for line in f:
+                    bibcode = line.strip()
+                    if bibcode:
+                        bibcodes.append(bibcode)
+        elif args.bibcodes:
+            bibcodes = args.bibcodes
+        
+        # Validate that actions requiring bibcodes have them
+        if action in ['add', 'remove', 'force-update']:
+            if not bibcodes:
+                print(f"Error: --action {action} requires bibcodes")
+                print("Provide bibcodes using --bibcodes or --filename")
+                sys.exit(1)
+        
+        manage_sitemap(bibcodes, action)
+    elif args.update_sitemap_files:
+        update_sitemap_files()
+    # elif args.sync_sitemap_s3:
+    #     sync_sitemap_to_s3()
     elif args.update_scixid:
         if args.filename:
             bibs = []
@@ -721,7 +821,6 @@ if __name__ == '__main__':
             process_all_scixid(batch_size, flag)
         else:
             tasks.task_update_scixid(bibs, flag = flag)
-
     elif args.reindex:
         update_solr = 's' in args.reindex.lower()
         update_metrics = 'm' in args.reindex.lower()
@@ -731,15 +830,15 @@ if __name__ == '__main__':
 
         if args.filename:
             print('sending bibcodes from file to the queue for reindexing')
-            bibs = []
+            bibcodes = []
             with open(args.filename) as f:
                 for line in f:
                     bibcode = line.strip()
                     if bibcode:
-                        bibs.append(bibcode)
-                    if len(bibs) >= 100:
+                        bibcodes.append(bibcode)
+                    if len(bibcodes) >= 100:
                         tasks.task_index_records.apply_async(
-                            args=(bibs,),
+                            args=(bibcodes,),
                             kwargs={
                                 'force': True,
                                 'update_solr': update_solr,
@@ -752,10 +851,10 @@ if __name__ == '__main__':
                             },
                             priority=args.priority
                         )
-                        bibs = []
-                if len(bibs) > 0:
+                        bibcodes = []
+                if len(bibcodes) > 0:
                     tasks.task_index_records.apply_async(
-                        args=(bibs,),
+                        args=(bibcodes,),
                         kwargs={
                             'force': True,
                             'update_solr': update_solr,
@@ -768,13 +867,10 @@ if __name__ == '__main__':
                         },
                         priority=args.priority
                     )
-                    bibs = []
+                    bibcodes = []
         else:
             print('sending bibcode since date to the queue for reindexing')
             reindex(since=args.since, batch_size=args.batch_size, force_indexing=args.force_indexing,
                     update_solr=update_solr, update_metrics=update_metrics,
                     update_links=update_links, force_processing=args.force_processing, ignore_checksums=args.ignore_checksums,
                     solr_targets=solr_urls, update_processed=args.update_processed, priority=args.priority)
-
-
-
