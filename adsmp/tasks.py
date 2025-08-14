@@ -6,7 +6,7 @@ import adsputils
 from adsmp import app as app_module
 from adsmp import solr_updater
 from adsmp import templates
-from adsmp import s3_utils
+# from adsmp import s3_utils
 from kombu import Queue
 from adsmsg.msg import Msg
 from sqlalchemy import create_engine, MetaData, Table, exc, insert
@@ -778,6 +778,7 @@ def update_sitemap_index():
                         index_content = templates.render_sitemap_index(''.join(sitemap_entries))
                         
                         # Write sitemap index file
+                        # Ex: <sitemap><loc>https://ui.adsabs.harvard.edu/sitemap/sitemap_bib_1.xml</loc><lastmod>2023-01-01</lastmod></sitemap>
                         index_filepath = os.path.join(site_output_dir, 'sitemap_index.xml')
                         with open(index_filepath, 'w', encoding='utf-8') as f:
                             f.write(index_content)
