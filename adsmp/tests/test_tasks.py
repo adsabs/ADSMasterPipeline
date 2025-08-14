@@ -841,7 +841,7 @@ class TestSitemapWorkflow(TestWorkers):
                 self.assertIsNotNone(sitemap_info.record_id)
                 self.assertIsNotNone(sitemap_info.sitemap_filename)
                 self.assertTrue(sitemap_info.update_flag)  # New records should need updating
-                self.assertEquals(sitemap_info.sitemap_filename, 'sitemap_bib_1.xml')
+                self.assertEqual(sitemap_info.sitemap_filename, 'sitemap_bib_1.xml')
     
     def test_task_populate_sitemap_table_force_update_action(self):
         """Test task_populate_sitemap_table with 'force-update' action"""
