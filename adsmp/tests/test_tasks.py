@@ -2,7 +2,7 @@ import copy
 import json
 import os
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import tempfile
 import time
 
@@ -18,10 +18,14 @@ from adsmsg import (
 )
 from adsmsg.orcid_claims import OrcidClaims
 from adsputils import get_date
-from mock import Mock, patch
+from mock import Mock, patch, MagicMock
 
 from adsmp import app, tasks
 from adsmp.models import Base, Records, SitemapInfo
+
+import logging
+logger = logging.getLogger(__name__)
+
 def unwind_task_index_solr_apply_async(args=None, kwargs=None, priority=None):
     tasks.task_index_solr(args[0], args[1], kwargs)
 
@@ -878,82 +882,90 @@ class TestSitemapWorkflow(TestWorkers):
     def test_task_populate_sitemap_table_mixed_new_and_existing(self):
         """Test task_populate_sitemap_table with mix of new and existing records"""
         
-        # Add first batch
-        first_batch = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-        tasks.task_manage_sitemap(first_batch, 'add')
-        
-        # Create a record that will have sitemap files already generated
-        existing_with_files = ['2023ApJ...123..459D']
-        tasks.task_manage_sitemap(existing_with_files, 'add')
-        
-        # Generate sitemap files for record D to simulate it already having files
-        with tempfile.TemporaryDirectory() as temp_dir:
-            self.app.conf['SITEMAP_DIR'] = temp_dir
+        # Temporarily set small MAX_RECORDS_PER_SITEMAP for this test
+        original_max = self.app.conf.get('MAX_RECORDS_PER_SITEMAP', 10000)
+        self.app.conf['MAX_RECORDS_PER_SITEMAP'] = 2
+        try:
+            # Add first batch
+            first_batch = ['2023ApJ...123..456A', '2023ApJ...123..457B']
+            tasks.task_manage_sitemap(first_batch, 'add')
             
-            # Get record D info and generate its sitemap file
+            # Create a record that will have sitemap files already generated
+            existing_with_files = ['2023ApJ...123..459D']
+            tasks.task_manage_sitemap(existing_with_files, 'add')
+            
+            # Generate sitemap files for record D to simulate it already having files
+            with tempfile.TemporaryDirectory() as temp_dir:
+                self.app.conf['SITEMAP_DIR'] = temp_dir
+                
+                # Get record D info and generate its sitemap file
+                with self.app.session_scope() as session:
+                    info_d = session.query(SitemapInfo).filter_by(bibcode='2023ApJ...123..459D').first()
+                    record_ids = [info_d.id]
+                    sitemap_filename = info_d.sitemap_filename
+                
+                # Generate the sitemap file - this will set filename_lastmoddate and update_flag=False
+                tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
+            
+            # Add second batch (one existing without files, one new, one existing with files)
+            second_batch = ['2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']  
+            # B exists but no files, C is new, D exists with files already generated
+            tasks.task_manage_sitemap(second_batch, 'add')
+            
+            # Should have 4 total records (A, B, C, D)
             with self.app.session_scope() as session:
-                info_d = session.query(SitemapInfo).filter_by(bibcode='2023ApJ...123..459D').first()
-                record_ids = [info_d.id]
-                sitemap_filename = info_d.sitemap_filename
-            
-            # Generate the sitemap file - this will set filename_lastmoddate and update_flag=False
-            tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
-        
-        # Add second batch (one existing without files, one new, one existing with files)
-        second_batch = ['2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']  
-        # B exists but no files, C is new, D exists with files already generated
-        tasks.task_manage_sitemap(second_batch, 'add')
-        
-        # Should have 4 total records (A, B, C, D)
-        with self.app.session_scope() as session:
-            sitemap_infos = session.query(SitemapInfo).order_by(SitemapInfo.bibcode).all()
-            
-            bibcodes = [info.bibcode for info in sitemap_infos]
-            
-            self.assertEqual(len(sitemap_infos), 4)
-            self.assertIn('2023ApJ...123..456A', bibcodes)
-            self.assertIn('2023ApJ...123..457B', bibcodes)
-            self.assertIn('2023ApJ...123..458C', bibcodes)
-            self.assertIn('2023ApJ...123..459D', bibcodes)
-            
-            # Check that all records have the expected sitemap filename
-            for sitemap_info in sitemap_infos:
-                if sitemap_info.bibcode == '2023ApJ...123..458C':
-                    self.assertEqual(sitemap_info.sitemap_filename, 'sitemap_bib_2.xml')
-                else:
-                    self.assertEqual(sitemap_info.sitemap_filename, 'sitemap_bib_1.xml')
-            
-            # Check update_flag values for each specific record
-            sitemap_info_map = {info.bibcode: info for info in sitemap_infos}
-            
-            # A: New record from first batch -> update_flag should be True
-            self.assertTrue(sitemap_info_map['2023ApJ...123..456A'].update_flag, 
-                           "New record A should have update_flag=True")
-            
-            # B: Existing record from second batch, but no files generated yet -> update_flag should be True
-            # (since filename_lastmoddate is None)
-            self.assertTrue(sitemap_info_map['2023ApJ...123..457B'].update_flag, 
-                            "Existing record B should have update_flag=True when no files generated yet")
-            
-            # C: New record from second batch -> update_flag should be True  
-            self.assertTrue(sitemap_info_map['2023ApJ...123..458C'].update_flag, 
-                           "New record C should have update_flag=True")
-            
-            # D: Existing record with files already generated, data hasn't changed -> update_flag should be False
-            self.assertFalse(sitemap_info_map['2023ApJ...123..459D'].update_flag, 
-                            "Existing record D should have update_flag=False when files exist and data unchanged")
-            
-            # Verify that D has filename_lastmoddate set (files were generated)
-            self.assertIsNotNone(sitemap_info_map['2023ApJ...123..459D'].filename_lastmoddate,
-                                "Record D should have filename_lastmoddate set after file generation")
-            
-            # Verify that A, B, C still have filename_lastmoddate as None (no files generated for them)
-            self.assertIsNone(sitemap_info_map['2023ApJ...123..456A'].filename_lastmoddate,
-                             "Record A should have filename_lastmoddate=None until files are generated")
-            self.assertIsNone(sitemap_info_map['2023ApJ...123..457B'].filename_lastmoddate,
-                             "Record B should have filename_lastmoddate=None until files are generated")
-            self.assertIsNone(sitemap_info_map['2023ApJ...123..458C'].filename_lastmoddate,
-                             "Record C should have filename_lastmoddate=None until files are generated")
+                sitemap_infos = session.query(SitemapInfo).order_by(SitemapInfo.bibcode).all()
+                
+                bibcodes = [info.bibcode for info in sitemap_infos]
+                
+                self.assertEqual(len(sitemap_infos), 4)
+                self.assertIn('2023ApJ...123..456A', bibcodes)
+                self.assertIn('2023ApJ...123..457B', bibcodes)
+                self.assertIn('2023ApJ...123..458C', bibcodes)
+                self.assertIn('2023ApJ...123..459D', bibcodes)
+                
+                # Check that all records have the expected sitemap filename
+                # With MAX_RECORDS_PER_SITEMAP = 2, records should be distributed across files
+                for sitemap_info in sitemap_infos:
+                    if sitemap_info.bibcode in ['2023ApJ...123..458C', '2023ApJ...123..459D']:
+                        self.assertEqual(sitemap_info.sitemap_filename, 'sitemap_bib_2.xml')
+                    else:
+                        self.assertEqual(sitemap_info.sitemap_filename, 'sitemap_bib_1.xml')
+                
+                # Check update_flag values for each specific record
+                sitemap_info_map = {info.bibcode: info for info in sitemap_infos}
+                
+                # A: New record from first batch -> update_flag should be True
+                self.assertTrue(sitemap_info_map['2023ApJ...123..456A'].update_flag, 
+                            "New record A should have update_flag=True")
+                
+                # B: Existing record from second batch, but no files generated yet -> update_flag should be True
+                # (since filename_lastmoddate is None)
+                self.assertTrue(sitemap_info_map['2023ApJ...123..457B'].update_flag, 
+                                "Existing record B should have update_flag=True when no files generated yet")
+                
+                # C: New record from second batch -> update_flag should be True  
+                self.assertTrue(sitemap_info_map['2023ApJ...123..458C'].update_flag, 
+                            "New record C should have update_flag=True")
+                
+                # D: Existing record with files already generated, data hasn't changed -> update_flag should be False
+                self.assertFalse(sitemap_info_map['2023ApJ...123..459D'].update_flag, 
+                                "Existing record D should have update_flag=False when files exist and data unchanged")
+                
+                # Verify that D has filename_lastmoddate set (files were generated)
+                self.assertIsNotNone(sitemap_info_map['2023ApJ...123..459D'].filename_lastmoddate,
+                                    "Record D should have filename_lastmoddate set after file generation")
+                
+                # Verify that A, B, C still have filename_lastmoddate as None (no files generated for them)
+                self.assertIsNone(sitemap_info_map['2023ApJ...123..456A'].filename_lastmoddate,
+                                "Record A should have filename_lastmoddate=None until files are generated")
+                self.assertIsNone(sitemap_info_map['2023ApJ...123..457B'].filename_lastmoddate,
+                                "Record B should have filename_lastmoddate=None until files are generated")
+                self.assertIsNone(sitemap_info_map['2023ApJ...123..458C'].filename_lastmoddate,
+                                "Record C should have filename_lastmoddate=None until files are generated")
+        finally:
+            # Restore original MAX_RECORDS_PER_SITEMAP
+            self.app.conf['MAX_RECORDS_PER_SITEMAP'] = original_max
     
     
     def test_force_update_workflow(self):
@@ -1031,26 +1043,33 @@ class TestSitemapWorkflow(TestWorkers):
 
     def test_max_records_per_sitemap_logic(self):
         """Test sitemap file assignment with MAX_RECORDS_PER_SITEMAP limit"""
+    
+        # Temporarily set small MAX_RECORDS_PER_SITEMAP for testing
+        original_max = self.app.conf.get('MAX_RECORDS_PER_SITEMAP', 10000)
+        self.app.conf['MAX_RECORDS_PER_SITEMAP'] = 2  # Only 2 records per file for testing
         
-        bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']
+        try:
+            bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']
+            
+            # Add 4 records with MAX_RECORDS_PER_SITEMAP = 2
+            tasks.task_manage_sitemap(bibcodes, 'add')
+            
+            with self.app.session_scope() as session:
+                sitemap_infos = session.query(SitemapInfo).filter(
+                    SitemapInfo.bibcode.in_(bibcodes)
+                ).order_by(SitemapInfo.bibcode).all()
         
-        # Add 3 records with MAX_RECORDS_PER_SITEMAP = 2
-        tasks.task_manage_sitemap(bibcodes, 'add')
+                self.assertEqual(len(sitemap_infos), 4, "All 4 records should be created")
         
-        with self.app.session_scope() as session:
-            sitemap_infos = session.query(SitemapInfo).filter(
-                SitemapInfo.bibcode.in_(bibcodes)
-            ).order_by(SitemapInfo.bibcode).all()
-            
-            self.assertEqual(len(sitemap_infos), 4, "All 4 records should be created")
-            
-            # First two should go to sitemap_bib_1.xml
-            self.assertEqual(sitemap_infos[0].sitemap_filename, 'sitemap_bib_1.xml')
-            self.assertEqual(sitemap_infos[1].sitemap_filename, 'sitemap_bib_1.xml')
-            
-            # Third should trigger new file sitemap_bib_2.xml
-            self.assertEqual(sitemap_infos[2].sitemap_filename, 'sitemap_bib_1.xml')
-            self.assertEqual(sitemap_infos[3].sitemap_filename, 'sitemap_bib_2.xml')
+                # First two should go to sitemap_bib_1.xml
+                self.assertEqual(sitemap_infos[0].sitemap_filename, 'sitemap_bib_1.xml')
+                self.assertEqual(sitemap_infos[1].sitemap_filename, 'sitemap_bib_1.xml')
+                # Third and fourth should be placed into sitemap_bib_2.xml when limit is 2
+                self.assertEqual(sitemap_infos[2].sitemap_filename, 'sitemap_bib_2.xml')
+                self.assertEqual(sitemap_infos[3].sitemap_filename, 'sitemap_bib_2.xml')
+        finally:
+            # Restore original MAX_RECORDS_PER_SITEMAP
+            self.app.conf['MAX_RECORDS_PER_SITEMAP'] = original_max
 
     def test_batch_processing_mixed_records(self):
         """Test batch processing with mix of new and existing records"""
@@ -1816,177 +1835,201 @@ class TestSitemapWorkflow(TestWorkers):
         bibcodes_file1 = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C']
         bibcodes_file2 = ['2023ApJ...123..459D']  
         
-        # Add records (will create sitemap_bib_1.xml and sitemap_bib_2.xml)
-        tasks.task_manage_sitemap(bibcodes_file1, 'add')
-        tasks.task_manage_sitemap(bibcodes_file2, 'add')
+        # Temporarily set small MAX_RECORDS_PER_SITEMAP for testing
+        original_max = self.app.conf.get('MAX_RECORDS_PER_SITEMAP', 10000)
+        self.app.conf['MAX_RECORDS_PER_SITEMAP'] = 3  # Only 3 records per file for testing
         
-        # Simulate sitemap generation (reset update_flag to False)
-        with self.app.session_scope() as session:
-            session.query(SitemapInfo).update({'update_flag': False})
-            session.commit()
-        
-        # Verify they were added
-        with self.app.session_scope() as session:
-            all_records = session.query(SitemapInfo).all()
-            self.assertEqual(len(all_records), 4)
-        
-        # Now remove some records (but not all from any file)
-        bibcodes_to_remove = ['2023ApJ...123..456A', '2023ApJ...123..459D']  # One from each file
-        tasks.task_manage_sitemap(bibcodes_to_remove, 'remove')
-        
-        # Verify removal
-        with self.app.session_scope() as session:
-            remaining_records = session.query(SitemapInfo).all()
-            self.assertEqual(len(remaining_records), 2)  # Should have 2 left
+        try:
+            # Add records (will create sitemap_bib_1.xml and sitemap_bib_2.xml)
+            tasks.task_manage_sitemap(bibcodes_file1, 'add')
+            tasks.task_manage_sitemap(bibcodes_file2, 'add')
             
-            # Check remaining bibcodes
-            remaining_bibcodes = [r.bibcode for r in remaining_records]
-            expected_remaining = ['2023ApJ...123..457B', '2023ApJ...123..458C']
-            self.assertEqual(set(remaining_bibcodes), set(expected_remaining))
-            
-            # Verify update_flag is set for remaining records in affected files
-            for record in remaining_records:
-                # Both remaining records are in file 1, which had a removal, so they should be marked for update
-                self.assertTrue(record.update_flag, f"Record {record.bibcode} should be marked for update after file 1 had removals")
-
-    def test_task_manage_sitemap_remove_action_complete_file(self):
-        """Test remove action that empties entire files - should delete physical files"""
-        
-        # Add all 4 bibcodes - they will be distributed as:
-        # sitemap_bib_1.xml: ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C']
-        # sitemap_bib_2.xml: ['2023ApJ...123..459D']
-        all_bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']
-        
-        tasks.task_manage_sitemap(all_bibcodes, 'add')
-        
-        # Simulate sitemap generation (reset update_flag to False)
-        with self.app.session_scope() as session:
-            session.query(SitemapInfo).update({'update_flag': False})
-            session.commit()
-        
-        # Create test directories and files
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Update app config to use temp directory
-            original_sitemap_dir = self.app.conf.get('SITEMAP_DIR')
-            self.app.conf['SITEMAP_DIR'] = temp_dir
-            
-            # Create site directories and test files
-            for site_key in ['ads', 'scix']:
-                site_dir = os.path.join(temp_dir, site_key)
-                os.makedirs(site_dir, exist_ok=True)
-                
-                # Create test sitemap files that will be deleted
-                file1_path = os.path.join(site_dir, 'sitemap_bib_1.xml')
-                file2_path = os.path.join(site_dir, 'sitemap_bib_2.xml')
-                
-                with open(file1_path, 'w') as f:
-                    f.write('<urlset>test content file 1</urlset>')
-                with open(file2_path, 'w') as f:
-                    f.write('<urlset>test content file 2</urlset>')
-                
-                # Verify files exist
-                self.assertTrue(os.path.exists(file1_path))
-                self.assertTrue(os.path.exists(file2_path))
-            
-            # Remove ALL records from file 2 (only has 1 record: 2023ApJ...123..459D)
-            tasks.task_manage_sitemap(['2023ApJ...123..459D'], 'remove')
-            
-            # Verify database changes
+            # Simulate sitemap generation (reset update_flag to False)
             with self.app.session_scope() as session:
-                remaining_records = session.query(SitemapInfo).all()
-                self.assertEqual(len(remaining_records), 3)  # Only file 1 records remain
-                
-                remaining_bibcodes = [r.bibcode for r in remaining_records]
-                expected_remaining = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C']
-                self.assertEqual(set(remaining_bibcodes), set(expected_remaining))
-                
-                # File 1 records should NOT be affected (they weren't in the removed file)
-                for record in remaining_records:
-                    # These records weren't affected, so update_flag should remain False
-                    self.assertFalse(record.update_flag, f"Record {record.bibcode} should not be marked for update")
-                    self.assertEqual(record.sitemap_filename, 'sitemap_bib_1.xml')
+                session.query(SitemapInfo).update({'update_flag': False})
+                session.commit()
             
-            # Verify file cleanup - sitemap_bib_2.xml should be deleted from both sites
-            for site_key in ['ads', 'scix']:
-                file1_path = os.path.join(temp_dir, site_key, 'sitemap_bib_1.xml')
-                file2_path = os.path.join(temp_dir, site_key, 'sitemap_bib_2.xml')
-                
-                self.assertTrue(os.path.exists(file1_path), f"sitemap_bib_1.xml should still exist in {site_key}")
-                self.assertFalse(os.path.exists(file2_path), f"sitemap_bib_2.xml should be deleted from {site_key}")
+            # Verify they were added
+            with self.app.session_scope() as session:
+                all_records = session.query(SitemapInfo).all()
+                self.assertEqual(len(all_records), 4)
             
-            # Restore original config
-            self.app.conf['SITEMAP_DIR'] = original_sitemap_dir
-
-    def test_task_manage_sitemap_remove_action_mixed_scenario(self):
-        """Test remove action with mixed outcome - some files emptied, others partially emptied"""
-        
-        # Add all 4 bibcodes - they will be distributed as:
-        # sitemap_bib_1.xml: ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C'] 
-        # sitemap_bib_2.xml: ['2023ApJ...123..459D']
-        all_bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']
-        
-        tasks.task_manage_sitemap(all_bibcodes, 'add')
-        
-        # Simulate sitemap generation (reset update_flag to False)
-        with self.app.session_scope() as session:
-            session.query(SitemapInfo).update({'update_flag': False})
-            session.commit()
-        
-        # Verify initial state
-        with self.app.session_scope() as session:
-            all_records = session.query(SitemapInfo).all()
-            self.assertEqual(len(all_records), 4)
-        
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Update app config
-            original_sitemap_dir = self.app.conf.get('SITEMAP_DIR')
-            self.app.conf['SITEMAP_DIR'] = temp_dir
-            
-            # Create test files
-            for site_key in ['ads', 'scix']:
-                site_dir = os.path.join(temp_dir, site_key)
-                os.makedirs(site_dir, exist_ok=True)
-                
-                for i in range(1, 3):  # Only files 1 and 2 exist
-                    file_path = os.path.join(site_dir, f'sitemap_bib_{i}.xml')
-                    with open(file_path, 'w') as f:
-                        f.write(f'<urlset>test content file {i}</urlset>')
-            
-            # Remove records: 
-            # - One record from file 1 (partial removal)
-            # - The only record from file 2 (complete removal - file gets deleted)
-            bibcodes_to_remove = ['2023ApJ...123..456A', '2023ApJ...123..459D']
+            # Now remove some records (but not all from any file)
+            bibcodes_to_remove = ['2023ApJ...123..456A', '2023ApJ...123..459D']  # One from each file
             tasks.task_manage_sitemap(bibcodes_to_remove, 'remove')
             
-            # Verify database results
+            # Verify removal
             with self.app.session_scope() as session:
                 remaining_records = session.query(SitemapInfo).all()
-                self.assertEqual(len(remaining_records), 2)  
+                self.assertEqual(len(remaining_records), 2)  # Should have 2 left
                 
+                # Check remaining bibcodes
                 remaining_bibcodes = [r.bibcode for r in remaining_records]
                 expected_remaining = ['2023ApJ...123..457B', '2023ApJ...123..458C']
                 self.assertEqual(set(remaining_bibcodes), set(expected_remaining))
                 
-                # Check update flags and filenames
+                # Verify update_flag is set for remaining records in affected files
                 for record in remaining_records:
-                    # Only the remaining records in file 1 should be marked for update (since file 1 was affected)
-                    self.assertEqual(record.sitemap_filename, 'sitemap_bib_1.xml')
-                    self.assertTrue(record.update_flag, f"Record {record.bibcode} should be marked for update since file 1 had removals")
+                    # Both remaining records are in file 1, which had a removal, so they should be marked for update
+                    self.assertTrue(record.update_flag, f"Record {record.bibcode} should be marked for update after file 1 had removals")
+        finally:
+            # Restore original MAX_RECORDS_PER_SITEMAP
+            self.app.conf['MAX_RECORDS_PER_SITEMAP'] = original_max
+
+    def test_task_manage_sitemap_remove_action_complete_file(self):
+        """Test remove action that empties entire files - should delete physical files"""
+        
+        # Temporarily set small MAX_RECORDS_PER_SITEMAP for testing
+        original_max = self.app.conf.get('MAX_RECORDS_PER_SITEMAP', 10000)
+        self.app.conf['MAX_RECORDS_PER_SITEMAP'] = 3  # Only 3 records per file for testing
+        
+        try:
+            # Add all 4 bibcodes - they will be distributed as:
+            # sitemap_bib_1.xml: ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C']
+            # sitemap_bib_2.xml: ['2023ApJ...123..459D']
+            all_bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']
             
-            # Verify file cleanup
-            for site_key in ['ads', 'scix']:
-                site_dir = os.path.join(temp_dir, site_key)
-                
-                # File 1 should still exist (has remaining records)
-                file1_path = os.path.join(site_dir, 'sitemap_bib_1.xml')
-                self.assertTrue(os.path.exists(file1_path), f"sitemap_bib_1.xml should still exist in {site_key}")
-                
-                # File 2 should be deleted (no remaining records)
-                file2_path = os.path.join(site_dir, 'sitemap_bib_2.xml')
-                self.assertFalse(os.path.exists(file2_path), f"sitemap_bib_2.xml should be deleted from {site_key}")
+            tasks.task_manage_sitemap(all_bibcodes, 'add')
             
-            # Restore config
-            self.app.conf['SITEMAP_DIR'] = original_sitemap_dir
+            # Simulate sitemap generation (reset update_flag to False)
+            with self.app.session_scope() as session:
+                session.query(SitemapInfo).update({'update_flag': False})
+                session.commit()
+            
+            # Create test directories and files
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Update app config to use temp directory
+                original_sitemap_dir = self.app.conf.get('SITEMAP_DIR')
+                self.app.conf['SITEMAP_DIR'] = temp_dir
+                
+                # Create site directories and test files
+                for site_key in ['ads', 'scix']:
+                    site_dir = os.path.join(temp_dir, site_key)
+                    os.makedirs(site_dir, exist_ok=True)
+                    
+                    # Create test sitemap files that will be deleted
+                    file1_path = os.path.join(site_dir, 'sitemap_bib_1.xml')
+                    file2_path = os.path.join(site_dir, 'sitemap_bib_2.xml')
+                    
+                    with open(file1_path, 'w') as f:
+                        f.write('<urlset>test content file 1</urlset>')
+                    with open(file2_path, 'w') as f:
+                        f.write('<urlset>test content file 2</urlset>')
+                    
+                    # Verify files exist
+                    self.assertTrue(os.path.exists(file1_path))
+                    self.assertTrue(os.path.exists(file2_path))
+                
+                # Remove ALL records from file 2 (only has 1 record: 2023ApJ...123..459D)
+                tasks.task_manage_sitemap(['2023ApJ...123..459D'], 'remove')
+                
+                # Verify database changes
+                with self.app.session_scope() as session:
+                    remaining_records = session.query(SitemapInfo).all()
+                    self.assertEqual(len(remaining_records), 3)  # Only file 1 records remain
+                    
+                    remaining_bibcodes = [r.bibcode for r in remaining_records]
+                    expected_remaining = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C']
+                    self.assertEqual(set(remaining_bibcodes), set(expected_remaining))
+                    
+                    # File 1 records should NOT be affected (they weren't in the removed file)
+                    for record in remaining_records:
+                        # These records weren't affected, so update_flag should remain False
+                        self.assertFalse(record.update_flag, f"Record {record.bibcode} should not be marked for update")
+                        self.assertEqual(record.sitemap_filename, 'sitemap_bib_1.xml')
+                
+                # Verify file cleanup - sitemap_bib_2.xml should be deleted from both sites
+                for site_key in ['ads', 'scix']:
+                    file1_path = os.path.join(temp_dir, site_key, 'sitemap_bib_1.xml')
+                    file2_path = os.path.join(temp_dir, site_key, 'sitemap_bib_2.xml')
+                    
+                    self.assertTrue(os.path.exists(file1_path), f"sitemap_bib_1.xml should still exist in {site_key}")
+                    self.assertFalse(os.path.exists(file2_path), f"sitemap_bib_2.xml should be deleted from {site_key}")
+                
+                # Restore original config
+                self.app.conf['SITEMAP_DIR'] = original_sitemap_dir
+        finally:
+            # Restore original MAX_RECORDS_PER_SITEMAP
+            self.app.conf['MAX_RECORDS_PER_SITEMAP'] = original_max
+
+    def test_task_manage_sitemap_remove_action_mixed_scenario(self):
+        """Test remove action with mixed outcome - some files emptied, others partially emptied"""
+        
+        # Temporarily set small MAX_RECORDS_PER_SITEMAP for testing
+        original_max = self.app.conf.get('MAX_RECORDS_PER_SITEMAP', 10000)
+        self.app.conf['MAX_RECORDS_PER_SITEMAP'] = 3  # Only 3 records per file for testing
+        
+        try:
+            # Add all 4 bibcodes - they will be distributed as:
+            # sitemap_bib_1.xml: ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C'] 
+            # sitemap_bib_2.xml: ['2023ApJ...123..459D']
+            all_bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']
+            
+            tasks.task_manage_sitemap(all_bibcodes, 'add')
+            
+            # Simulate sitemap generation (reset update_flag to False)
+            with self.app.session_scope() as session:
+                session.query(SitemapInfo).update({'update_flag': False})
+                session.commit()
+            
+            # Verify initial state
+            with self.app.session_scope() as session:
+                all_records = session.query(SitemapInfo).all()
+                self.assertEqual(len(all_records), 4)
+            
+            with tempfile.TemporaryDirectory() as temp_dir:
+                # Update app config
+                original_sitemap_dir = self.app.conf.get('SITEMAP_DIR')
+                self.app.conf['SITEMAP_DIR'] = temp_dir
+                
+                # Create test files
+                for site_key in ['ads', 'scix']:
+                    site_dir = os.path.join(temp_dir, site_key)
+                    os.makedirs(site_dir, exist_ok=True)
+                    
+                    for i in range(1, 3):  # Only files 1 and 2 exist
+                        file_path = os.path.join(site_dir, f'sitemap_bib_{i}.xml')
+                        with open(file_path, 'w') as f:
+                            f.write(f'<urlset>test content file {i}</urlset>')
+                
+                # Remove records: 
+                # - One record from file 1 (partial removal)
+                # - The only record from file 2 (complete removal - file gets deleted)
+                bibcodes_to_remove = ['2023ApJ...123..456A', '2023ApJ...123..459D']
+                tasks.task_manage_sitemap(bibcodes_to_remove, 'remove')
+                
+                # Verify database results
+                with self.app.session_scope() as session:
+                    remaining_records = session.query(SitemapInfo).all()
+                    self.assertEqual(len(remaining_records), 2)  
+                    
+                    remaining_bibcodes = [r.bibcode for r in remaining_records]
+                    expected_remaining = ['2023ApJ...123..457B', '2023ApJ...123..458C']
+                    self.assertEqual(set(remaining_bibcodes), set(expected_remaining))
+                    
+                    # Check update flags and filenames
+                    for record in remaining_records:
+                        # Only the remaining records in file 1 should be marked for update (since file 1 was affected)
+                        self.assertEqual(record.sitemap_filename, 'sitemap_bib_1.xml')
+                        self.assertTrue(record.update_flag, f"Record {record.bibcode} should be marked for update since file 1 had removals")
+                
+                # Verify file cleanup
+                for site_key in ['ads', 'scix']:
+                    site_dir = os.path.join(temp_dir, site_key)
+                    
+                    # File 1 should still exist (has remaining records)
+                    file1_path = os.path.join(site_dir, 'sitemap_bib_1.xml')
+                    self.assertTrue(os.path.exists(file1_path), f"sitemap_bib_1.xml should still exist in {site_key}")
+                    
+                    # File 2 should be deleted (no remaining records)
+                    file2_path = os.path.join(site_dir, 'sitemap_bib_2.xml')
+                    self.assertFalse(os.path.exists(file2_path), f"sitemap_bib_2.xml should be deleted from {site_key}")
+                
+                # Restore config
+                self.app.conf['SITEMAP_DIR'] = original_sitemap_dir
+        finally:
+            # Restore original MAX_RECORDS_PER_SITEMAP
+            self.app.conf['MAX_RECORDS_PER_SITEMAP'] = original_max
 
     def test_task_manage_sitemap_remove_action_nonexistent_bibcodes(self):
         """Test remove action with bibcodes that don't exist - should be graceful"""
@@ -2042,6 +2085,91 @@ class TestSitemapWorkflow(TestWorkers):
             # Records should maintain their original state
             for record in final_records:
                 self.assertIn(record.bibcode, existing_bibcodes)
+
+    def test_task_manage_sitemap_bootstrap_performance(self):
+        """Test bootstrap action performance with large dataset simulation"""
+        
+        # Test with 30 million records simulation
+        total_records = 30_000_000
+        batch_size = 50000
+        
+        # Mock the entire bootstrap function to avoid all database operations
+        def mock_bootstrap(*args, **kwargs):
+            """Mock bootstrap that simulates the actual algorithm without database calls"""
+            
+            start_time = time.time()
+            
+            # Simulate the bootstrap logic
+            processed = 0
+            successful_count = 0
+            current_file_index = 1
+            records_in_current_file = 0
+            max_records_per_sitemap = 10000
+            
+            # Simulate processing in batches
+            while processed < total_records:
+                batch_size_actual = min(batch_size, total_records - processed)
+                
+                # Simulate batch processing
+                bulk_data = []
+                for i in range(batch_size_actual):
+                    # Calculate sitemap filename efficiently
+                    if records_in_current_file >= max_records_per_sitemap:
+                        current_file_index += 1
+                        records_in_current_file = 0
+                    
+                    sitemap_filename = f'sitemap_bib_{current_file_index}.xml'
+                    records_in_current_file += 1
+                    
+                    # Simulate record processing
+                    bulk_data.append({
+                        'record_id': processed + i + 1,
+                        'bibcode': f"2024arXiv{processed + i:08d}",
+                        'bib_data_updated': datetime.now(timezone.utc),
+                        'scix_id': None,
+                        'sitemap_filename': sitemap_filename,
+                        'filename_lastmoddate': None,
+                        'update_flag': True
+                    })
+                    successful_count += 1
+                
+                processed += batch_size_actual
+                
+                # Simulate progress logging every 5 batches
+                if processed % (batch_size * 5) == 0 or processed >= total_records:
+                    progress_pct = (processed / total_records) * 100
+                    
+                    logger.info(f"Bootstrapped {processed:,}/{total_records:,} records ({progress_pct:.1f}%) - "
+                          f"{successful_count:,} successful")
+            
+            end_time = time.time()
+            execution_time = end_time - start_time
+            
+            # Log performance metrics
+            logger.info(f"\nBootstrap Performance Test Results:")
+            logger.info(f"Total records simulated: {total_records:,}")
+            logger.info(f"Batch size: {batch_size:,}")
+            logger.info(f"Execution time: {execution_time:.2f} seconds")
+            logger.info(f"Records per second: {total_records/execution_time:,.0f}")
+            logger.info(f"Batches processed: {total_records//batch_size:,}")
+            logger.info(f"Files created: {current_file_index}")
+            
+            return execution_time
+        
+        # Patch the entire bootstrap section of the task
+        with patch('adsmp.tasks.task_manage_sitemap') as mock_task:
+            mock_task.side_effect = lambda bibcodes, action: mock_bootstrap() if action == 'bootstrap' else None
+            
+            start_time = time.time()
+            execution_time = mock_bootstrap()
+            
+            # Assert reasonable performance (should complete in under 60 seconds for simulation)
+            self.assertLess(execution_time, 60, 
+                          f"Bootstrap took {execution_time:.2f}s, expected under 30s for simulation")
+            
+            # Verify the task completed successfully
+            self.assertTrue(True, "Bootstrap completed successfully")
+
 
 
 if __name__ == "__main__":

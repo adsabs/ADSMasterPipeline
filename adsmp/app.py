@@ -715,8 +715,8 @@ class ADSMasterPipelineCelery(ADSCelery):
                 sitemap_info = SitemapInfo(
                     record_id=sitemap_record.get('record_id'),
                     bibcode=sitemap_record.get('bibcode'),
-                    scix_id=sitemap_record.get('scix_id'),
                     bib_data_updated=sitemap_record.get('bib_data_updated'),
+                    scix_id=sitemap_record.get('scix_id'),
                     sitemap_filename=sitemap_record.get('sitemap_filename'),
                     filename_lastmoddate=sitemap_record.get('filename_lastmoddate'),
                     update_flag=sitemap_record.get('update_flag', False)
@@ -742,7 +742,6 @@ class ADSMasterPipelineCelery(ADSCelery):
                     # Check the number of records assigned to sitemap_file_latest
                     sitemap_file_latest_count = session.query(SitemapInfo).filter_by(sitemap_filename=sitemap_file_latest).count()
                 
-                    # TODO: Why is the max number of records per sitemap file so low? 
                     if sitemap_file_latest_count >= self.conf.get('MAX_RECORDS_PER_SITEMAP', 3): 
                         latest_index += 1
                         sitemap_filename = 'sitemap_bib_{}.xml'.format(latest_index)
