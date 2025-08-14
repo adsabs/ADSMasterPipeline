@@ -20,7 +20,6 @@ MetricsBase = declarative_base()
 
 class UTCDateTime(types.TypeDecorator):
     impl = TIMESTAMP
-    cache_ok = False
 
     def process_bind_param(self, value, engine):
         if isinstance(value, basestring):
