@@ -315,7 +315,7 @@ class TestSolrUpdater(unittest.TestCase):
             },
         )
         rec = self.app.get_record("bibcode")
-
+        #import pdb;pdb.set_trace()
         x = solr_updater.transform_json_record(rec)
         # self.assertFalse('aff' in x, 'virtual field should not be in solr output')
 
@@ -336,20 +336,24 @@ class TestSolrUpdater(unittest.TestCase):
                 "author",
                 "bibgroup",
                 "body",
-                "citation_count",
+                "citation",
+                "credit",
+                "data",
                 "database",
                 "doctype",
                 "first_author",
                 "identifier",
+                "mention",
                 "orcid_other",
                 "property",
                 "pub",
                 "pub_raw",
+                "reference",
                 "title",
                 "volume",
             ],
         )
-        self.assertEqual(x["scix_id"], "scix:42MM-89VE-90A0")
+        self.assertEqual(x["scix_id"], "scix:0R7S-E4PT-52FF")
         self.assertEqual(round(x["doctype_boost"],3),0.857)
 
         self.app.update_storage(
@@ -553,15 +557,19 @@ class TestSolrUpdater(unittest.TestCase):
                 "author",
                 "bibgroup",
                 "body",
-                "citation_count",
+                "citation",
+                "credit",
+                "data",
                 "database",
                 "doctype",
                 "first_author",
                 "identifier",
+                "mention",
                 "orcid_other",
                 "property",
                 "pub",
                 "pub_raw",
+                "reference",
                 "title",
                 "volume",
             ],
