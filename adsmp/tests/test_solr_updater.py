@@ -342,6 +342,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "database",
                 "doctype",
                 "first_author",
+                "grant",
                 "identifier",
                 "mention",
                 "orcid_other",
@@ -353,7 +354,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "volume",
             ],
         )
-        self.assertEqual(x["scix_id"], "scix:0R7S-E4PT-52FF")
+        self.assertEqual(x["scix_id"], "scix:42MM-89VE-90A0")
         self.assertEqual(round(x["doctype_boost"],3),0.857)
 
         self.app.update_storage(
@@ -563,6 +564,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "database",
                 "doctype",
                 "first_author",
+                "grant",
                 "identifier",
                 "mention",
                 "orcid_other",

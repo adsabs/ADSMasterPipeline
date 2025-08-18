@@ -79,6 +79,7 @@ HAS_FIELDS = [
     "doctype",
     "doi",
     "first_author",
+    "grant",
     "identifier",
     "institution",
     "issue",
