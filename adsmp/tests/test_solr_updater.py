@@ -315,7 +315,7 @@ class TestSolrUpdater(unittest.TestCase):
             },
         )
         rec = self.app.get_record("bibcode")
- 
+
         x = solr_updater.transform_json_record(rec)
         # self.assertFalse('aff' in x, 'virtual field should not be in solr output')
 
