@@ -328,6 +328,40 @@ def process_all_scixid(batch_size, flag):
     logger.info('Completed process_all_scixid, sent total of %s records', sent)
 
 
+def process_all_boost(batch_size):
+    """Process all records in RecordsDB through the Boost Pipeline"""
+    logger.info('Starting process_all_boost')
+    
+    sent = 0
+    batch = []
+    _tasks = []
+    with app.session_scope() as session:
+        # load all records from RecordsDB
+        for rec in session.query(Records) \
+                        .options(load_only(Records.bibcode)) \
+                        .yield_per(batch_size):
+
+            sent += 1
+            if sent % 1000 == 0:
+                logger.debug('Sending %s records', sent)
+
+            batch.append(rec.bibcode)
+            if len(batch) >= batch_size:
+                logger.info('Sending batch of %s records to Boost Pipeline', len(batch))
+                # Send entire batch as one task (same as scix_id)
+                t = tasks.task_boost_request.delay(batch)
+                _tasks.append(t)
+                batch = []
+    
+    if len(batch) > 0:
+        logger.info('Sending final batch of %s records to Boost Pipeline', len(batch))
+        t = tasks.task_boost_request.delay(batch)
+        _tasks.append(t)
+        logger.debug('Sending %s records', len(batch))
+    
+    logger.info('Completed process_all_boost, sent total of %s records', sent)
+
+
 def rebuild_collection(collection_name, batch_size):
     """
     Will grab all recs from the database and send them to solr
@@ -597,6 +631,18 @@ if __name__ == '__main__':
                         default=False,
                         help='Test data for classifier')
 
+    parser.add_argument('--boost',
+                        dest='boost',
+                        action='store_true',
+                        default=False,
+                        help='Run the boost pipeline on the given bibcodes')
+
+    parser.add_argument('--boost-all',
+                        dest='boost_all',
+                        action='store_true',
+                        default=False,
+                        help='Run the boost pipeline on all records in RecordsDB')
+
 
     args = parser.parse_args()
 
@@ -696,6 +742,35 @@ if __name__ == '__main__':
                             keywords_dictionary = {"bibcode": bibcode, "mode": "auto", "operation_step" : operation_step}
 
         app.request_classify(**keywords_dictionary)
+
+    elif args.boost:
+        print('Running Boost Pipeline')
+
+        if args.filename:
+            print('Processing boost requests from file')
+            logger.info('Processing boost requests from file')
+            bibcodes = []
+            with open(args.filename, 'r') as f:
+                for line in f:
+                    bibcode = line.strip()
+                    if bibcode:
+                        bibcodes.append(bibcode)
+            
+        elif args.bibcodes:
+            bibcodes = args.bibcodes
+            if isinstance(bibcodes, str):
+                bibcodes = [bibcodes]
+        else:
+            print('Please provide bibcodes via --bibcodes or --filename')
+        
+        print('Processing boost requests for specified bibcodes')
+        # Use batch processing method (same as scix_id pattern)
+        tasks.task_boost_request.delay(args.bibcodes)
+        
+    elif args.boost_all:
+        print('Running Boost Pipeline on all records in RecordsDB')
+        batch_size = args.batch_size
+        process_all_boost(batch_size)
 
     elif args.rebuild_collection:
         rebuild_collection(args.solr_collection, args.batch_size)

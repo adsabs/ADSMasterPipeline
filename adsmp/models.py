@@ -59,6 +59,7 @@ class Records(Base):
     #  with the value an array holding affiliation strings and '-' placeholders
     augments = Column(Text)
     classifications = Column(Text)
+    boost_factors = Column(Text) # holds a dictionary of boost factors but stored as a string
 
     # when data is received we set the updated timestamp
     bib_data_updated = Column(UTCDateTime, default=None)
@@ -68,6 +69,7 @@ class Records(Base):
     metrics_updated = Column(UTCDateTime, default=None)
     augments_updated = Column(UTCDateTime, default=None)
     classifications_updated = Column(UTCDateTime, default=None)
+    boost_factors_updated = Column(UTCDateTime, default=None)
 
     created = Column(UTCDateTime, default=get_date)
     updated = Column(UTCDateTime, default=get_date)
@@ -86,11 +88,11 @@ class Records(Base):
     _date_fields = ['created', 'updated', 'processed',  # dates
                     'bib_data_updated', 'orcid_claims_updated', 'nonbib_data_updated',
                     'fulltext_updated', 'metrics_updated', 'augments_updated',
-                    'classifications_updated',
+                    'classifications_updated', 'boost_factors_updated',
                     'datalinks_processed', 'solr_processed', 'metrics_processed']
 
     _text_fields = ['id', 'scix_id', 'bibcode', 'status', 'solr_checksum', 'metrics_checksum', 'datalinks_checksum']
-    _json_fields = ['bib_data', 'orcid_claims', 'nonbib_data', 'metrics', 'fulltext', 'augments', 'classifications']
+    _json_fields = ['bib_data', 'orcid_claims', 'nonbib_data', 'metrics', 'fulltext', 'augments', 'classifications', 'boost_factors']
 
     def toJSON(self, for_solr=False, load_only=None):
         if for_solr:

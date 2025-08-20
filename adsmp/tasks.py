@@ -26,6 +26,7 @@ app.conf.CELERY_QUEUES = (
     Queue('index-metrics', app.exchange, routing_key='index-metrics'),
     Queue('index-data-links-resolver', app.exchange, routing_key='index-data-links-resolver'),
     Queue('update-scixid', app.exchange, routing_key='update-scixid'),
+    Queue('boost-request', app.exchange, routing_key='boost-request'),
 )
 
 
@@ -299,6 +300,7 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
             # build the solr record
             if update_solr:
                 solr_payload = solr_updater.transform_json_record(r)
+
                 # ADS microservices assume the identifier field exists and contains the canonical bibcode:
                 if 'identifier' not in solr_payload:
                     solr_payload['identifier'] = []
@@ -381,6 +383,31 @@ def task_delete_documents(bibcode):
         logger.debug('Deleted metrics record: %s', bibcode)
     else:
         logger.debug('Failed to deleted metrics record: %s', bibcode)
+
+
+@app.task(queue='boost-request')
+def task_boost_request(bibcodes):
+    """Process boost requests for bibcodes (single or multiple)
+    
+    @param bibcodes: string or list of strings - the bibcode(s) to process
+    """
+    # Normalize input to always be a list
+    if isinstance(bibcodes, str):
+        bibcodes = [bibcodes]
+    
+    logger.info('Processing boost requests for %s bibcode(s)', len(bibcodes))
+    
+    # Use the new batch processing method (same as scix_id pattern)
+    result = app.generate_boost_request_messages(bibcodes)
+    
+    success_count = result['success']
+    failed_count = result['failed']
+    total_count = result['total']
+    
+    logger.info('Boost processing completed: %s/%s successful, %s failed', 
+                success_count, total_count, failed_count)
+    
+    return result
 
 
 if __name__ == '__main__':

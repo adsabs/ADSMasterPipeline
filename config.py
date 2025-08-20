@@ -13,10 +13,19 @@ CELERY_INCLUDE = ["adsmp.tasks"]
 OUTPUT_CELERY_BROKER = "pyamqp://test:test@localhost:5682/test_augment_pipeline"
 OUTPUT_TASKNAME = "ADSAffil.tasks.task_update_record"
 
+#TODO: NEED TO ASK TAYLOR
+# Boost Pipeline configuration
+OUTPUT_CELERY_BROKER_BOOST = "pyamqp://test:test@localhost:5682/test_boost_pipeline"
+OUTPUT_TASKNAME_BOOST = "ADSBoost.tasks.task_process_boost_request"
+
 
 # db connection to the db instance where we should send data; if not present
 # the SOLR can still work but no metrics updates can be done
 METRICS_SQLALCHEMY_URL = None  #'postgres://postgres@localhost:5432/metrics'
+
+# db connection to the Boost Pipeline database where boost factors are stored
+# if not present, boost factors will not be included in SOLR documents
+BOOST_SQLALCHEMY_URL = None  #'postgresql://boost_user:boost_pass@localhost:5432/boost_db'
 
 
 # Main Solr
