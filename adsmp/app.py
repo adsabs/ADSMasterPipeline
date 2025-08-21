@@ -757,68 +757,6 @@ class ADSMasterPipelineCelery(ADSCelery):
             self.logger.exception('Error sending boost request for bibcode %s: %s', bibcode, e)
             return False
 
-    def generate_boost_request_messages(self, bibcodes, run_id=None, output_path=None):
-        """Build and send boost request messages for multiple bibcodes (batch processing).
-        
-        This method matches the exact same pattern as scix_id processing.
-        
-        Parameters
-        ----------
-        bibcodes : list
-            List of bibcodes to send.
-        run_id : int, optional
-            Optional job/run identifier added to each entry.
-        output_path : str, optional
-            Optional output path hint added to each entry.
-
-        Returns
-        -------
-        dict
-            Dictionary with counts of successful and failed bibcodes.
-        """
-
-        if not bibcodes:
-            self.logger.warning('generate_boost_request_messages called without bibcodes')
-            return {'success': 0, 'failed': 0, 'total': 0}
-        
-        if isinstance(bibcodes, str):
-            bibcodes = [bibcodes]
-
-        success_count = 0
-        failed_count = 0
-        
-        for bibcode in bibcodes:
-            try:
-                # Get record data for this bibcode
-                (rec, metrics, classifications) = self._get_info_for_boost_entry(bibcode)
-                if not rec:
-                    self.logger.debug('Skipping bibcode with no data: %s', bibcode)
-                    failed_count += 1
-                    continue
-                    
-                # Create message for this record
-                message = self._populate_boost_request_from_record(rec, metrics, classifications, 
-                                                                run_id, output_path, None)
-                
-                # Forward message to Boost Pipeline - Celery workers will handle the rest
-                self.forward_message(message, pipeline='boost')
-                self.logger.debug('Sent boost request for bibcode %s to Boost Pipeline', bibcode)
-                success_count += 1
-                
-            except Exception as e:
-                self.logger.exception('Error sending boost request for bibcode %s: %s', bibcode, e)
-                failed_count += 1
-        
-        total_count = len(bibcodes)
-        self.logger.info('Boost batch processing completed: %s/%s successful, %s failed', 
-                        success_count, total_count, failed_count)
-        
-        return {
-            'success': success_count,
-            'failed': failed_count,
-            'total': total_count
-        }
-
     def generate_links_for_resolver(self, record):
         """use nonbib or bib elements of database record and return links for resolver and checksum"""
         # nonbib data has something like

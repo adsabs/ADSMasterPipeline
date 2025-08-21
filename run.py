@@ -348,7 +348,6 @@ def process_all_boost(batch_size):
             batch.append(rec.bibcode)
             if len(batch) >= batch_size:
                 logger.info('Sending batch of %s records to Boost Pipeline', len(batch))
-                # Send entire batch as one task (same as scix_id)
                 t = tasks.task_boost_request.delay(batch)
                 _tasks.append(t)
                 batch = []
@@ -764,7 +763,6 @@ if __name__ == '__main__':
             print('Please provide bibcodes via --bibcodes or --filename')
         
         print('Processing boost requests for specified bibcodes')
-        # Use batch processing method (same as scix_id pattern)
         tasks.task_boost_request.delay(args.bibcodes)
         
     elif args.boost_all:
