@@ -968,9 +968,8 @@ def task_update_sitemap_files():
             for record in all_records:
                 files_dict[record.sitemap_filename].append(record.id)  
         
-                # Spawn parallel Celery tasks - one per file
-        logger.info('Starting file generation for %d sitemap files (%d total records)', 
-                   len(files_dict), len(all_records))
+        # Spawn parallel Celery tasks - one per file
+        logger.info('Starting file generation for %d sitemap files (%d total records)', len(files_dict), len(all_records))
 
         for sitemap_filename, record_ids in files_dict.items():
             # Launch async task for this file
