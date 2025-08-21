@@ -811,6 +811,8 @@ def update_sitemap_index():
 def task_generate_single_sitemap(sitemap_filename, record_ids):
     """Worker task: Generate a single sitemap file for all configured sites given record ids"""
     
+    logger.info('Generating sitemap file: %s (%d records)', sitemap_filename, len(record_ids))
+    
     try:
         # Get sites configuration
         sites_config = app.conf.get('SITES', {})
@@ -831,8 +833,6 @@ def task_generate_single_sitemap(sitemap_filename, record_ids):
             if not file_records:
                 logger.warning('No records found for sitemap file %s', sitemap_filename)
                 return False
-            
-            logger.debug('Processing sitemap file %s with %d records', sitemap_filename, len(file_records))
             
             # Generate file for each configured site
             successful_sites = 0
@@ -890,7 +890,8 @@ def task_generate_single_sitemap(sitemap_filename, record_ids):
                     info.update_flag = False
                 
                 session.commit()
-                logger.debug('Successfully generated %s for %d sites', sitemap_filename, successful_sites)
+                logger.info('Completed sitemap file: %s (%d records, %d sites)', 
+                           sitemap_filename, len(file_records), successful_sites)
                 return True
             else:
                 logger.error('Failed to generate %s for any sites', sitemap_filename)
@@ -899,6 +900,32 @@ def task_generate_single_sitemap(sitemap_filename, record_ids):
     except Exception as e:
         logger.error('Failed to generate sitemap file %s: %s', sitemap_filename, str(e))
         return False
+
+@app.task(queue='generate-single-sitemap')
+def task_generate_sitemap_index():
+    """Generate sitemap index files after individual sitemap files are complete"""
+    try:
+        logger.info('Generating sitemap index files')
+        
+        with app.session_scope() as session:
+            pending_count = session.query(SitemapInfo).filter(SitemapInfo.update_flag == True).count()
+            
+            if pending_count > 0:
+                logger.warning('Found %d records still pending file generation - index may be incomplete', pending_count)
+                # Continue anyway - index will include completed files, exclude incomplete ones
+        
+        success = update_sitemap_index()
+        
+        if success:
+            logger.info('Sitemap index generation completed successfully')
+        else:
+            logger.error('Sitemap index generation failed')
+            
+        return success
+        
+    except Exception as e:
+        logger.error('Error in sitemap index generation task: %s', str(e))
+        raise
 
 @app.task(queue='update-sitemap-files') 
 def task_update_sitemap_files():
@@ -941,47 +968,22 @@ def task_update_sitemap_files():
             for record in all_records:
                 files_dict[record.sitemap_filename].append(record.id)  
         
-        # Spawn parallel Celery tasks - one per file
-        logger.info('Spawning %d parallel tasks for sitemap files', len(files_dict))
-        task_results = []
-        
+                # Spawn parallel Celery tasks - one per file
+        logger.info('Starting file generation for %d sitemap files (%d total records)', 
+                   len(files_dict), len(all_records))
+
         for sitemap_filename, record_ids in files_dict.items():
             # Launch async task for this file
-            result = task_generate_single_sitemap.apply_async(
+            task_generate_single_sitemap.apply_async(
                 args=(sitemap_filename, record_ids)
             )
-            task_results.append((sitemap_filename, result))
             logger.debug('Spawned task for %s with %d records', sitemap_filename, len(record_ids))
         
-        # Wait for all parallel tasks to complete
-        successful_files = 0
-        failed_files = 0
+        index_delay = app.conf.get('SITEMAP_INDEX_GENERATION_DELAY', 15)
         
-        for sitemap_filename, result in task_results:
-            try:
-                # Wait for this specific task to complete (with timeout)
-                success = result.get(timeout=300)  # 5 minute timeout per file
-                if success:
-                    successful_files += 1
-                    logger.debug('Successfully completed %s', sitemap_filename)
-                else:
-                    failed_files += 1
-                    logger.error('Task returned False for %s', sitemap_filename)
-            except Exception as e:
-                failed_files += 1
-                logger.error('Task failed for %s: %s', sitemap_filename, str(e))
+        task_generate_sitemap_index.apply_async(countdown=index_delay)
         
-        logger.info('Sitemap generation completed: %d successful, %d failed', 
-                   successful_files, failed_files)
-        
-        # Generate index files after all individual files are done
-        logger.info('Generating sitemap index files')
-        index_success = update_sitemap_index()  
-        
-        if not index_success:
-            logger.error('Sitemap index generation failed')
-        else:
-            logger.info('Sitemap workflow completed successfully')
+        logger.info('Sitemap file generation tasks submitted, index generation scheduled')
         
     except Exception as e:
         logger.error('Error in orchestrator task: %s', str(e))

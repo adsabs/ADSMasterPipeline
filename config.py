@@ -37,6 +37,7 @@ ADS_API_TOKEN = "fixme"
 MAX_RECORDS_PER_SITEMAP = 50000
 SITEMAP_BOOTSTRAP_BATCH_SIZE = 50000  # Increased from 10000 for better performance on large datasets
 SITEMAP_DIR = '/app/logs/sitemap/'
+SITEMAP_INDEX_GENERATION_DELAY = 30
 
 # Site configurations for multi-site sitemap generation
 SITES = {
