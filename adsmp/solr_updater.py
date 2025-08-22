@@ -528,6 +528,13 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
+    boost_columns = ['doctype_boost', 'recency_boost', 'boost_factor', 'astronomy_final_boost', 'physics_final_boost', \
+        'earth_science_final_boost', 'planetary_science_final_boost', 'heliophysics_final_boost', 'general_final_boost']
+    
+    for column in boost_columns:
+        if column not in out.keys():
+            out[column] = 1
+    
     out["scix_id"] = None
     if db_record.get("scix_id", None):
         out["scix_id"] = db_record.get("scix_id")
