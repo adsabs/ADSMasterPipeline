@@ -19,6 +19,9 @@ This pipeline is collecting results from the sub-ordinate pipelines (bibliograph
     - index-data-links-resolver: internal queue of records to send to data links resolver
     - update-scix-id: update `scix_id` field for records with specified bibcodes 
     - scix-id-flag: flag to set the action for update-scix-id: update specified records, update all records, force update specific scix_ids, force update all scix_ids, reset specific scix_id to None, reset all scix_ids to None
+    - manage-sitemap: manage sitemap records for SEO optimization
+    - generate-single-sitemap: generate individual sitemap XML files
+    - update-sitemap-files: orchestrate sitemap file generation workflow
 
 ## Setup (recommended)
 
@@ -47,6 +50,51 @@ The pipeline will NOT send anything to SOLR/Metrics DB/data links resolver by de
   17:01-22:00 | normal mode, invoked every 5 mins
   22:01-23:59 | forced mode, catch updates 
 
+
+## Sitemap Management
+
+### Quick Start
+
+#### 1. First-Time Setup (Bootstrap)
+⚠️ **Warning**: Bootstrap processes all Records (~28.8M+) and takes **~3.5 hours**.
+
+**Production Performance** (Verified with 28,816,728 records):
+- **Phase 1**: Database population (~1 hour)
+- **Phase 2**: Memory preparation (~1h 40m, 50+ GB RAM)  
+- **Phase 3**: File generation (~1h 45m, creates 1,154 XML files)
+- **Rate**: 137,223 records/minute average, 4,574 records/second peak
+
+```bash
+# Initialize sitemap system for all existing records
+python run.py --manage-sitemap --action bootstrap
+
+# Wait for completion (monitor progress - see Monitoring section below)
+# Then generate XML files
+python run.py --update-sitemap-files
+```
+
+#### 2. Regular Operations
+For ongoing updates when records are added/modified:
+
+```bash
+# Add specific bibcodes to sitemap
+python run.py --manage-sitemap --action add --bibcodes 2023ApJ...123..456A 2023MNRAS.456..789B
+
+# Add bibcodes from file
+python run.py --manage-sitemap --action add --filename bibcodes.txt
+
+# Remove bibcodes from sitemap
+python run.py --manage-sitemap --action remove --bibcodes 2023ApJ...123..456A
+
+# Force update existing records (ignores timestamps)
+python run.py --manage-sitemap --action force-update --filename updated_bibcodes.txt
+
+# Generate/update XML files (always run after manage-sitemap operations) - Make sure manage-sitemap operations have completed before running this
+python run.py --update-sitemap-files
+
+# Delete table 
+python run.py --manage-sitemap --action delete-table
+```
 
 ## Testing
 

@@ -1,6 +1,8 @@
-
 from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
+import os
+from collections import defaultdict
+from itertools import chain
 from . import exceptions
 from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records
 from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList, BoostRequestRecord, BoostRequestRecordList, BoostResponseRecord, BoostResponseRecordList,Status as AdsMsgStatus
@@ -11,6 +13,7 @@ from sqlalchemy import Table, bindparam
 import adsputils
 import json
 from adsmp import solr_updater
+from adsmp import templates
 from adsputils import serializer
 from sqlalchemy import exc
 from multiprocessing.util import register_after_fork
@@ -21,7 +24,6 @@ import sys
 from sqlalchemy.dialects.postgresql import insert
 import csv
 from SciXPipelineUtils import scix_id
-
 
 class ADSMasterPipelineCelery(ADSCelery):
 
@@ -74,6 +76,11 @@ class ADSMasterPipelineCelery(ADSCelery):
                 'rn_citation_data': getattr(self._metrics_table_upsert.excluded, 'rn_citation_data')}
             self._metrics_table_upsert = self._metrics_table_upsert.on_conflict_do_update(index_elements=['bibcode'], set_=update_columns)
 
+    @property
+    def sitemap_dir(self):
+        """Get the sitemap directory from configuration"""
+        return self.conf.get('SITEMAP_DIR', '/app/logs/sitemap/')
+
     def update_storage(self, bibcode, type, payload):
         """Update the document in the database, every time
         empty the solr/metrics processed timestamps.
@@ -83,60 +90,60 @@ class ADSMasterPipelineCelery(ADSCelery):
             payload = json.dumps(payload)
 
         with self.session_scope() as session:
-            r = session.query(Records).filter_by(bibcode=bibcode).first()
-            if r is None:
-                r = Records(bibcode=bibcode)
-                session.add(r)
+            record = session.query(Records).filter_by(bibcode=bibcode).first()
+            if record is None:
+                record = Records(bibcode=bibcode)
+                session.add(record)
             now = adsputils.get_date()
             oldval = None
             if type == 'metadata' or type == 'bib_data':
-                oldval = r.bib_data
-                r.bib_data = payload
-                r.bib_data_updated = now
+                oldval = record.bib_data
+                record.bib_data = payload
+                record.bib_data_updated = now
             elif type == 'nonbib_data':
-                oldval = r.nonbib_data
-                r.nonbib_data = payload
-                r.nonbib_data_updated = now
+                oldval = record.nonbib_data
+                record.nonbib_data = payload
+                record.nonbib_data_updated = now
             elif type == 'orcid_claims':
-                oldval = r.orcid_claims
-                r.orcid_claims = payload
-                r.orcid_claims_updated = now
+                oldval = record.orcid_claims
+                record.orcid_claims = payload
+                record.orcid_claims_updated = now
             elif type == 'fulltext':
                 oldval = 'not-stored'
-                r.fulltext = payload
-                r.fulltext_updated = now
+                record.fulltext = payload
+                record.fulltext_updated = now
             elif type == 'metrics':
                 oldval = 'not-stored'
-                r.metrics = payload
-                r.metrics_updated = now
+                record.metrics = payload
+                record.metrics_updated = now
             elif type == 'augment':
                 # payload contains new value for affilation fields
                 # r.augments holds a dict, save it in database
                 oldval = 'not-stored'
-                r.augments = payload
-                r.augments_updated = now
+                record.augments = payload
+                record.augments_updated = now
             elif type == 'classify':
                 # payload contains new value for collections field
                 # r.augments holds a list, save it in database
                 oldval = 'not-stored'
-                r.classifications = payload
-                r.classifications_updated = now
+                record.classifications = payload
+                record.classifications_updated = now
             elif type == 'boost':
                 # payload contains new value for boost fields
                 # r.augments holds a dict, save it in database
                 oldval = 'not-stored'
-                r.boost_factors = payload
-                r.boost_factors_updated = now
+                record.boost_factors = payload
+                record.boost_factors_updated = now
             else:
                 raise Exception('Unknown type: %s' % type)
             session.add(ChangeLog(key=bibcode, type=type, oldvalue=oldval))
-            r.updated = now
-            out = r.toJSON()                      
+            record.updated = now
+            out = record.toJSON()                      
             try:
                 session.flush()
-                if not r.scix_id and r.bib_data:
-                    r.scix_id = "scix:" + str(self.generate_scix_id(r.bib_data))
-                    out = r.toJSON()
+                if not record.scix_id and record.bib_data:
+                    record.scix_id = "scix:" + str(self.generate_scix_id(record.bib_data))
+                    out = record.toJSON()
                 session.commit()
 
                 # Send payload to Boost pipeline
@@ -161,6 +168,11 @@ class ADSMasterPipelineCelery(ADSCelery):
             if r is not None:
                 session.add(ChangeLog(key='bibcode:%s' % bibcode, type='deleted', oldvalue=serializer.dumps(r.toJSON())))
                 session.delete(r)
+                session.commit()
+                return True
+            s = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
+            if s is not None:
+                session.delete(s)
                 session.commit()
                 return True
 
@@ -806,3 +818,116 @@ class ADSMasterPipelineCelery(ADSCelery):
                     # here if record holds unexpected value
                     self.logger.error('invalid value in bib data, bibcode = {}, type = {}, value = {}'.format(bibcode, type(bib_links_record), bib_links_record))
         return resolver_record
+
+    
+    def _populate_sitemap_table(self, sitemap_record, sitemap_info=None): 
+        """Populate the sitemap with the given record id and action. 
+        Only used for 'add' and 'force-update' actions. 
+
+        :param sitemap_record: dictionary with record data
+        :param sitemap_info: existing SitemapInfo object if updating
+        """
+
+        with self.session_scope() as session:
+            # If the sitemap_record is new, add it to the database 
+            if sitemap_info is None:
+                sitemap_info = SitemapInfo(
+                    record_id=sitemap_record.get('record_id'),
+                    bibcode=sitemap_record.get('bibcode'),
+                    bib_data_updated=sitemap_record.get('bib_data_updated'),
+                    scix_id=sitemap_record.get('scix_id'),
+                    sitemap_filename=sitemap_record.get('sitemap_filename'),
+                    filename_lastmoddate=sitemap_record.get('filename_lastmoddate'),
+                    update_flag=sitemap_record.get('update_flag', False)
+                )
+                session.add(sitemap_info)
+                
+                # Handle sitemap filename assignment for new records
+                # get list of all sitemap filenames from the SiteMapInfo table
+                sitemap_files = session.query(SitemapInfo.sitemap_filename).all()
+                
+                # flatten the list of tuples into a list of strings
+                sitemap_files = list(chain.from_iterable(sitemap_files))
+                
+                # remove None values from the list
+                sitemap_files = list(filter(lambda sitemap_file: sitemap_file is not None, sitemap_files))
+
+                if sitemap_files:
+                    # split all the filenames to get the index of the latest sitemap file
+                    sitemap_file_indices = [int(sitemap_file.split('_bib_')[-1].split('.')[0]) for sitemap_file in sitemap_files]
+                    latest_index = max(sitemap_file_indices)
+                    sitemap_file_latest = 'sitemap_bib_{}.xml'.format(latest_index)
+
+                    # Check the number of records assigned to sitemap_file_latest
+                    sitemap_file_latest_count = session.query(SitemapInfo).filter_by(sitemap_filename=sitemap_file_latest).count()
+                
+                    if sitemap_file_latest_count >= self.conf.get('MAX_RECORDS_PER_SITEMAP', 3): 
+                        latest_index += 1
+                        sitemap_filename = 'sitemap_bib_{}.xml'.format(latest_index)
+                    else:
+                        sitemap_filename = sitemap_file_latest
+                    
+                    sitemap_info.sitemap_filename = sitemap_filename
+                else:
+                    sitemap_info.sitemap_filename = 'sitemap_bib_1.xml'
+                    
+                
+            else:
+                # For existing records, update only the fields that can change
+                # The sitemap_record already contains the preserved values from sitemap_info
+                update_data = {}
+                
+                # Always update these fields if they exist in sitemap_record
+                for field in ['bib_data_updated', 'sitemap_filename', 'filename_lastmoddate']:
+                    if field in sitemap_record:
+                        update_data[field] = sitemap_record[field]
+                
+                # Always update update_flag (this is the key field for force-update)
+                update_data['update_flag'] = sitemap_record.get('update_flag', False)
+                
+                session.query(SitemapInfo).filter_by(record_id=sitemap_record['record_id']).update(update_data)
+               
+            try:
+                session.commit() 
+            except exc.IntegrityError as e:
+                self.logger.error('Could not update sitemap table for record_id: %s', sitemap_record['record_id'])
+                session.rollback()
+                raise
+            except Exception as e:
+                session.rollback()
+                raise
+
+        
+    def get_sitemap_info(self, bibcode):
+        """Get sitemap info for given bibcode.
+
+        :param bibcode: bibcode of record to be updated
+        """
+        with self.session_scope() as session:
+            info = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
+            if info is None:
+                return None
+            return info.toJSON()
+        
+    def delete_contents(self, table):
+        """Delete all contents of the table
+
+        :param table: string, name of the table
+        """
+        with self.session_scope() as session:
+            session.query(table).delete()
+            session.commit()
+    
+    def backup_sitemap_files(self, directory):
+        """Backup the sitemap files to the given directory
+
+        :param directory: string, directory to backup the sitemap files
+        """
+
+        # move dir to /app/tmp 
+        date = adsputils.get_date()
+        tmpdir = '/app/logs/tmp/sitemap_{}_{}_{}-{}/'.format(date.year, date.month, date.day, date.time())
+        os.system('mkdir -p {}'.format(tmpdir))
+        os.system('mv {}/* {}/'.format(directory, tmpdir))
+        return
+

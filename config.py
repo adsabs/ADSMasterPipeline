@@ -47,6 +47,34 @@ SOLR_URL_OLD = "http://localhost:9984/solr/collection1/query"
 LINKS_RESOLVER_UPDATE_URL = "http://localhost:8080/update"
 ADS_API_TOKEN = "fixme"
 
+# Sitemap configuration
+MAX_RECORDS_PER_SITEMAP = 50000
+SITEMAP_BOOTSTRAP_BATCH_SIZE = 50000  
+SITEMAP_DIR = '/app/logs/sitemap/'
+SITEMAP_INDEX_GENERATION_DELAY = 15 # This is the delay between the generation of the sitemap and the indexing of the sitemap
+
+# Site configurations for multi-site sitemap generation
+SITES = {
+    'ads': {
+        'name': 'ADS',
+        'base_url': 'https://ui.adsabs.harvard.edu',
+        'sitemap_url': 'https://ui.adsabs.harvard.edu/sitemap',
+        'abs_url_pattern': 'https://ui.adsabs.harvard.edu/abs/{bibcode}/abstract'
+    },
+    'scix': {
+        'name': 'SciX Explorer', 
+        'base_url': 'https://scixplorer.org',
+        'sitemap_url': 'https://scixplorer.org/sitemap',
+        'abs_url_pattern': 'https://scixplorer.org/abs/{bibcode}/abstract'
+    }
+}
+
+# S3 Configuration for sitemap file sync
+SITEMAP_S3_SYNC_ENABLED = True  # Set to True to enable S3 sync
+SITEMAP_S3_BUCKET = 'sitemaps'  # S3 bucket for sitemap files
+AWS_ACCESS_KEY_ID = 'AWS_ACCESS_KEY_ID'
+AWS_SECRET_ACCESS_KEY = 'AWS_SECRET_ACCESS_KEY'
+AWS_DEFAULT_REGION = 'us-east-1'
 
 ENABLE_HAS = True
 
@@ -58,16 +86,20 @@ HAS_FIELDS = [
     "author",
     "bibgroup",
     "body",
-    "citation_count",
+    "citation",
     "comment",
+    "credit",
+    "data",
     "database",
     "doctype",
     "doi",
     "first_author",
+    "grant",
     "identifier",
     "institution",
     "issue",
     "keyword",
+    "mention",
     "orcid_other",
     "orcid_pub",
     "orcid_user",
@@ -76,7 +108,7 @@ HAS_FIELDS = [
     "pub",
     "pub_raw",
     "publisher",
-    "references",
+    "reference",
     "title",
     "uat",
     "volume",

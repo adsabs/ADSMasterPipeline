@@ -1,0 +1,128 @@
+Sitemap: {sitemap_url}/sitemap_index.xml
+
+# Google
+# http://www.google.com/bot.html
+User-agent: Googlebot
+Disallow: /v1/
+Disallow: /resources
+Disallow: /core
+Disallow: /tugboat
+Disallow: /link_gateway/
+Disallow: /search/
+Disallow: /execute-query/
+Disallow: /status
+Disallow: /cgi-bin/
+
+Allow: /help/
+Allow: /about/
+Allow: /blog/
+Allow: /abs/
+Allow: /full/
+
+Disallow: /abs/*/coreads
+Disallow: /abs/*/similar
+Disallow: /abs/*/toc
+Disallow: /abs/*/graphics
+Disallow: /abs/*/metrics
+Disallow: /abs/*/exportcitation
+
+# MS Live
+# http://search.msn.com/msnbot.htm
+User-agent: msnbot
+
+Disallow: /v1/
+Disallow: /resources
+Disallow: /core
+Disallow: /tugboat
+Disallow: /link_gateway/
+Disallow: /search/
+Disallow: /execute-query/
+Disallow: /status
+Disallow: /cgi-bin/
+
+Allow: /help/
+Allow: /about/
+Allow: /blog/
+Allow: /abs/
+Allow: /full/
+
+Disallow: /abs/*/coreads
+Disallow: /abs/*/similar
+Disallow: /abs/*/toc
+Disallow: /abs/*/graphics
+Disallow: /abs/*/metrics
+Disallow: /abs/*/exportcitation
+
+# Yahoo
+# http://help.yahoo.com/help/us/ysearch/slurp
+User-agent: Slurp
+
+Disallow: /v1/
+Disallow: /resources
+Disallow: /core
+Disallow: /tugboat
+Disallow: /link_gateway/
+Disallow: /search/
+Disallow: /execute-query/
+Disallow: /status
+Disallow: /cgi-bin/
+
+Allow: /help/
+Allow: /about/
+Allow: /blog/
+Allow: /abs/
+Allow: /full/
+
+Disallow: /abs/*/coreads
+Disallow: /abs/*/similar
+Disallow: /abs/*/toc
+Disallow: /abs/*/graphics
+Disallow: /abs/*/metrics
+Disallow: /abs/*/exportcitation
+
+# Ask.com
+# http://about.ask.com/en/docs/about/webmasters.shtml
+User-agent: Teoma
+
+
+Disallow: /v1/
+Disallow: /resources
+Disallow: /core
+Disallow: /tugboat
+Disallow: /link_gateway/
+Disallow: /search/
+Disallow: /execute-query/
+Disallow: /status
+Disallow: /cgi-bin/
+Disallow: /full/
+
+Allow: /help/
+Allow: /about/
+Allow: /blog/
+Allow: /abs/
+
+Disallow: /abs/*/coreads
+Disallow: /abs/*/similar
+Disallow: /abs/*/toc
+Disallow: /abs/*/graphics
+Disallow: /abs/*/metrics
+Disallow: /abs/*/exportcitation
+
+# disallow harvesting from all other robots
+User-agent: *
+
+Disallow: /v1/
+Disallow: /resources
+Disallow: /core
+Disallow: /tugboat
+Disallow: /link_gateway/
+Disallow: /search/
+Disallow: /execute-query/
+Disallow: /status
+Disallow: /cgi-bin/
+Disallow: /abs/
+Disallow: /full/
+
+Allow: /help/
+Allow: /about/
+Allow: /blog/
