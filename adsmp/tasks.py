@@ -595,7 +595,7 @@ def task_manage_sitemap(bibcodes, action):
         # update all record_id from records table into sitemap table
         successful_count = 0
         failed_count = 0
-            
+      
         for bibcode in bibcodes:
             try:
                 record = app.get_record(bibcode, load_only=fields)
@@ -606,22 +606,23 @@ def task_manage_sitemap(bibcodes, action):
                     failed_count += 1
                     continue
 
-                    # Create sitemap record data structure with default None values for filename_lastmoddate and sitemap_filename
+                # Create sitemap record data structure with default None values for filename_lastmoddate and sitemap_filename
                 sitemap_record = {
-                            'record_id': record.get('id'), # Records object uses attribute access
-                            'bibcode': record.get('bibcode'), # Records object uses attribute access  
-                            'bib_data_updated': record.get('bib_data_updated', None),
-                    'filename_lastmoddate': None, 
-                    'sitemap_filename': None,
-                            'update_flag': False
-                        }
+                        'record_id': record.get('id'), # Records object uses attribute access
+                        'bibcode': record.get('bibcode'), # Records object uses attribute access  
+                        'bib_data_updated': record.get('bib_data_updated', None),
+                        'filename_lastmoddate': None, 
+                        'sitemap_filename': None,
+                        'scix_id': None,
+                        'update_flag': False
+                }
                     
                 # New sitemap record
                 if sitemap_info is None:            
                     sitemap_record['update_flag'] = True
                     sitemap_records.append((sitemap_record['record_id'], sitemap_record['bibcode']))
                     app._populate_sitemap_table(sitemap_record) 
-                        
+                    
 
                 else:
                     # Sitemap record exists, update it 
@@ -644,16 +645,15 @@ def task_manage_sitemap(bibcodes, action):
                 
                 successful_count += 1
                 logger.debug('Successfully processed sitemap for bibcode: %s', bibcode)
-                    
+                
             except Exception as e:
                 failed_count += 1
                 logger.error('Failed to populate sitemap table for bibcode %s: %s', bibcode, str(e))
                 # Continue to next bibcode instead of crashing
                 continue
-            
-            logger.info('Sitemap population completed: %d successful, %d failed out of %d total bibcodes', 
-                        successful_count, failed_count, len(bibcodes)) 
-            logger.info('%s Total sitemap records created: %s', len(sitemap_records), sitemap_records)
+        logger.info('Sitemap population completed: %d successful, %d failed out of %d total bibcodes', 
+                    successful_count, failed_count, len(bibcodes)) 
+        logger.info('%s Total sitemap records created: %s', len(sitemap_records), sitemap_records)
 
 # TODO: Add directory names: about, help, blog  
 # TODO: Need to query github to find when above dirs are updated: https://docs.github.com/en/rest?apiVersion=2022-11-28
