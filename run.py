@@ -329,6 +329,39 @@ def process_all_scixid(batch_size, flag):
     logger.info('Completed process_all_scixid, sent total of %s records', sent)
 
 
+def process_all_boost(batch_size):
+    """Process all records in RecordsDB through the Boost Pipeline"""
+    logger.info('Starting process_all_boost')
+    
+    sent = 0
+    batch = []
+    _tasks = []
+    with app.session_scope() as session:
+        # load all records from RecordsDB
+        for rec in session.query(Records) \
+                        .options(load_only(Records.bibcode)) \
+                        .yield_per(batch_size):
+
+            sent += 1
+            if sent % 1000 == 0:
+                logger.debug('Sending %s records', sent)
+
+            batch.append(rec.bibcode)
+            if len(batch) >= batch_size:
+                logger.info('Sending batch of %s records to Boost Pipeline', len(batch))
+                t = tasks.task_boost_request.delay(batch)
+                _tasks.append(t)
+                batch = []
+    
+    if len(batch) > 0:
+        logger.info('Sending final batch of %s records to Boost Pipeline', len(batch))
+        t = tasks.task_boost_request.delay(batch)
+        _tasks.append(t)
+        logger.debug('Sending %s records', len(batch))
+    
+    logger.info('Completed process_all_boost, sent total of %s records', sent)
+
+
 def rebuild_collection(collection_name, batch_size):
     """
     Will grab all recs from the database and send them to solr
@@ -724,11 +757,29 @@ if __name__ == '__main__':
                         default=False,
                         help='Allow the classifier to be run in manual mode')
 
+    parser.add_argument('--classifier_batch',
+                        dest='classifier_batch',
+                        action='store',
+                        default=500,
+                        help='Number of records sent to clssifier per batch')
+
     parser.add_argument('--validate_classifier',
                         dest='validate_classifier',
                         action='store_true',
                         default=False,
                         help='Test data for classifier')
+
+    parser.add_argument('--boost',
+                        dest='boost',
+                        action='store_true',
+                        default=False,
+                        help='Run the boost pipeline on the given bibcodes')
+
+    parser.add_argument('--boost-all',
+                        dest='boost_all',
+                        action='store_true',
+                        default=False,
+                        help='Run the boost pipeline on all records in RecordsDB')
 
 
     args = parser.parse_args()
@@ -807,6 +858,10 @@ if __name__ == '__main__':
             operation_step = 'classify'
         else:
             print('Select classsification process')
+        if args.classifier_batch:
+            classifier_batch = int(args.classifier_batch)
+        else:
+            classifier_batch = 500
         if args.validate_classifier:
             data = None
             check_boolean = True
@@ -819,7 +874,7 @@ if __name__ == '__main__':
                 filename = args.filename
                 print('classifying bibcodes from file via queue')
                 logger.info('Classifying records from file via queue')
-                keywords_dictionary = {"filename": filename, "mode": "manual", "data": data, "check_boolean": check_boolean, "operation_step" : operation_step}
+                keywords_dictionary = {"filename": filename, "mode": "manual", "batch_size":classifier_batch, "data": data, "check_boolean": check_boolean, "operation_step" : operation_step}
         else:
             if args.filename:
                 with open(args.filename, 'r') as f:
@@ -829,6 +884,34 @@ if __name__ == '__main__':
                             keywords_dictionary = {"bibcode": bibcode, "mode": "auto", "operation_step" : operation_step}
 
         app.request_classify(**keywords_dictionary)
+
+    elif args.boost:
+        print('Running Boost Pipeline')
+
+        if args.filename:
+            print('Processing boost requests from file')
+            logger.info('Processing boost requests from file')
+            bibcodes = []
+            with open(args.filename, 'r') as f:
+                for line in f:
+                    bibcode = line.strip()
+                    if bibcode:
+                        bibcodes.append(bibcode)
+            
+        elif args.bibcodes:
+            bibcodes = args.bibcodes
+            if isinstance(bibcodes, str):
+                bibcodes = [bibcodes]
+        else:
+            print('Please provide bibcodes via --bibcodes or --filename')
+        
+        print('Processing boost requests for following bibcodes: {}'.format(bibcodes))
+        tasks.task_boost_request.delay(bibcodes)
+        
+    elif args.boost_all:
+        print('Running Boost Pipeline on all records in RecordsDB')
+        batch_size = args.batch_size
+        process_all_boost(batch_size)
 
     elif args.rebuild_collection:
         rebuild_collection(args.solr_collection, args.batch_size)

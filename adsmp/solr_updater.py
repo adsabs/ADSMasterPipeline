@@ -188,6 +188,41 @@ def extract_classifications_pipeline(db_classifications, solrdoc):
     }
 
 
+def extract_boost_pipeline(db_boost_factors, solrdoc):
+    """retrieve expected boost factors from Boost Pipeline database
+    
+    boost_factors is retrieved from the Boost Pipeline database and processed here"""
+    if db_boost_factors is None or len(db_boost_factors) == 0:
+        return {}
+    
+    # Extract boost factors from the Boost Pipeline data
+    boost_data = {}
+    
+    if isinstance(db_boost_factors, str):
+        try:
+            db_boost_factors = json.loads(db_boost_factors)
+        except Exception:
+            logger.warning(f"Failed to parse boost_factors JSON: {db_boost_factors}")
+            return {}
+    
+    if isinstance(db_boost_factors, dict):
+        # Extract individual boost factors
+        boost_data.update({
+            'doctype_boost': db_boost_factors.get('doctype_boost'),
+            'refereed_boost': db_boost_factors.get('refereed_boost'),
+            'recency_boost': db_boost_factors.get('recency_boost'),
+            'boost_factor': db_boost_factors.get('boost_factor'),
+        })
+        
+        # Extract discipline-specific final boosts
+        for discipline in ['astronomy', 'physics', 'earth_science', 'planetary_science', 'heliophysics', 'general']:
+            final_boost_key = f'{discipline}_final_boost'
+            if final_boost_key in db_boost_factors:
+                boost_data[final_boost_key] = db_boost_factors[final_boost_key]
+        
+    return boost_data
+
+
 def extract_fulltext(data, solrdoc):
     out = {}
     for x, f in (
@@ -337,6 +372,7 @@ DB_COLUMN_DESTINATIONS = [
     ("#timestamps", get_timestamps),  # use 'id' to be always called
     ("augments", extract_augments_pipeline),  # over aff field, adds aff_*
     ("classifications", extract_classifications_pipeline), # overwrites databse field in bib_data 
+    ("boost_factors", extract_boost_pipeline),  # adds boost factors from Boost Pipeline
 ]
 
 
@@ -492,26 +528,16 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
+    boost_columns = ['doctype_boost', 'recency_boost', 'boost_factor', 'astronomy_final_boost', 'physics_final_boost', \
+        'earth_science_final_boost', 'planetary_science_final_boost', 'heliophysics_final_boost', 'general_final_boost']
+    
+    for column in boost_columns:
+        if column not in out.keys():
+            out[column] = 1
+    
     out["scix_id"] = None
     if db_record.get("scix_id", None):
         out["scix_id"] = db_record.get("scix_id")
-
-
-    # Compute doctype scores on the fly
-    out["doctype_boost"] = None
-
-    if config.get("DOCTYPE_RANKING", False):
-        doctype_rank = config.get("DOCTYPE_RANKING") 
-        unique_ranks = sorted(set(doctype_rank.values()))
-
-        # Map ranks to scores evenly spaced between 0 and 1 (invert: lowest rank gets the highest score)
-        rank_to_score = {rank: 1 - ( i / (len(unique_ranks) - 1)) for i, rank in enumerate(unique_ranks)}
-
-        # Assign scores to each rank
-        doctype_scores = {doctype: rank_to_score[rank] for doctype, rank in doctype_rank.items()}
-
-        if "doctype" in out.keys():
-            out["doctype_boost"] = doctype_scores.get(out["doctype"], None)
 
     if config.get("ENABLE_HAS", False):
         # Read-in names of fields to check for solr "has:" field

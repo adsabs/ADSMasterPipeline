@@ -10,13 +10,27 @@ SQLALCHEMY_ECHO = False
 LOGGING_LEVEL = "INFO"
 CELERY_INCLUDE = ["adsmp.tasks"]
 
-OUTPUT_CELERY_BROKER = "pyamqp://test:test@localhost:5682/test_augment_pipeline"
-OUTPUT_TASKNAME = "ADSAffil.tasks.task_update_record"
+FORWARD_MSG_DICT = [ \
+    { \
+    'OUTPUT_PIPELINE': 'affil', \
+    'OUTPUT_CELERY_BROKER': "pyamqp://guest:guest@rabbitmq-broker-1:5672/test_augment_pipeline" , \
+    'OUTPUT_TASKNAME': "ADSAffil.tasks.task_update_record" \
+    }, \
+    { \
+    'OUTPUT_PIPELINE': 'boost' , \
+    'OUTPUT_CELERY_BROKER': "pyamqp://guest:guest@rabbitmq-broker-1:5672/boost_pipeline", \
+    'OUTPUT_TASKNAME': "adsboost.tasks.task_process_boost_request_message" \
+    }] 
 
+TESTING_MODE = True
 
 # db connection to the db instance where we should send data; if not present
 # the SOLR can still work but no metrics updates can be done
 METRICS_SQLALCHEMY_URL = None  #'postgres://postgres@localhost:5432/metrics'
+
+# db connection to the Boost Pipeline database where boost factors are stored
+# if not present, boost factors will not be included in SOLR documents
+BOOST_SQLALCHEMY_URL = None  #'postgresql://boost_user:boost_pass@localhost:5432/boost_db'
 
 
 # Main Solr
@@ -72,16 +86,20 @@ HAS_FIELDS = [
     "author",
     "bibgroup",
     "body",
-    "citation_count",
+    "citation",
     "comment",
+    "credit",
+    "data",
     "database",
     "doctype",
     "doi",
     "first_author",
+    "grant",
     "identifier",
     "institution",
     "issue",
     "keyword",
+    "mention",
     "orcid_other",
     "orcid_pub",
     "orcid_user",
@@ -90,7 +108,7 @@ HAS_FIELDS = [
     "pub",
     "pub_raw",
     "publisher",
-    "references",
+    "reference",
     "title",
     "uat",
     "volume",

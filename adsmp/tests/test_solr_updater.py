@@ -118,6 +118,20 @@ class TestSolrUpdater(unittest.TestCase):
         )
         self.app.update_storage(
             "bibcode",
+            "boost",
+            {
+                "bibcode": "bibcode",
+                "scix_id": "scix_id",
+                "status": "updated",
+                "doctype_boost": 0.8571428571428572,
+                "recency_boost": 1.0,
+                "boost_factor": 0.5142857142857143,
+                "astronomy_final_boost": 0.5142857142857143,
+                "physics_final_boost": 0.5142857142857143,
+            }
+        )
+        self.app.update_storage(
+            "bibcode",
             "fulltext",
             {
                 "body": "texttext",
@@ -315,7 +329,6 @@ class TestSolrUpdater(unittest.TestCase):
             },
         )
         rec = self.app.get_record("bibcode")
-
         x = solr_updater.transform_json_record(rec)
         # self.assertFalse('aff' in x, 'virtual field should not be in solr output')
 
@@ -336,21 +349,46 @@ class TestSolrUpdater(unittest.TestCase):
                 "author",
                 "bibgroup",
                 "body",
-                "citation_count",
+                "citation",
+                "credit",
+                "data",
                 "database",
                 "doctype",
                 "first_author",
+                "grant",
                 "identifier",
+                "mention",
                 "orcid_other",
                 "property",
                 "pub",
                 "pub_raw",
+                "reference",
                 "title",
                 "volume",
             ],
         )
-        self.assertEqual(x["scix_id"], "scix:0R7S-E4PT-52FF")
+        self.assertEqual(x["scix_id"], "scix:42MM-89VE-90A0")
         self.assertEqual(round(x["doctype_boost"],3),0.857)
+
+        self.app.update_storage(
+            "bibcode",
+            "boost",
+            {
+                "bibcode": "bibcode",
+                "scix_id": "scix_id",
+                "status": "updated",
+                "doctype_boost": 0.8571428571428572,
+                "recency_boost": 1.0,
+                "boost_factor": 0.5142857142857143,
+                "astronomy_final_boost": 0.5142857142857143,
+                "physics_final_boost": 0.5142857142857143,
+            }
+        )
+        rec = self.app.get_record("bibcode")
+        x = solr_updater.transform_json_record(rec)
+        self.assertEqual(x["scix_id"], "scix:42MM-89VE-90A0")
+        self.assertEqual(round(x["doctype_boost"],3),0.857)
+        self.assertEqual(round(x["astronomy_final_boost"],3), 0.514)
 
         self.app.update_storage(
             "bibcode",
@@ -553,15 +591,20 @@ class TestSolrUpdater(unittest.TestCase):
                 "author",
                 "bibgroup",
                 "body",
-                "citation_count",
+                "citation",
+                "credit",
+                "data",
                 "database",
                 "doctype",
                 "first_author",
+                "grant",
                 "identifier",
+                "mention",
                 "orcid_other",
                 "property",
                 "pub",
                 "pub_raw",
+                "reference",
                 "title",
                 "volume",
             ],
