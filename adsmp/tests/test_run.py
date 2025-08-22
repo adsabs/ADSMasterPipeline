@@ -7,9 +7,9 @@ import io
 import testing.postgresql
 
 from adsmp import app
-from adsmp.models import Base, Records
-from run import reindex_failed_bibcodes, manage_sitemap, update_sitemap_files
-
+from adsmp.models import Base, Records, SitemapInfo
+from run import reindex_failed_bibcodes, manage_sitemap, update_sitemap_files, update_sitemaps_auto
+from datetime import datetime, timedelta, timezone
 
 class TestFixDbDuplicates(unittest.TestCase):
 
@@ -416,6 +416,87 @@ class TestSitemapCommandLine(unittest.TestCase):
                                 
                                 # Verify sys.exit was NOT called for valid scenarios
                                 mock_exit.assert_not_called()
+
+    def test_update_sitemaps_auto_with_records(self):
+        """Test update_sitemaps_auto function with records needing updates"""
+        
+        # Mock the database query to return test records
+        mock_recent_record1 = Mock()
+        mock_recent_record1.bibcode = '2023ApJ...123..456A'
+        
+        mock_recent_record2 = Mock()
+        mock_recent_record2.bibcode = '2023ApJ...123..457B'
+        
+        # Test with default 1 day lookback
+        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
+            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_files:
+                with patch('run.app.session_scope') as mock_session_scope:
+                    # Mock the session and query
+                    mock_session = Mock()
+                    mock_session_scope.return_value.__enter__.return_value = mock_session
+                    
+                    # Mock the query chain - return the records directly
+                    mock_records_query = [mock_recent_record1, mock_recent_record2]
+                    mock_session.query.return_value.filter.return_value.options.return_value = mock_records_query
+                    
+                    # Set up mock results
+                    mock_manage_result = Mock()
+                    mock_manage_result.id = 'test-auto-manage-123'
+                    mock_manage.return_value = mock_manage_result
+                    
+                    mock_files_result = Mock()
+                    mock_files_result.id = 'test-auto-files-456'
+                    mock_files.return_value = mock_files_result
+                    
+                    # Call the function
+                    manage_task_id, file_task_id = update_sitemaps_auto(days_back=1)
+                    
+                    # Verify tasks were called correctly
+                    self.assertTrue(mock_manage.called)
+                    self.assertTrue(mock_files.called)
+                    
+                    # Check manage task arguments
+                    manage_call_args = mock_manage.call_args
+                    self.assertEqual(manage_call_args[1]['args'][1], 'add')  # Action should be 'add'
+                    self.assertEqual(manage_call_args[1]['priority'], 0)  # Priority should be 0
+                    
+                    # Check bibcodes (should only include recent ones)
+                    submitted_bibcodes = manage_call_args[1]['args'][0]
+                    self.assertEqual(len(submitted_bibcodes), 2)
+                    self.assertIn('2023ApJ...123..456A', submitted_bibcodes)
+                    self.assertIn('2023ApJ...123..457B', submitted_bibcodes)
+                    
+                    # Check files task arguments (should have countdown delay)
+                    files_call_args = mock_files.call_args
+                    self.assertEqual(files_call_args[1]['countdown'], 300)  # 5 minutes
+                    
+                    # Verify return values
+                    self.assertEqual(manage_task_id, 'test-auto-manage-123')
+                    self.assertEqual(file_task_id, 'test-auto-files-456')
+
+    def test_update_sitemaps_auto_with_exception(self):
+        """Test update_sitemaps_auto handles task submission exceptions"""
+        
+        # Mock a test record
+        mock_record = Mock()
+        mock_record.bibcode = '2023ApJ...123..456A'
+        
+        # Test with manage task failing
+        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
+            with patch('run.app.session_scope') as mock_session_scope:
+                # Mock the session and query to return a record
+                mock_session = Mock()
+                mock_session_scope.return_value.__enter__.return_value = mock_session
+                
+                # Mock the query chain - return record directly
+                mock_session.query.return_value.filter.return_value.options.return_value = [mock_record]
+                
+                mock_manage.side_effect = Exception("Task submission failed")
+                
+                with self.assertRaises(Exception) as context:
+                    update_sitemaps_auto(days_back=1)
+                
+                self.assertEqual(str(context.exception), "Task submission failed")
 
 if __name__ == "__main__":
     unittest.main()
