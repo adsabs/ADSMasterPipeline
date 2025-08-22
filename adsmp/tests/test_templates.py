@@ -23,8 +23,17 @@ class TestTemplates(unittest.TestCase):
         ads_robots = templates.render_robots_txt('https://ui.adsabs.harvard.edu/sitemap')
         self.assertIsInstance(ads_robots, str)
         self.assertGreater(len(ads_robots), 0)
+        
         self.assertIn('Sitemap: https://ui.adsabs.harvard.edu/sitemap/sitemap_index.xml', ads_robots)
+        
+        # Check for major search engines
+        self.assertIn('User-agent: Googlebot', ads_robots)
+        self.assertIn('User-agent: msnbot', ads_robots)
+        self.assertIn('User-agent: Slurp', ads_robots)
+        self.assertIn('User-agent: Teoma', ads_robots)
         self.assertIn('User-agent: *', ads_robots)
+        
+        # Check common disallowed paths
         self.assertIn('Disallow: /v1/', ads_robots)
         self.assertIn('Disallow: /resources', ads_robots)
         self.assertIn('Disallow: /core', ads_robots)
@@ -33,12 +42,16 @@ class TestTemplates(unittest.TestCase):
         self.assertIn('Disallow: /search/', ads_robots)
         self.assertIn('Disallow: /execute-query/', ads_robots)
         self.assertIn('Disallow: /status', ads_robots)
+        self.assertIn('Disallow: /cgi-bin/', ads_robots)
+        
+        # Check allowed paths
         self.assertIn('Allow: /help/', ads_robots)
         self.assertIn('Allow: /about/', ads_robots)
         self.assertIn('Allow: /blog/', ads_robots)
         self.assertIn('Allow: /abs/', ads_robots)
-        self.assertIn('Disallow: /abs/*/citations', ads_robots)
-        self.assertIn('Disallow: /abs/*/references', ads_robots)
+        self.assertIn('Allow: /full/', ads_robots)
+        
+        # Check specific disallowed sub-paths
         self.assertIn('Disallow: /abs/*/coreads', ads_robots)
         self.assertIn('Disallow: /abs/*/similar', ads_robots)
         self.assertIn('Disallow: /abs/*/toc', ads_robots)
@@ -51,27 +64,38 @@ class TestTemplates(unittest.TestCase):
         self.assertIsInstance(scix_robots, str)
         self.assertGreater(len(scix_robots), 0)
         self.assertIn('Sitemap: https://scixplorer.org/sitemap/sitemap_index.xml', scix_robots)
-        self.assertIn('User-agent: *', ads_robots)
-        self.assertIn('Disallow: /v1/', ads_robots)
-        self.assertIn('Disallow: /resources', ads_robots)
-        self.assertIn('Disallow: /core', ads_robots)
-        self.assertIn('Disallow: /tugboat', ads_robots)
-        self.assertIn('Disallow: /link_gateway/', ads_robots)
-        self.assertIn('Disallow: /search/', ads_robots)
-        self.assertIn('Disallow: /execute-query/', ads_robots)
-        self.assertIn('Disallow: /status', ads_robots)
-        self.assertIn('Allow: /help/', ads_robots)
-        self.assertIn('Allow: /about/', ads_robots)
-        self.assertIn('Allow: /blog/', ads_robots)
-        self.assertIn('Allow: /abs/', ads_robots)
-        self.assertIn('Disallow: /abs/*/citations', ads_robots)
-        self.assertIn('Disallow: /abs/*/references', ads_robots)
-        self.assertIn('Disallow: /abs/*/coreads', ads_robots)
-        self.assertIn('Disallow: /abs/*/similar', ads_robots)
-        self.assertIn('Disallow: /abs/*/toc', ads_robots)
-        self.assertIn('Disallow: /abs/*/graphics', ads_robots)
-        self.assertIn('Disallow: /abs/*/metrics', ads_robots)
-        self.assertIn('Disallow: /abs/*/exportcitation', ads_robots)
+        
+        # Check that SciX also has the same structure as ADS
+        self.assertIn('User-agent: Googlebot', scix_robots)
+        self.assertIn('User-agent: msnbot', scix_robots)
+        self.assertIn('User-agent: Slurp', scix_robots)
+        self.assertIn('User-agent: Teoma', scix_robots)
+        self.assertIn('User-agent: *', scix_robots)
+        
+        # Check common disallowed paths in SciX
+        self.assertIn('Disallow: /v1/', scix_robots)
+        self.assertIn('Disallow: /resources', scix_robots)
+        self.assertIn('Disallow: /core', scix_robots)
+        self.assertIn('Disallow: /tugboat', scix_robots)
+        self.assertIn('Disallow: /link_gateway/', scix_robots)
+        self.assertIn('Disallow: /search/', scix_robots)
+        self.assertIn('Disallow: /execute-query/', scix_robots)
+        self.assertIn('Disallow: /status', scix_robots)
+        self.assertIn('Disallow: /cgi-bin/', scix_robots)
+        
+        # Check allowed paths in SciX
+        self.assertIn('Allow: /help/', scix_robots)
+        self.assertIn('Allow: /about/', scix_robots)
+        self.assertIn('Allow: /blog/', scix_robots)
+        self.assertIn('Allow: /abs/', scix_robots)
+        
+        # Check specific disallowed sub-paths in SciX
+        self.assertIn('Disallow: /abs/*/coreads', scix_robots)
+        self.assertIn('Disallow: /abs/*/similar', scix_robots)
+        self.assertIn('Disallow: /abs/*/toc', scix_robots)
+        self.assertIn('Disallow: /abs/*/graphics', scix_robots)
+        self.assertIn('Disallow: /abs/*/metrics', scix_robots)
+        self.assertIn('Disallow: /abs/*/exportcitation', scix_robots)
         
         
     def test_sitemap_file_template(self):

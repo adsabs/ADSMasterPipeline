@@ -6,6 +6,7 @@ import adsputils
 import argparse
 import warnings
 import json
+from datetime import datetime, timedelta
 from requests.packages.urllib3 import exceptions
 warnings.simplefilter('ignore', exceptions.InsecurePlatformWarning)
 import time
@@ -17,7 +18,7 @@ except ImportError:
     from urlparse import urlparse
 
 from adsputils import setup_logging, get_date, load_config
-from adsmp.models import KeyValue, Records
+from adsmp.models import KeyValue, Records, SitemapInfo
 from adsmp import tasks, solr_updater, validate #s3_utils
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import InstrumentedAttribute
@@ -472,6 +473,61 @@ def update_sitemap_files():
     print("Task is running in the background...")
     return result.id
 
+def update_sitemaps_auto(days_back=1):
+    """
+    Automatically find and process records needing sitemap updates
+    
+    Finds records that need sitemap updates based on:
+    1. New records not in sitemap table
+    2. Records where bib_data_updated > filename_lastmoddate
+    
+    Args:
+        days_back: Number of days to look back for changes
+    
+    Returns:
+        tuple: (manage_task_id, file_task_id) or (None, None) if no updates needed
+    """
+    
+    
+    logger.info('Starting automatic sitemap update (looking back %d days)', days_back)
+    
+    # Calculate cutoff date
+    cutoff_date = get_date() - timedelta(days=days_back)
+    logger.info('Looking for records updated since: %s', cutoff_date.isoformat())
+    
+    bibcodes_to_update = []
+    
+    with app.session_scope() as session:
+        # Find all records that were updated recently - these ALL need sitemap updates
+        records_query = session.query(Records).filter(
+            Records.bib_data_updated >= cutoff_date
+        ).options(load_only(Records.bibcode))
+        
+        bibcodes_to_update = [record.bibcode for record in records_query]
+        
+        logger.info('Found %d records updated since %s', len(bibcodes_to_update), cutoff_date.isoformat())
+    
+    if not bibcodes_to_update:
+        logger.info('No records need sitemap updates')
+        return None, None
+    
+    logger.info('Submitting %d records for sitemap processing', len(bibcodes_to_update))
+    
+    # Submit sitemap management task
+    manage_result = tasks.task_manage_sitemap.apply_async(
+        args=(bibcodes_to_update, 'add'),
+        priority=0
+    )
+    logger.info('Submitted sitemap management task: %s', manage_result.id)
+    
+    # Submit file generation task with 5-minute delay
+    file_result = tasks.task_update_sitemap_files.apply_async(
+        countdown=300  # 5 minutes
+    )
+    logger.info('Scheduled sitemap file generation task: %s', file_result.id)
+    
+    return manage_result.id, file_result.id
+
 # def sync_sitemap_to_s3():
 #     """
 #     Manually sync all sitemap files to S3
@@ -624,7 +680,31 @@ if __name__ == '__main__':
                         default=False,
                         dest='update_sitemap_files',
                         help='update sitemap files for records with update_flag = True in sitemap table')
-
+    parser.add_argument('--update-sitemaps-auto',
+                        action='store_true',
+                        default=False,
+                        dest='update_sitemaps_auto',
+                        help='automatically find and process records needing sitemap updates (for cron jobs)')
+    parser.add_argument('--days-back',
+                        type=int,
+                        default=1,
+                        dest='days_back',
+                        help='number of days to look back for changed records (used with --update-sitemaps-auto)')
+    # parser.add_argument('--sync-sitemap-s3',
+    #                     action='store_true',
+    #                     default=False,
+    #                     dest='sync_sitemap_s3',
+    #                     help='manually sync all sitemap files to S3')
+    parser.add_argument('--update-scix-id',
+                        action='store_true',
+                        default=False,
+                        dest='update_scixid',
+                        help='update scix_id for records with specified bibcodes')
+    parser.add_argument('--scix-id-flag',
+                        default=False,
+                        dest='scix_id_flag',
+                        choices=['update', 'update-all', 'force', 'force-all', 'reset', 'reset-all'],
+                        help='update records to be assigned a new scix_id, update all records in recordsDB with new scix_id, force reset scix_id and assign new scix_ids, force all records in recordsDB with new scix_id, reset scix_id to None, reset all scix_id in recordDB to None')
     args = parser.parse_args()
 
     if args.bibcodes:
@@ -735,6 +815,15 @@ if __name__ == '__main__':
         manage_sitemap(bibcodes, action)
     elif args.update_sitemap_files:
         update_sitemap_files()
+    elif args.update_sitemaps_auto:
+        manage_task_id, file_task_id = update_sitemaps_auto(args.days_back)
+        if manage_task_id:
+            print(f"Automatic sitemap update initiated:")
+            print(f"  Management task: {manage_task_id}")
+            print(f"  File generation task: {file_task_id} (scheduled with 5-minute delay)")
+            print("Tasks are running in the background...")
+        else:
+            print("No records needed sitemap updates")
     # elif args.sync_sitemap_s3:
     #     sync_sitemap_to_s3()
     elif args.update_scixid:

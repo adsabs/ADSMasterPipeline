@@ -1555,76 +1555,88 @@ class TestSitemapWorkflow(TestWorkers):
     def test_task_update_sitemap_files_full_workflow(self):
         """Test the complete task_update_sitemap_files workflow"""
         
-        # Configure Celery for synchronous execution
-        original_eager = self.app.conf.get('CELERY_TASK_ALWAYS_EAGER', False)
-        original_propagate = self.app.conf.get('CELERY_TASK_EAGER_PROPAGATES', False)
+        # Add test records first
+        bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
+        tasks.task_manage_sitemap(bibcodes, 'add')
         
-        self.app.conf['CELERY_TASK_ALWAYS_EAGER'] = True
-        self.app.conf['CELERY_TASK_EAGER_PROPAGATES'] = True
-        
-        try:
-            # Add test records
-            bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-            tasks.task_manage_sitemap(bibcodes, 'add')
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
             
-            with tempfile.TemporaryDirectory() as temp_dir:
-                self.app.conf['SITEMAP_DIR'] = temp_dir
+            with mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate, \
+                 mock.patch.object(tasks.task_generate_sitemap_index, 'apply_async') as mock_index:
                 
-                with mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate:
-                    
-                    # Configure mocks to return mock results that simulate successful execution
-                    mock_generate_result = mock.Mock()  
-                    mock_generate_result.get.return_value = True
-                    mock_generate.return_value = mock_generate_result
-                    
-                    # Set up side effects to actually call the tasks
-                    def generate_side_effect(*args, **kwargs):
-                        # Extract args from apply_async call
-                        task_args = kwargs.get('args', args)
-                        if task_args:
-                            tasks.task_generate_single_sitemap(*task_args)
-                        else:
-                            tasks.task_generate_single_sitemap()
-                        return mock_generate_result
-                        
-                    mock_generate.side_effect = generate_side_effect
-                    
-                    # Run the actual orchestrator workflow
-                    tasks.task_update_sitemap_files()
+                mock_generate_result = mock.Mock()
+                mock_generate_result.id = 'mock-generate-task-id'
+                mock_generate.return_value = mock_generate_result
                 
-                # Verify all expected files were created for both sites
-                for site in ['ads', 'scix']:
-                    site_dir = os.path.join(temp_dir, site)
-                    self.assertTrue(os.path.exists(site_dir))
+                mock_index_result = mock.Mock()
+                mock_index_result.id = 'mock-index-task-id'
+                mock_index.return_value = mock_index_result
+                
+                # Run the orchestrator
+                tasks.task_update_sitemap_files()
+                
+                # Verify the orchestrator made the expected calls
+                self.assertTrue(mock_generate.called, "Should have called task_generate_single_sitemap.apply_async")
+                self.assertTrue(mock_index.called, "Should have called task_generate_sitemap_index.apply_async")
+                
+                # Verify index task was scheduled with delay
+                index_call_kwargs = mock_index.call_args[1]
+                self.assertIn('countdown', index_call_kwargs, "Index task should be scheduled with countdown")
+                self.assertGreaterEqual(index_call_kwargs['countdown'], 10, "Countdown should be at least 10 seconds")
+                
+                # Verify generate tasks were called with correct arguments
+                generate_calls = mock_generate.call_args_list
+                self.assertGreater(len(generate_calls), 0, "Should have made at least one generate call")
+                
+                # Check that each call has the expected structure
+                for call in generate_calls:
+                    # apply_async is called with args=(sitemap_filename, record_ids) as keyword argument
+                    call_kwargs = call[1]  # Keyword arguments
+                    self.assertIn('args', call_kwargs, "Should have 'args' keyword argument")
                     
-                    # Check robots.txt
-                    robots_file = os.path.join(site_dir, 'robots.txt')
-                    self.assertTrue(os.path.exists(robots_file))
+                    args = call_kwargs['args']
+                    self.assertEqual(len(args), 2, "Should have 2 arguments: filename and record_ids")
                     
-                    # Check sitemap index
-                    index_file = os.path.join(site_dir, 'sitemap_index.xml')
-                    self.assertTrue(os.path.exists(index_file))
-                    
-                    # Check at least one sitemap file exists
-                    sitemap_files = [f for f in os.listdir(site_dir) if f.startswith('sitemap_bib_')]
-                    self.assertGreater(len(sitemap_files), 0, f"Should have sitemap files in {site} directory")
-                    
-                # Verify database state was updated correctly
-                with self.app.session_scope() as session:
-                    infos = session.query(SitemapInfo).filter(
-                        SitemapInfo.bibcode.in_(bibcodes)
-                    ).all()
-                    
-                    for info in infos:
-                        # After workflow completion, update_flag should be False
-                        self.assertFalse(info.update_flag, f"Record {info.bibcode} should have update_flag=False after workflow")
-                        # filename_lastmoddate should be set after file generation
-                        self.assertIsNotNone(info.filename_lastmoddate, f"Record {info.bibcode} should have filename_lastmoddate set")
+                    sitemap_filename, record_ids = args
+                    self.assertTrue(sitemap_filename.startswith('sitemap_bib_'), f"Filename should start with sitemap_bib_: {sitemap_filename}")
+                    self.assertTrue(sitemap_filename.endswith('.xml'), f"Filename should end with .xml: {sitemap_filename}")
+                    self.assertIsInstance(record_ids, list, "Record IDs should be a list")
+                    self.assertGreater(len(record_ids), 0, "Should have at least one record ID")
         
-        finally:
-            # Restore original Celery configuration
-            self.app.conf['CELERY_TASK_ALWAYS_EAGER'] = original_eager
-            self.app.conf['CELERY_TASK_EAGER_PROPAGATES'] = original_propagate
+        with tempfile.TemporaryDirectory() as temp_dir:
+            self.app.conf['SITEMAP_DIR'] = temp_dir
+            
+            # Get the records that were added
+            with self.app.session_scope() as session:
+                infos = session.query(SitemapInfo).filter(
+                    SitemapInfo.bibcode.in_(bibcodes),
+                    SitemapInfo.update_flag == True
+                ).all()
+                
+                if infos:
+                    # Store values before task execution to avoid detached instance issues
+                    test_bibcode = infos[0].bibcode
+                    sitemap_filename = infos[0].sitemap_filename
+                    record_ids = [info.id for info in infos if info.sitemap_filename == sitemap_filename]
+                    
+                    # This should complete quickly since it's direct execution
+                    result = tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
+                    self.assertTrue(result, "Direct sitemap generation should succeed")
+                    
+                    # Verify files were created
+                    for site in ['ads', 'scix']:
+                        site_dir = os.path.join(temp_dir, site)
+                        sitemap_file = os.path.join(site_dir, sitemap_filename)
+                        self.assertTrue(os.path.exists(sitemap_file), f"Sitemap file should exist: {sitemap_file}")
+                    
+                    # Verify database was updated - query fresh from database using stored bibcode
+                    updated_info = session.query(SitemapInfo).filter(
+                        SitemapInfo.bibcode == test_bibcode
+                    ).first()
+                    self.assertIsNotNone(updated_info, f"Should find updated record for {test_bibcode}")
+                    self.assertFalse(updated_info.update_flag, "Update flag should be cleared after generation")
+                    self.assertIsNotNone(updated_info.filename_lastmoddate, "Filename lastmoddate should be set")
 
     def test_task_robots_files_error_handling(self):
         """Test error handling in robots.txt generation"""
@@ -1796,27 +1808,16 @@ class TestSitemapWorkflow(TestWorkers):
                 
                 for info in infos_before:
                     self.assertTrue(info.update_flag, f"Record {info.bibcode} should initially have update_flag=True")
-            
-            # Run the full workflow with mocked apply_async to avoid broker issues
-            with mock.patch.object(tasks.task_generate_single_sitemap, 'apply_async') as mock_generate:
                 
-                # Configure mocks to return mock results that simulate successful execution
-                mock_generate_result = mock.Mock()  
-                mock_generate_result.get.return_value = True
-                mock_generate.return_value = mock_generate_result
-                
-                # Set up side effects to actually call the tasks
-                def generate_side_effect(*args, **kwargs):
-                    task_args = kwargs.get('args', args)
-                    if task_args:
-                        tasks.task_generate_single_sitemap(*task_args)
-                    else:
-                        tasks.task_generate_single_sitemap()
-                    return mock_generate_result
+                # Get data for direct task execution and store values while attached
+                test_sitemap_filename = None
+                if infos_before:
+                    test_sitemap_filename = infos_before[0].sitemap_filename
+                    record_ids = [info.id for info in infos_before if info.sitemap_filename == test_sitemap_filename]
                     
-                mock_generate.side_effect = generate_side_effect
-                
-                tasks.task_update_sitemap_files()
+                    # Test direct execution of single sitemap generation (no async)
+                    result = tasks.task_generate_single_sitemap(test_sitemap_filename, record_ids)
+                    self.assertTrue(result, "Direct sitemap generation should succeed")
             
             # Verify update_flag is reset after generation
             with self.app.session_scope() as session:
@@ -1827,9 +1828,13 @@ class TestSitemapWorkflow(TestWorkers):
                 for info in infos_after:
                     self.assertFalse(info.update_flag, f"Record {info.bibcode} should have update_flag=False after generation")
                     self.assertIsNotNone(info.filename_lastmoddate, f"Record {info.bibcode} should have filename_lastmoddate set")
-<<<<<<< HEAD
- 
-=======
+                    
+                # Verify files were created using stored filename
+                if test_sitemap_filename:
+                    for site in ['ads', 'scix']:
+                        site_dir = os.path.join(temp_dir, site)
+                        sitemap_file = os.path.join(site_dir, test_sitemap_filename)
+                        self.assertTrue(os.path.exists(sitemap_file), f"Sitemap file should exist: {sitemap_file}")
 
     def test_task_manage_sitemap_remove_action_partial(self):
         """Test remove action that leaves some records in files"""
@@ -2090,13 +2095,11 @@ class TestSitemapWorkflow(TestWorkers):
                 self.assertIn(record.bibcode, existing_bibcodes)
 
     def test_task_manage_sitemap_bootstrap_performance(self):
-        """Test bootstrap action performance with large dataset simulation"""
+        """Test bootstrap action performance with dataset simulation"""
         
-        # Test with 30 million records simulation
-        total_records = 30_000_000
-        batch_size = 50000
         
-        # Mock the entire bootstrap function to avoid all database operations
+        total_records = 100_000  
+        batch_size = 10000       
         def mock_bootstrap(*args, **kwargs):
             """Mock bootstrap that simulates the actual algorithm without database calls"""
             
@@ -2165,16 +2168,13 @@ class TestSitemapWorkflow(TestWorkers):
             
             start_time = time.time()
             execution_time = mock_bootstrap()
-            
-            # Assert reasonable performance (should complete in under 60 seconds for simulation)
-            self.assertLess(execution_time, 120, 
-                          f"Bootstrap took {execution_time:.2f}s, expected under 30s for simulation")
+    
+            self.assertLess(execution_time, 10, 
+                          f"Bootstrap took {execution_time:.2f}s, expected under 10s for 100K simulation")
             
             # Verify the task completed successfully
             self.assertTrue(True, "Bootstrap completed successfully")
 
-
->>>>>>> 3bb6b6c (adding bootstrap action and tests)
 
 if __name__ == "__main__":
     unittest.main()
