@@ -5,7 +5,7 @@ from collections import defaultdict
 from itertools import chain
 from . import exceptions
 from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records, SitemapInfo
-from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList
+from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList, BoostRequestRecord, BoostRequestRecordList, BoostResponseRecord, BoostResponseRecordList,Status as AdsMsgStatus
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session, contextmanager
 from sqlalchemy.orm import load_only as _load_only
@@ -128,17 +128,31 @@ class ADSMasterPipelineCelery(ADSCelery):
                 oldval = 'not-stored'
                 record.classifications = payload
                 record.classifications_updated = now
+            elif type == 'boost':
+                # payload contains new value for boost fields
+                # r.augments holds a dict, save it in database
+                oldval = 'not-stored'
+                record.boost_factors = payload
+                record.boost_factors_updated = now
             else:
                 raise Exception('Unknown type: %s' % type)
             session.add(ChangeLog(key=bibcode, type=type, oldvalue=oldval))
             record.updated = now
-            out = record.toJSON()
+            out = record.toJSON()                      
             try:
                 session.flush()
                 if not record.scix_id and record.bib_data:
                     record.scix_id = "scix:" + str(self.generate_scix_id(record.bib_data))
                     out = record.toJSON()
                 session.commit()
+
+                # Send payload to Boost pipeline
+                if type != 'boost' and not self._config.get('TESTING_MODE', False):
+                    try:
+                        self.generate_boost_request_message(bibcode)
+                    except Exception as e:
+                        self.logger.exception('Error generating boost request message for bibcode %s: %s', bibcode, e)
+
                 return out
             except exc.IntegrityError:
                 self.logger.exception('error in app.update_storage while updating database for bibcode {}, type {}'.format(bibcode, type))
@@ -243,7 +257,8 @@ class ADSMasterPipelineCelery(ADSCelery):
             return 'augment'
         elif isinstance(msg, ClassifyResponseRecord):
             return 'classify'
-
+        elif isinstance(msg, BoostResponseRecord):
+            return 'boost'
         else:
             raise exceptions.IgnorableException('Unkwnown type {0} submitted for update'.format(repr(msg)))
 
@@ -655,6 +670,108 @@ class ADSMasterPipelineCelery(ADSCelery):
 
                 batch_idx += batch_size
                 batch_list = []
+
+    def _populate_boost_request_from_record(self, rec, metrics, classifications, 
+                                            run_id=None, output_path=None, request_type=None):
+        """
+        Returns a dictionary with bib_data, metrics, and classifications to Boost Pipeline.
+        """
+        bib_data = rec.get('bib_data', '')
+
+        # Create the new nested message structure that Boost Pipeline expects
+        message = {
+            # Root level fields
+            'bibcode': rec.get('bibcode', ''),
+            'scix_id': rec.get('scix_id', ''),
+            'status': 'updated',
+
+            # bib_data section - primary source for paper metadata
+            'bib_data': bib_data.decode('utf-8') if isinstance(bib_data, bytes) else bib_data,            
+            # metrics section - primary source for refereed status and citations
+            'metrics': metrics.decode('utf-8') if isinstance(metrics, bytes) else metrics,
+            
+            # classifications section - primary source for collections
+            'classifications': list(classifications),
+            
+            'collections': list(''),
+            'run_id': 0,
+            'output_path': ''
+        }
+        
+        return message
+
+    def _get_info_for_boost_entry(self, bibcode):
+        rec = self.get_record(bibcode) or {}
+        metrics = {}
+        try:
+            metrics = self.get_metrics(bibcode) or {}
+        except Exception:
+            pass
+
+        collections = []
+        
+        # Extract collections from classifications (primary source)
+        classifications = rec.get('classifications', list(''))
+                
+        entry = None
+        if rec:
+            entry = (rec, metrics, collections)
+        return entry
+
+    def generate_boost_request_message(self, bibcode, run_id=None, output_path=None):
+        """Build and send boost request message to Boost Pipeline.
+        
+        Parameters
+        ----------
+        bibcode : str
+            Single bibcode to send.
+        run_id : int, optional
+            Optional job/run identifier added to each entry.
+        output_path : str, optional
+            Optional output path hint added to each entry.
+
+        Returns
+        -------
+        bool
+            True if message was sent successfully, False otherwise.
+        """
+
+        # Check if bibcode is provided
+        if not bibcode:
+            self.logger.warning('generate_boost_request_message called without bibcode')
+            return False
+        
+        try:
+            # Get record data for this bibcode
+            (rec, metrics, classifications) = self._get_info_for_boost_entry(bibcode)
+            if not rec:
+                self.logger.debug('Skipping bibcode with no data: %s', bibcode)
+                return False
+                
+            # Create message for this record
+            message = self._populate_boost_request_from_record(rec, metrics, classifications, 
+                                                            run_id, output_path, None)
+                
+        except Exception as e:
+            self.logger.error('Error retrieving record data for bibcode %s: %s', bibcode, e)
+            self.logger.error('Message content: %s', message)
+            raise
+
+        output_taskname=self._config.get('OUTPUT_TASKNAME_BOOST')
+        output_broker=self._config.get('OUTPUT_CELERY_BROKER_BOOST')
+        self.logger.debug('output_taskname: {}'.format(output_taskname))
+        self.logger.debug('output_broker: {}'.format(output_broker))
+        self.logger.debug('sending message {}'.format(message))
+
+        # Forward message to Boost Pipeline - Celery workers will handle the rest
+        try: 
+            self.forward_message(message, pipeline='boost')
+            self.logger.info('Sent boost request for bibcode %s to Boost Pipeline', bibcode)
+            return True
+            
+        except Exception as e:
+            self.logger.exception('Error sending boost request for bibcode %s: %s', bibcode, e)
+            return False
 
     def generate_links_for_resolver(self, record):
         """use nonbib or bib elements of database record and return links for resolver and checksum"""
