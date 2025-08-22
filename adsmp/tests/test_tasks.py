@@ -2097,11 +2097,9 @@ class TestSitemapWorkflow(TestWorkers):
     def test_task_manage_sitemap_bootstrap_performance(self):
         """Test bootstrap action performance with dataset simulation"""
         
-        # Test with smaller dataset for CI performance (but still validates logic)
-        total_records = 100_000  # Reduced from 30M to 100K
-        batch_size = 10000       # Reduced batch size
         
-        # Mock the entire bootstrap function to avoid all database operations
+        total_records = 100_000  
+        batch_size = 10000       
         def mock_bootstrap(*args, **kwargs):
             """Mock bootstrap that simulates the actual algorithm without database calls"""
             
@@ -2170,8 +2168,7 @@ class TestSitemapWorkflow(TestWorkers):
             
             start_time = time.time()
             execution_time = mock_bootstrap()
-            
-            # Assert reasonable performance (should complete quickly for 100K simulation)
+    
             self.assertLess(execution_time, 10, 
                           f"Bootstrap took {execution_time:.2f}s, expected under 10s for 100K simulation")
             
