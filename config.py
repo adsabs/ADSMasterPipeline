@@ -22,7 +22,7 @@ FORWARD_MSG_DICT = [ \
     'OUTPUT_TASKNAME': "adsboost.tasks.task_process_boost_request_message" \
     }] 
 
-
+TESTING_MODE = True
 
 # db connection to the db instance where we should send data; if not present
 # the SOLR can still work but no metrics updates can be done
