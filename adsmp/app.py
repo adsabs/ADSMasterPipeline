@@ -3,8 +3,7 @@ from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 from . import exceptions
 from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records
-from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList, Status as AdsMsgStatus
-from adsmsg.boostfactors import BoostRequestRecord, BoostRequestRecordList, BoostResponseRecord, BoostResponseRecordList
+from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList, BoostRequestRecord, BoostRequestRecordList, BoostResponseRecord, BoostResponseRecordList,Status as AdsMsgStatus
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session, contextmanager
 from sqlalchemy.orm import load_only as _load_only
@@ -81,7 +80,6 @@ class ADSMasterPipelineCelery(ADSCelery):
 
         returns the sql record as a json object or an error string """
         if not isinstance(payload, basestring):
-            self.logger.info('payload: {}'.format(payload))
             payload = json.dumps(payload)
 
         with self.session_scope() as session:
@@ -127,7 +125,6 @@ class ADSMasterPipelineCelery(ADSCelery):
                 # payload contains new value for boost fields
                 # r.augments holds a dict, save it in database
                 oldval = 'not-stored'
-                self.logger.info('payload: {}'.format(payload))
                 r.boost_factors = payload
                 r.boost_factors_updated = now
             else:
@@ -750,9 +747,9 @@ class ADSMasterPipelineCelery(ADSCelery):
 
         output_taskname=self._config.get('OUTPUT_TASKNAME_BOOST')
         output_broker=self._config.get('OUTPUT_CELERY_BROKER_BOOST')
-        self.logger.info('output_taskname: {}'.format(output_taskname))
-        self.logger.info('output_broker: {}'.format(output_broker))
-        self.logger.info('sending message {}'.format(message))
+        self.logger.debug('output_taskname: {}'.format(output_taskname))
+        self.logger.debug('output_broker: {}'.format(output_broker))
+        self.logger.debug('sending message {}'.format(message))
 
         # Forward message to Boost Pipeline - Celery workers will handle the rest
         try: 
