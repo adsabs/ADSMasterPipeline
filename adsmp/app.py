@@ -3,7 +3,8 @@ from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 from . import exceptions
 from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records
-from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList, BoostRequestRecord, BoostRequestRecordList, BoostResponseRecord, BoostResponseRecordList, Status as AdsMsgStatus
+from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList, Status as AdsMsgStatus
+from adsmsg.boostfactors import BoostRequestRecord, BoostRequestRecordList, BoostResponseRecord, BoostResponseRecordList
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session, contextmanager
 from sqlalchemy.orm import load_only as _load_only
@@ -80,6 +81,7 @@ class ADSMasterPipelineCelery(ADSCelery):
 
         returns the sql record as a json object or an error string """
         if not isinstance(payload, basestring):
+            self.logger.info('payload: {}'.format(payload))
             payload = json.dumps(payload)
 
         with self.session_scope() as session:
@@ -125,6 +127,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                 # payload contains new value for boost fields
                 # r.augments holds a dict, save it in database
                 oldval = 'not-stored'
+                self.logger.info('payload: {}'.format(payload))
                 r.boost_factors = payload
                 r.boost_factors_updated = now
             else:
@@ -665,26 +668,25 @@ class ADSMasterPipelineCelery(ADSCelery):
         Returns a dictionary with bib_data, metrics, and classifications to Boost Pipeline.
         """
         bib_data = rec.get('bib_data', '')
-        if isinstance(bib_data, str):
-            try:
-                bib_data = json.loads(bib_data)
-            except Exception:
-                bib_data = {}
 
         # Create the new nested message structure that Boost Pipeline expects
         message = {
             # Root level fields
-            'bibcode': rec.get('bibcode') or '',
-            'scix_id': rec.get('scix_id') or '',
-            
+            'bibcode': rec.get('bibcode', ''),
+            'scix_id': rec.get('scix_id', ''),
+            'status': 'updated',
+
             # bib_data section - primary source for paper metadata
-            'bib_data': bib_data,
-            
+            'bib_data': bib_data.decode('utf-8') if isinstance(bib_data, bytes) else bib_data,            
             # metrics section - primary source for refereed status and citations
-            'metrics': metrics,
+            'metrics': metrics.decode('utf-8') if isinstance(metrics, bytes) else metrics,
             
             # classifications section - primary source for collections
-            'classifications': classifications
+            'classifications': list(classifications),
+            
+            'collections': list(''),
+            'run_id': 0,
+            'output_path': ''
         }
         
         return message
@@ -700,14 +702,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         collections = []
         
         # Extract collections from classifications (primary source)
-        classifications = rec.get('classifications')
-        if classifications:
-            try:
-                # handle stringified JSON or dict/list directly
-                if isinstance(classifications, str):
-                    classifications = json.loads(classifications)
-            except Exception:
-                classifications = None
+        classifications = rec.get('classifications', list(''))
                 
         entry = None
         if rec:
@@ -747,10 +742,22 @@ class ADSMasterPipelineCelery(ADSCelery):
             # Create message for this record
             message = self._populate_boost_request_from_record(rec, metrics, classifications, 
                                                             run_id, output_path, None)
-            
-            # Forward message to Boost Pipeline - Celery workers will handle the rest
+                
+        except Exception as e:
+            self.logger.error('Error retrieving record data for bibcode %s: %s', bibcode, e)
+            self.logger.error('Message content: %s', message)
+            raise
+
+        output_taskname=self._config.get('OUTPUT_TASKNAME_BOOST')
+        output_broker=self._config.get('OUTPUT_CELERY_BROKER_BOOST')
+        self.logger.info('output_taskname: {}'.format(output_taskname))
+        self.logger.info('output_broker: {}'.format(output_broker))
+        self.logger.info('sending message {}'.format(message))
+
+        # Forward message to Boost Pipeline - Celery workers will handle the rest
+        try: 
             self.forward_message(message, pipeline='boost')
-            self.logger.debug('Sent boost request for bibcode %s to Boost Pipeline', bibcode)
+            self.logger.info('Sent boost request for bibcode %s to Boost Pipeline', bibcode)
             return True
             
         except Exception as e:

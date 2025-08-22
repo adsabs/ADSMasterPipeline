@@ -762,8 +762,8 @@ if __name__ == '__main__':
         else:
             print('Please provide bibcodes via --bibcodes or --filename')
         
-        print('Processing boost requests for specified bibcodes')
-        tasks.task_boost_request.delay(args.bibcodes)
+        print('Processing boost requests for following bibcodes: {}'.format(bibcodes))
+        tasks.task_boost_request.delay(bibcodes)
         
     elif args.boost_all:
         print('Running Boost Pipeline on all records in RecordsDB')

@@ -10,13 +10,18 @@ SQLALCHEMY_ECHO = False
 LOGGING_LEVEL = "INFO"
 CELERY_INCLUDE = ["adsmp.tasks"]
 
-OUTPUT_CELERY_BROKER = "pyamqp://test:test@localhost:5682/test_augment_pipeline"
-OUTPUT_TASKNAME = "ADSAffil.tasks.task_update_record"
+FORWARD_MSG_DICT = [ \
+    { \
+    'OUTPUT_PIPELINE': 'affil', \
+    'OUTPUT_CELERY_BROKER': "pyamqp://guest:guest@rabbitmq-broker-1:5672/test_augment_pipeline" , \
+    'OUTPUT_TASKNAME': "ADSAffil.tasks.task_update_record" \
+    }, \
+    { \
+    'OUTPUT_PIPELINE': 'boost' , \
+    'OUTPUT_CELERY_BROKER': "pyamqp://guest:guest@rabbitmq-broker-1:5672/boost_pipeline", \
+    'OUTPUT_TASKNAME': "adsboost.tasks.task_process_boost_request_message" \
+    }] 
 
-#TODO: NEED TO ASK TAYLOR
-# Boost Pipeline configuration
-OUTPUT_CELERY_BROKER_BOOST = "pyamqp://test:test@localhost:5682/test_boost_pipeline"
-OUTPUT_TASKNAME_BOOST = "ADSBoost.tasks.task_process_boost_request"
 
 
 # db connection to the db instance where we should send data; if not present

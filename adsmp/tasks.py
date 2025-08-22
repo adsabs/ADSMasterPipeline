@@ -397,19 +397,10 @@ def task_boost_request(bibcodes):
     
     logger.info('Processing boost requests for %s bibcode(s)', len(bibcodes))
     
-    success_count = 0
-    failed_count = 0
-    total_count = 0
-    
     for bibcode in bibcodes:
         result = app.generate_boost_request_message(bibcode)
     
-        success_count += result['success']
-        failed_count += result['failed']
-        total_count += result['total']
-    
-    logger.info('Boost processing completed: %s/%s successful, %s failed', 
-                success_count, total_count, failed_count)
+    logger.info('Boost processing completed')
     
     return result
 
