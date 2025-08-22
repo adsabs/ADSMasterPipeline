@@ -147,7 +147,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                 session.commit()
 
                 # Send payload to Boost pipeline
-                if type != 'boost':
+                if type != 'boost' and not self._config.get('TESTING_MODE', False):
                     try:
                         self.generate_boost_request_message(bibcode)
                     except Exception as e:
