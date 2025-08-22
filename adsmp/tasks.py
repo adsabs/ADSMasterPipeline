@@ -39,6 +39,7 @@ app.conf.CELERY_QUEUES = (
     Queue('generate-single-sitemap', app.exchange, routing_key='generate-single-sitemap'),
     Queue('update-sitemap-files', app.exchange, routing_key='update-sitemap-files'),
     Queue('update-scixid', app.exchange, routing_key='update-scixid'),
+    Queue('boost-request', app.exchange, routing_key='boost-request'),
 )
 
 
@@ -302,6 +303,7 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
             # build the solr record
             if update_solr:
                 solr_payload = solr_updater.transform_json_record(r)
+
                 # ADS microservices assume the identifier field exists and contains the canonical bibcode:
                 if 'identifier' not in solr_payload:
                     solr_payload['identifier'] = []
@@ -981,6 +983,24 @@ def task_update_sitemap_files():
     except Exception as e:
         logger.error('Error in orchestrator task: %s', str(e))
         raise
+
+@app.task(queue='boost-request')
+def task_boost_request(bibcodes):
+    """Process boost requests for bibcodes (single or multiple)
+    
+    @param bibcodes: string or list of strings - the bibcode(s) to process
+    """
+    # Normalize input to always be a list
+    if isinstance(bibcodes, str):
+        bibcodes = [bibcodes]
+        
+    for bibcode in bibcodes:
+        result = app.generate_boost_request_message(bibcode)
+    
+    logger.info('Boost requests for %s bibcode(s) sent to boost pipeline', len(bibcodes))
+    
+    return result
+
 
 if __name__ == '__main__':
     app.start()
