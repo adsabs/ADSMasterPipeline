@@ -499,6 +499,78 @@ class TestTemplates(unittest.TestCase):
         self.assertIn('<url>', ads_entry)
         self.assertIn('</url>', ads_entry)
 
+    def test_xml_escaping_fix(self):
+        """Test that XML characters are properly escaped to prevent malformed XML"""
+        import xml.etree.ElementTree as ET
+        
+        # Test bibcode with ampersand (the bug we're fixing)
+        problematic_bibcode = '1980Ap&SS..68..111M'
+        lastmod = '2025-08-20'
+        
+        # Generate URL entry
+        url_entry = templates.format_url_entry(problematic_bibcode, lastmod)
+        
+        # Should contain escaped ampersand in the URL
+        self.assertIn('1980Ap&amp;SS..68..111M', url_entry)
+        self.assertNotIn('1980Ap&SS..68..111M', url_entry)  # Should not contain unescaped &
+        
+        # Create a complete sitemap file to test XML parsing
+        sitemap_content = templates.render_sitemap_file(url_entry)
+        
+        # Should be valid XML that can be parsed
+        try:
+            tree = ET.fromstring(sitemap_content)
+            self.assertIsNotNone(tree)
+        except ET.ParseError as e:
+            self.fail(f"Generated sitemap XML is not well-formed: {e}")
+        
+        # Test other XML special characters
+        test_cases = [
+            ('2023Test<Tag>..123A', '2023Test&lt;Tag&gt;..123A'),  # < and >
+            ('2023Test&Amp...123B', '2023Test&amp;Amp...123B'),   # &
+            ('2023Test"Quote..123C', '2023Test&quot;Quote..123C'), # "
+            ("2023Test'Apos...123D", "2023Test&#x27;Apos...123D")  # ' (html.escape uses &#x27; not &apos;)
+        ]
+        
+        for input_bibcode, expected_escaped in test_cases:
+            with self.subTest(bibcode=input_bibcode):
+                url_entry = templates.format_url_entry(input_bibcode, lastmod)
+                self.assertIn(expected_escaped, url_entry, 
+                            f"Expected escaped version '{expected_escaped}' not found in: {url_entry}")
+                
+                # Ensure the complete sitemap is still valid XML
+                sitemap_content = templates.render_sitemap_file(url_entry)
+                try:
+                    ET.fromstring(sitemap_content)
+                except ET.ParseError as e:
+                    self.fail(f"XML parsing failed for bibcode '{input_bibcode}': {e}")
+
+    def test_sitemap_index_xml_escaping(self):
+        """Test that sitemap index entries are also properly XML escaped"""
+        import xml.etree.ElementTree as ET
+        
+        # Test sitemap URL with special characters
+        base_url = 'https://example.com/sitemap?param=test&other=value'
+        filename = 'sitemap_bib_1.xml'
+        lastmod = '2025-08-20'
+        
+        # Generate sitemap entry
+        sitemap_entry = templates.format_sitemap_entry(base_url, filename, lastmod)
+        
+        # Should contain escaped ampersand in the URL
+        self.assertIn('param=test&amp;other=value', sitemap_entry)
+        self.assertNotIn('param=test&other=value', sitemap_entry)  # Should not contain unescaped &
+        
+        # Create a complete sitemap index to test XML parsing
+        index_content = templates.render_sitemap_index(sitemap_entry)
+        
+        # Should be valid XML that can be parsed
+        try:
+            tree = ET.fromstring(index_content)
+            self.assertIsNotNone(tree)
+        except ET.ParseError as e:
+            self.fail(f"Generated sitemap index XML is not well-formed: {e}")
+
 
 if __name__ == '__main__':
     unittest.main() 
