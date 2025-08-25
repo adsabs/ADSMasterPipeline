@@ -6,6 +6,8 @@ import tempfile
 import unittest
 
 from adsmp import templates
+import xml.etree.ElementTree as ET
+
 
 
 class TestTemplates(unittest.TestCase):
@@ -500,9 +502,7 @@ class TestTemplates(unittest.TestCase):
         self.assertIn('</url>', ads_entry)
 
     def test_xml_escaping_fix(self):
-        """Test that XML characters are properly escaped to prevent malformed XML"""
-        import xml.etree.ElementTree as ET
-        
+        """Test that XML characters are properly escaped to prevent malformed XML"""        
         # Test bibcode with ampersand (the bug we're fixing)
         problematic_bibcode = '1980Ap&SS..68..111M'
         lastmod = '2025-08-20'
@@ -546,9 +546,7 @@ class TestTemplates(unittest.TestCase):
                     self.fail(f"XML parsing failed for bibcode '{input_bibcode}': {e}")
 
     def test_sitemap_index_xml_escaping(self):
-        """Test that sitemap index entries are also properly XML escaped"""
-        import xml.etree.ElementTree as ET
-        
+        """Test that sitemap index entries are also properly XML escaped"""        
         # Test sitemap URL with special characters
         base_url = 'https://example.com/sitemap?param=test&other=value'
         filename = 'sitemap_bib_1.xml'
