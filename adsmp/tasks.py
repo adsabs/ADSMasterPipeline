@@ -409,7 +409,7 @@ def task_manage_sitemap(bibcodes, action):
         # move all sitemap files to a backup directory
         app.backup_sitemap_files(sitemap_dir)
         return
-    
+
     elif action == 'update-robots':
         logger.info('Force updating robots.txt files for all sites')
         success = update_robots_files(True)
@@ -589,7 +589,7 @@ def task_manage_sitemap(bibcodes, action):
         # update all record_id from records table into sitemap table
         successful_count = 0
         failed_count = 0
-        
+      
         for bibcode in bibcodes:
             try:
                 record = app.get_record(bibcode, load_only=fields)
@@ -607,9 +607,10 @@ def task_manage_sitemap(bibcodes, action):
                         'bib_data_updated': record.get('bib_data_updated', None),
                         'filename_lastmoddate': None, 
                         'sitemap_filename': None,
+                        'scix_id': None,
                         'update_flag': False
-                    }
-                
+                }
+                    
                 # New sitemap record
                 if sitemap_info is None:            
                     sitemap_record['update_flag'] = True
@@ -644,7 +645,6 @@ def task_manage_sitemap(bibcodes, action):
                 logger.error('Failed to populate sitemap table for bibcode %s: %s', bibcode, str(e))
                 # Continue to next bibcode instead of crashing
                 continue
-        
         logger.info('Sitemap population completed: %d successful, %d failed out of %d total bibcodes', 
                     successful_count, failed_count, len(bibcodes)) 
         logger.info('%s Total sitemap records created: %s', len(sitemap_records), sitemap_records)
@@ -731,19 +731,19 @@ def update_sitemap_index():
         updated_sites = 0
         
         with app.session_scope() as session:
-            # Get all distinct sitemap filenames from database
+            # Get all distinct sitemap filenames that actually have records in database
             sitemap_files = (
                 session.query(SitemapInfo.sitemap_filename.distinct())
                 .filter(SitemapInfo.sitemap_filename.isnot(None))
                 .all()
             )
             
-            if not sitemap_files:
-                logger.warning('No sitemap files found in database for index generation')
-                return True
-            
             # Flatten the list of tuples into a list of strings
-            sitemap_filenames = [filename[0] for filename in sitemap_files]
+            sitemap_filenames = [filename[0] for filename in sitemap_files] if sitemap_files else []
+            
+            if not sitemap_filenames:
+                logger.info('No sitemap files found in database - generating empty index files')
+                # Still need to generate empty index files to clear old entries
             
             for site_key, site_config in sites_config.items():
                 try:
@@ -769,28 +769,28 @@ def update_sitemap_index():
                             entry = templates.format_sitemap_entry(sitemap_url, filename, lastmod_date)
                             sitemap_entries.append(entry)
                     
+                    # Always generate sitemap index content, even if empty
+                    index_content = templates.render_sitemap_index(''.join(sitemap_entries))
+                    
+                    # Write sitemap index file
+                    index_filepath = os.path.join(site_output_dir, 'sitemap_index.xml')
+                    with open(index_filepath, 'w', encoding='utf-8') as f:
+                        f.write(index_content)
+                    
+                    # # Upload to S3 if enabled
+                    # s3_success = s3_utils.upload_sitemap_file_to_s3(
+                    #     app.conf, index_filepath, site_key, 'sitemap_index.xml'
+                    # )
+                    # if not s3_success:
+                    #     logger.warning('Failed to upload sitemap_index.xml to S3 for site %s', site_key)
+                    
                     if sitemap_entries:
-                        # Generate sitemap index content
-                        index_content = templates.render_sitemap_index(''.join(sitemap_entries))
-                        
-                        # Write sitemap index file
-                        # Ex: <sitemap><loc>https://ui.adsabs.harvard.edu/sitemap/sitemap_bib_1.xml</loc><lastmod>2023-01-01</lastmod></sitemap>
-                        index_filepath = os.path.join(site_output_dir, 'sitemap_index.xml')
-                        with open(index_filepath, 'w', encoding='utf-8') as f:
-                            f.write(index_content)
-                        
-                        # # Upload to S3 if enabled
-                        # s3_success = s3_utils.upload_sitemap_file_to_s3(
-                        #     app.conf, index_filepath, site_key, 'sitemap_index.xml'
-                        # )
-                        # if not s3_success:
-                        #     logger.warning('Failed to upload sitemap_index.xml to S3 for site %s', site_key)
-                        
                         logger.info('Generated sitemap index for site %s with %d entries at %s', 
                                   site_config.get('name', site_key), len(sitemap_entries), index_filepath)
-                        updated_sites += 1
                     else:
-                        logger.warning('No sitemap files found for site %s', site_config.get('name', site_key))
+                        logger.info('Generated empty sitemap index for site %s at %s', 
+                                  site_config.get('name', site_key), index_filepath)
+                    updated_sites += 1
                         
                 except Exception as e:
                     logger.error('Failed to generate sitemap index for site %s: %s', site_key, str(e))
@@ -955,6 +955,13 @@ def task_update_sitemap_files():
             
             if not all_records:
                 logger.info('No sitemap files need updating')
+                # Still regenerate index to reflect current database state (in case files were removed)
+                logger.info('Regenerating sitemap index to reflect current database state')
+                success = update_sitemap_index()
+                if success:
+                    logger.info('Sitemap index regeneration completed')
+                else:
+                    logger.error('Sitemap index regeneration failed')
                 return
             
             logger.info('Found %d records to process in sitemap files', len(all_records))

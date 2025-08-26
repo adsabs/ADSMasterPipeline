@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import html
 
 # Tested
 def get_template_path(template_name):
@@ -35,14 +36,19 @@ def render_sitemap_file(url_entries):
 # Tested
 def format_sitemap_entry(sitemap_url, filename, lastmod_date):
     """Format a single sitemap entry for the sitemap index"""
+    # Escape XML characters in URL and filename to prevent malformed XML
+    escaped_url = html.escape(f"{sitemap_url}/{filename}")
+    escaped_lastmod = html.escape(str(lastmod_date))
     return f"""
             <sitemap>
-            <loc>{sitemap_url}/{filename}</loc>
-            <lastmod>{lastmod_date}</lastmod>
+            <loc>{escaped_url}</loc>
+            <lastmod>{escaped_lastmod}</lastmod>
             </sitemap>"""
 
 # Tested 
 def format_url_entry(bibcode, lastmod_date, abs_url_pattern='https://ui.adsabs.harvard.edu/abs/{bibcode}/abstract'):
     """Format a single URL entry for a sitemap file"""
-    url = abs_url_pattern.format(bibcode=bibcode)
+    # Escape XML characters in bibcode to prevent malformed XML
+    escaped_bibcode = html.escape(bibcode)
+    url = abs_url_pattern.format(bibcode=escaped_bibcode)
     return f'\n<url><loc>{url}</loc><lastmod>{lastmod_date}</lastmod></url>' 
