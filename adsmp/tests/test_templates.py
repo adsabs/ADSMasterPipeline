@@ -164,7 +164,7 @@ class TestTemplates(unittest.TestCase):
         
         # Verify all ADS URLs are present
         for bibcode, lastmod in test_bibcodes:
-            expected_ads_url = ads_pattern.format(bibcode=bibcode)
+            expected_ads_url = ads_pattern.format(bibcode=bibcode).replace('&', '&amp;')  
             self.assertIn(expected_ads_url, ads_sitemap_content, 
                          f"ADS URL for {bibcode} not found in sitemap")
             self.assertIn(f'<lastmod>{lastmod}</lastmod>', ads_sitemap_content,
