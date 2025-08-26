@@ -179,7 +179,8 @@ class TestTemplates(unittest.TestCase):
         
         # Verify all SciX URLs are present
         for bibcode, lastmod in test_bibcodes:
-            expected_scix_url = scix_pattern.format(bibcode=bibcode).replace('&', '&amp;')            self.assertIn(expected_scix_url, scix_sitemap_content,
+            expected_scix_url = scix_pattern.format(bibcode=bibcode).replace('&', '&amp;')            
+            self.assertIn(expected_scix_url, scix_sitemap_content,
                          f"SciX URL for {bibcode} not found in sitemap")
             self.assertIn(f'<lastmod>{lastmod}</lastmod>', scix_sitemap_content,
                          f"Last modified date {lastmod} not found for {bibcode}")
