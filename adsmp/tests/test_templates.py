@@ -180,6 +180,7 @@ class TestTemplates(unittest.TestCase):
         # Verify all SciX URLs are present
         for bibcode, lastmod in test_bibcodes:
             expected_scix_url = scix_pattern.format(bibcode=bibcode)
+            expected_scix_url = expected_scix_url.replace('&', '&amp;')
             self.assertIn(expected_scix_url, scix_sitemap_content,
                          f"SciX URL for {bibcode} not found in sitemap")
             self.assertIn(f'<lastmod>{lastmod}</lastmod>', scix_sitemap_content,
@@ -355,7 +356,7 @@ class TestTemplates(unittest.TestCase):
         # Test with bibcode containing special characters
         bibcode = '2023A&A...123..456A'
         url_entry = templates.format_url_entry(bibcode, '2024-01-15')
-        self.assertIn('2023A&A...123..456A', url_entry)
+        self.assertIn('2023A&amp;A...123..456A', url_entry)
         
         # Test with different date formats
         url_entry_date = templates.format_url_entry('2023ApJ...123..456A', '2024-01-01')
@@ -497,7 +498,7 @@ class TestTemplates(unittest.TestCase):
             'https://ui.adsabs.harvard.edu/abs/{bibcode}'
         )
         
-        self.assertIn('2023A&A...123..456.', ads_entry)
+        self.assertIn('2023A&amp;A...123..456.', ads_entry)
         self.assertIn('<url>', ads_entry)
         self.assertIn('</url>', ads_entry)
 
