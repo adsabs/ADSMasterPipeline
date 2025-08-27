@@ -339,27 +339,25 @@ def process_all_boost(batch_size):
     with app.session_scope() as session:
         # load all records from RecordsDB
         for rec in session.query(Records) \
-                        .options(load_only(Records.bib_data, Records.metrics, Records.classifications, Records.scix_id)) \
+                        .options(load_only(Records.bibcode,Records.bib_data, Records.metrics, Records.classifications, Records.scix_id)) \
                         .yield_per(batch_size):
 
             sent += 1
             if sent % 1000 == 0:
                 logger.debug('Sending %s records', sent)
 
-            batch.append((rec.bib_data, rec.metrics, rec.classifications, rec.scix_id))
+            batch.append(rec)
             if len(batch) >= batch_size:
                 logger.info('Sending batch of %s records to Boost Pipeline', len(batch))
                 # Unpack the batch into separate lists for the task
-                bib_data_list, metrics_list, classifications_list, scix_ids_list = zip(*batch)
-                t = tasks.task_boost_request_batch.delay(bib_data_list, metrics_list, classifications_list, scix_ids_list)
+                t = tasks.task_boost_request_batch.delay(batch)
                 _tasks.append(t)
                 batch = []
     
     if len(batch) > 0:
         logger.info('Sending final batch of %s records to Boost Pipeline', len(batch))
         # Unpack the final batch into separate lists for the task
-        bib_data_list, metrics_list, classifications_list, scix_ids_list = zip(*batch)
-        t = tasks.task_boost_request_batch.delay(bib_data_list, metrics_list, classifications_list, scix_ids_list)
+        t = tasks.task_boost_request_batch.delay(batch)
         _tasks.append(t)
         logger.debug('Sending %s records', len(batch))
     

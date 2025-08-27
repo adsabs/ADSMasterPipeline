@@ -678,7 +678,8 @@ class ADSMasterPipelineCelery(ADSCelery):
         """
         Returns a dictionary with bib_data, metrics, and classifications to Boost Pipeline.
         """
-
+        self.logger.info('Populating boost request from bib_data: {}'.format(bib_data))
+        self.logger.info('Bib_data type: {}'.format(type(bib_data)))
         # Create the new nested message structure that Boost Pipeline expects
         message = {
             # Root level fields
@@ -707,14 +708,14 @@ class ADSMasterPipelineCelery(ADSCelery):
         entry = None
         
         if rec:
-            bib_data = rec.get('bib_data', {})
-            metrics = rec.get('metrics', {})
+            bib_data = rec.get('bib_data', '')
+            metrics = rec.get('metrics', '')
             scix_id = rec.get('scix_id', '')
             
             # Extract collections from classifications (primary source)
             classifications = rec.get('classifications', list(''))
                     
-            entry = (rec, metrics, classifications, scix_id)
+            entry = (bib_data, metrics, classifications, scix_id)
         return entry
 
     def generate_boost_request_message(self, bibcode, run_id=None, output_path=None):
