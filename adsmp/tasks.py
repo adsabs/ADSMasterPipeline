@@ -432,8 +432,6 @@ def should_include_in_sitemap(record):
         logger.warning('Excluding %s from sitemap: SOLR indexing failed (status: %s)', bibcode, status)
         return False
     
-    # metrics-failed, links-failed, retrying, success = OK! SOLR succeeded.
-    
     # If we have both timestamps, check staleness
     if bib_data_updated and solr_processed:
         processing_lag = bib_data_updated - solr_processed
