@@ -15,7 +15,7 @@ from adsmp.models import SitemapInfo, Records
 from collections import defaultdict
 import pdb
 from sqlalchemy.orm import load_only
-
+import json
 
 # ============================= INITIALIZATION ==================================== #
 
@@ -36,6 +36,7 @@ app.conf.CELERY_QUEUES = (
     Queue('update-sitemap-files', app.exchange, routing_key='update-sitemap-files'),
     Queue('update-scixid', app.exchange, routing_key='update-scixid'),
     Queue('boost-request', app.exchange, routing_key='boost-request'),
+    Queue('boost-request-batch', app.exchange, routing_key='boost-request-batch'),
 )
 
 
@@ -1001,11 +1002,33 @@ def task_boost_request(bibcodes):
         bibcodes = [bibcodes]
         
     for bibcode in bibcodes:
+        logger.info('Processing boost request for bibcode: {}'.format(bibcode))
         result = app.generate_boost_request_message(bibcode)
     
     logger.info('Boost requests for %s bibcode(s) sent to boost pipeline', len(bibcodes))
     
     return result
+
+@app.task(queue='boost-request-batch')
+def task_boost_request_batch(bib_data, metrics, classifications):
+    """Process boost requests for a batch of records
+    
+    @param bib_data: dictionary - the bib_data section of the record
+    @param metrics: dictionary - the metrics section of the record
+    @param classifications: list - the classifications section of the record
+    """
+    results = []
+    logger.info('Processing boost request for batch of records')
+    for (bib, met, cl) in zip(bib_data, metrics, classifications):
+        bib = json.loads(bib) if isinstance(bib, str) else bib
+        met = json.loads(met) if isinstance(met, str) else met
+        cl = list(cl) if isinstance(cl, str) else cl
+        logger.info('Processing boost request for record: {}'.format(bib))
+        results.append(app.generate_boost_request_message_batch(bib, met, cl))
+    
+    logger.info('Boost requests for %s records sent to boost pipeline', len(bib_data))
+    logger.info('Successfully sent %s boost requests to boost pipeline', sum(results))
+    return results
 
 
 if __name__ == '__main__':

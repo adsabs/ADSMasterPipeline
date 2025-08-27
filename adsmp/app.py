@@ -6,6 +6,7 @@ from itertools import chain
 from . import exceptions
 from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records, SitemapInfo
 from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList, BoostRequestRecord, BoostRequestRecordList, BoostResponseRecord, BoostResponseRecordList,Status as AdsMsgStatus
+from google.protobuf.json_format import ParseDict
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session, contextmanager
 from sqlalchemy.orm import load_only as _load_only
@@ -24,6 +25,7 @@ import sys
 from sqlalchemy.dialects.postgresql import insert
 import csv
 from SciXPipelineUtils import scix_id
+import base64
 
 class ADSMasterPipelineCelery(ADSCelery):
 
@@ -676,7 +678,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         """
         Returns a dictionary with bib_data, metrics, and classifications to Boost Pipeline.
         """
-        bib_data = rec.get('bib_data', '')
+        bib_data = rec
 
         # Create the new nested message structure that Boost Pipeline expects
         message = {
@@ -686,12 +688,12 @@ class ADSMasterPipelineCelery(ADSCelery):
             'status': 'updated',
 
             # bib_data section - primary source for paper metadata
-            'bib_data': bib_data.decode('utf-8') if isinstance(bib_data, bytes) else bib_data,            
-            # metrics section - primary source for refereed status and citations
-            'metrics': metrics.decode('utf-8') if isinstance(metrics, bytes) else metrics,
-            
+            'bib_data': base64.b64encode(json.dumps(bib_data).encode('utf-8')).decode('utf-8') if isinstance(bib_data, dict) else base64.b64encode(str(bib_data).encode('utf-8')).decode('utf-8'),
+
+            # metrics section - primary source for refereed status and citations  
+            'metrics': base64.b64encode(json.dumps(metrics).encode('utf-8')).decode('utf-8') if isinstance(metrics, dict) else base64.b64encode(str(metrics).encode('utf-8')).decode('utf-8'),            
             # classifications section - primary source for collections
-            'classifications': list(classifications),
+            'classifications': classifications,
             
             'collections': list(''),
             'run_id': 0,
@@ -701,21 +703,17 @@ class ADSMasterPipelineCelery(ADSCelery):
         return message
 
     def _get_info_for_boost_entry(self, bibcode):
+        self.logger.info('Getting info for boost entry for bibcode: {}'.format(bibcode))
         rec = self.get_record(bibcode) or {}
-        metrics = {}
-        try:
-            metrics = self.get_metrics(bibcode) or {}
-        except Exception:
-            pass
-
-        collections = []
+        self.logger.info('Record: {}'.format(rec))
+        metrics = rec.get('metrics', {})
         
         # Extract collections from classifications (primary source)
         classifications = rec.get('classifications', list(''))
                 
         entry = None
         if rec:
-            entry = (rec, metrics, collections)
+            entry = (rec, metrics, classifications)
         return entry
 
     def generate_boost_request_message(self, bibcode, run_id=None, output_path=None):
@@ -751,26 +749,77 @@ class ADSMasterPipelineCelery(ADSCelery):
             # Create message for this record
             message = self._populate_boost_request_from_record(rec, metrics, classifications, 
                                                             run_id, output_path, None)
+            protobuf_format = BoostRequestRecord()
+
+            output_taskname=self._config.get('OUTPUT_TASKNAME_BOOST')
+            output_broker=self._config.get('OUTPUT_CELERY_BROKER_BOOST')
+            self.logger.debug('output_taskname: {}'.format(output_taskname))
+            self.logger.debug('output_broker: {}'.format(output_broker))
+            self.logger.debug('sending message {}'.format(message))
+
+            response_message = ParseDict(message, protobuf_format)
                 
         except Exception as e:
             self.logger.error('Error retrieving record data for bibcode %s: %s', bibcode, e)
-            self.logger.error('Message content: %s', message)
             raise
-
-        output_taskname=self._config.get('OUTPUT_TASKNAME_BOOST')
-        output_broker=self._config.get('OUTPUT_CELERY_BROKER_BOOST')
-        self.logger.debug('output_taskname: {}'.format(output_taskname))
-        self.logger.debug('output_broker: {}'.format(output_broker))
-        self.logger.debug('sending message {}'.format(message))
 
         # Forward message to Boost Pipeline - Celery workers will handle the rest
         try: 
-            self.forward_message(message, pipeline='boost')
+            self.forward_message(response_message, pipeline='boost')
             self.logger.info('Sent boost request for bibcode %s to Boost Pipeline', bibcode)
             return True
             
         except Exception as e:
             self.logger.exception('Error sending boost request for bibcode %s: %s', bibcode, e)
+            return False
+
+    def generate_boost_request_message_batch(self, bib_data, metrics, classifications, run_id=None, output_path=None):
+        """Build and send boost request message to Boost Pipeline.
+        
+        Parameters
+        ----------
+        bib_data : dictionary
+            The bib_data section of the record
+        metrics : dictionary
+            The metrics section of the record
+        classifications : list
+            The classifications section of the record
+        run_id : int, optional
+            Optional job/run identifier added to each entry.
+        output_path : str, optional
+            Optional output path hint added to each entry.
+
+        Returns
+        -------
+        bool
+            True if message was sent successfully, False otherwise.
+        """
+        try:
+            # Create message for this record
+            message = self._populate_boost_request_from_record(bib_data, metrics, classifications, 
+                                                            run_id, output_path, None)
+            protobuf_format = BoostRequestRecord()
+
+            output_taskname=self._config.get('OUTPUT_TASKNAME_BOOST')
+            output_broker=self._config.get('OUTPUT_CELERY_BROKER_BOOST')
+            self.logger.debug('output_taskname: {}'.format(output_taskname))
+            self.logger.debug('output_broker: {}'.format(output_broker))
+            self.logger.debug('sending message {}'.format(message))
+
+            response_message = ParseDict(message, protobuf_format)
+                
+        except Exception as e:
+            self.logger.error('Error creating boost request message: %s', e)
+            raise
+
+        # Forward message to Boost Pipeline - Celery workers will handle the rest
+        try: 
+            self.forward_message(response_message, pipeline='boost')
+            self.logger.info('Sent boost request to Boost Pipeline')
+            return True
+            
+        except Exception as e:
+            self.logger.exception('Error sending boost request: %s', e)
             return False
 
     def generate_links_for_resolver(self, record):
