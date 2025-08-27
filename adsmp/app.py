@@ -673,18 +673,17 @@ class ADSMasterPipelineCelery(ADSCelery):
                 batch_idx += batch_size
                 batch_list = []
 
-    def _populate_boost_request_from_record(self, rec, metrics, classifications, 
+    def _populate_boost_request_from_record(self, bib_data, metrics, classifications, scix_id, 
                                             run_id=None, output_path=None, request_type=None):
         """
         Returns a dictionary with bib_data, metrics, and classifications to Boost Pipeline.
         """
-        bib_data = rec
 
         # Create the new nested message structure that Boost Pipeline expects
         message = {
             # Root level fields
-            'bibcode': rec.get('bibcode', ''),
-            'scix_id': rec.get('scix_id', ''),
+            'bibcode': bib_data.get('bibcode', ''),
+            'scix_id': scix_id,
             'status': 'updated',
 
             # bib_data section - primary source for paper metadata
@@ -705,15 +704,17 @@ class ADSMasterPipelineCelery(ADSCelery):
     def _get_info_for_boost_entry(self, bibcode):
         self.logger.info('Getting info for boost entry for bibcode: {}'.format(bibcode))
         rec = self.get_record(bibcode) or {}
-        self.logger.info('Record: {}'.format(rec))
-        metrics = rec.get('metrics', {})
-        
-        # Extract collections from classifications (primary source)
-        classifications = rec.get('classifications', list(''))
-                
         entry = None
+        
         if rec:
-            entry = (rec, metrics, classifications)
+            bib_data = rec.get('bib_data', {})
+            metrics = rec.get('metrics', {})
+            scix_id = rec.get('scix_id', '')
+            
+            # Extract collections from classifications (primary source)
+            classifications = rec.get('classifications', list(''))
+                    
+            entry = (rec, metrics, classifications, scix_id)
         return entry
 
     def generate_boost_request_message(self, bibcode, run_id=None, output_path=None):
@@ -741,13 +742,13 @@ class ADSMasterPipelineCelery(ADSCelery):
         
         try:
             # Get record data for this bibcode
-            (rec, metrics, classifications) = self._get_info_for_boost_entry(bibcode)
-            if not rec:
+            (bib_data, metrics, classifications, scix_id) = self._get_info_for_boost_entry(bibcode)
+            if not bib_data:
                 self.logger.debug('Skipping bibcode with no data: %s', bibcode)
                 return False
                 
             # Create message for this record
-            message = self._populate_boost_request_from_record(rec, metrics, classifications, 
+            message = self._populate_boost_request_from_record(bib_data, metrics, classifications, scix_id,
                                                             run_id, output_path, None)
             protobuf_format = BoostRequestRecord()
 
@@ -773,7 +774,7 @@ class ADSMasterPipelineCelery(ADSCelery):
             self.logger.exception('Error sending boost request for bibcode %s: %s', bibcode, e)
             return False
 
-    def generate_boost_request_message_batch(self, bib_data, metrics, classifications, run_id=None, output_path=None):
+    def generate_boost_request_message_batch(self, bib_data, metrics, classifications, scix_id, run_id=None, output_path=None):
         """Build and send boost request message to Boost Pipeline.
         
         Parameters
@@ -784,6 +785,8 @@ class ADSMasterPipelineCelery(ADSCelery):
             The metrics section of the record
         classifications : list
             The classifications section of the record
+        scix_id : str
+            The scix_id section of the record
         run_id : int, optional
             Optional job/run identifier added to each entry.
         output_path : str, optional
@@ -796,7 +799,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         """
         try:
             # Create message for this record
-            message = self._populate_boost_request_from_record(bib_data, metrics, classifications, 
+            message = self._populate_boost_request_from_record(bib_data, metrics, classifications, scix_id,
                                                             run_id, output_path, None)
             protobuf_format = BoostRequestRecord()
 

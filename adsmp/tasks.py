@@ -1010,19 +1010,21 @@ def task_boost_request(bibcodes):
     return result
 
 @app.task(queue='boost-request-batch')
-def task_boost_request_batch(bib_data, metrics, classifications):
+def task_boost_request_batch(bib_data, metrics, classifications, scix_ids):
     """Process boost requests for a batch of records
     
     @param bib_data: dictionary - the bib_data section of the record
     @param metrics: dictionary - the metrics section of the record
     @param classifications: list - the classifications section of the record
+    @param scix_ids: list - the scix_ids section of the record
     """
     results = []
     logger.info('Processing boost request for batch of records')
-    for (bib, met, cl) in zip(bib_data, metrics, classifications):
+    for (bib, met, cl, scix_id) in zip(bib_data, metrics, classifications, scix_ids):
         bib = json.loads(bib) if isinstance(bib, str) else bib
         met = json.loads(met) if isinstance(met, str) else met
         cl = list(cl) if isinstance(cl, str) else cl
+        scix_id = scix_id if isinstance(scix_id, str) else ''
         logger.info('Processing boost request for record: {}'.format(bib))
         results.append(app.generate_boost_request_message_batch(bib, met, cl))
     
