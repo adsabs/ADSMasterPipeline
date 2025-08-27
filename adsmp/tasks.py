@@ -3,6 +3,7 @@ from past.builtins import basestring
 import os
 import time
 import adsputils
+from datetime import timedelta
 from adsmp import app as app_module
 from adsmp import solr_updater
 from adsmp import templates
@@ -393,6 +394,112 @@ def task_delete_documents(bibcode):
     else:
         logger.debug('Failed to deleted metrics record: %s', bibcode)
 
+def should_include_in_sitemap(record):
+    """
+    Determine if a record should be included in the sitemap based on SOLR processing status.
+    Logs the reasoning for inclusion/exclusion decisions.
+    
+    Include record in sitemap if:
+    1. Has bib_data (will be processed by SOLR)
+    2. SOLR processing succeeded (not solr-failed)
+    3. If processed, processing isn't too stale
+    
+    Args:
+        record: Dictionary with record data including bib_data, status, timestamps
+        
+    Returns:
+        bool: True if record should be included in sitemap, False otherwise
+    """
+    # Extract values from record dictionary
+    bibcode = record.get('bibcode', 'unknown')
+    bib_data = record.get('bib_data')
+    bib_data_updated = record.get('bib_data_updated')
+    solr_processed = record.get('solr_processed') 
+    status = record.get('status')
+    
+    # Must have bibliographic data
+    if not bib_data:
+        logger.debug('Excluding %s from sitemap: No bib_data', bibcode)
+        return False
+    
+    # If never processed by SOLR, include it (will be processed soon)
+    if not solr_processed:
+        logger.debug('Including %s in sitemap: Has bib_data, pending SOLR processing', bibcode)
+        return True
+    
+    # ONLY exclude if SOLR specifically failed
+    if status == 'solr-failed':
+        logger.warning('Excluding %s from sitemap: SOLR indexing failed (status: %s)', bibcode, status)
+        return False
+    
+    # metrics-failed, links-failed, retrying, success = OK! SOLR succeeded.
+    
+    # If we have both timestamps, check staleness
+    if bib_data_updated and solr_processed:
+        processing_lag = bib_data_updated - solr_processed
+        if processing_lag > timedelta(days=1):
+            logger.warning('Excluding %s from sitemap: SOLR processing stale by %s (bib_data_updated: %s, solr_processed: %s)', 
+                         bibcode, processing_lag, bib_data_updated, solr_processed)
+            return False
+    
+    # All good - include in sitemap
+    logger.debug('Including %s in sitemap: Valid (status: %s, solr_processed: %s)', bibcode, status, solr_processed)
+    return True
+
+
+def _execute_remove_action(session, bibcodes_to_remove):
+    """
+    Args:
+        session: Database session
+        bibcodes_to_remove: List of bibcodes to remove from sitemaps
+        
+    Returns:
+        tuple: (removed_count: int, deleted_files_count: int)
+    """
+    affected_files = set()
+    files_to_delete = set()
+    removed_count = 0
+    
+    # Delete records from database
+    for bibcode in bibcodes_to_remove:
+        sitemap_info = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
+        if sitemap_info:
+            affected_files.add(sitemap_info.sitemap_filename)
+            session.delete(sitemap_info)
+            removed_count += 1
+    
+    # Check which files are now empty and mark others for regeneration
+    for filename in affected_files:
+        remaining_count = session.query(SitemapInfo).filter_by(sitemap_filename=filename).count()
+        if remaining_count == 0:
+            files_to_delete.add(filename)
+        else:
+            # Mark remaining records for regeneration
+            session.query(SitemapInfo).filter_by(sitemap_filename=filename).update({'update_flag': True})
+    
+    # Delete empty files from disk
+    if files_to_delete:
+        sites_config = app.conf.get('SITES', {})
+        sitemap_dir = app.sitemap_dir
+        
+        for filename in files_to_delete:
+            for site_key in sites_config.keys():
+                site_filepath = os.path.join(sitemap_dir, site_key, filename)
+                if os.path.exists(site_filepath):
+                    os.remove(site_filepath)
+                    logger.info('Deleted empty sitemap file: %s', site_filepath)
+
+                # # Delete from S3 if enabled
+                # s3_success = s3_utils.delete_sitemap_file_from_s3(
+                #     app.conf, site_key, filename
+                # )
+                # if not s3_success:
+                #     logger.warning('Failed to delete %s from S3 for site %s', filename, site_key)
+    
+    logger.info('Removed %d bibcodes, deleted %d empty files', removed_count, len(files_to_delete))
+    return removed_count, len(files_to_delete)
+
+
 @app.task(queue='manage-sitemap') 
 def task_manage_sitemap(bibcodes, action):
     """
@@ -401,7 +508,7 @@ def task_manage_sitemap(bibcodes, action):
     Actions:
     - 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
     - 'force-update': force update sitemap table entries for given bibcodes
-    - 'remove': remove bibcodes from sitemap table (TODO: not implemented)
+    - 'remove': remove bibcodes from sitemap table
     - 'delete-table': delete all contents of sitemap table and backup files
     - 'update-robots': force update robots.txt files for all sites
     """
@@ -465,9 +572,10 @@ def task_manage_sitemap(bibcodes, action):
             logger.info('Using keyset pagination for efficient processing of large datasets')
             
             while True:
-                # Use keyset pagination instead of OFFSET/LIMIT for O(1) performance
+                
                 records_batch = (
-                    session.query(Records.id, Records.bibcode, Records.bib_data_updated)
+                    session.query(Records.id, Records.bibcode, Records.bib_data_updated, 
+                                Records.bib_data, Records.solr_processed, Records.status)
                     .filter(Records.id > last_id)
                     .order_by(Records.id)
                     .limit(batch_size)
@@ -481,6 +589,20 @@ def task_manage_sitemap(bibcodes, action):
                 bulk_data = []
                 for record in records_batch:
                     try:
+                        # Convert SQLAlchemy result to dictionary for consistent interface
+                        record_dict = {
+                            'id': record.id,
+                            'bibcode': record.bibcode,
+                            'bib_data_updated': record.bib_data_updated,
+                            'bib_data': record.bib_data,
+                            'solr_processed': record.solr_processed,
+                            'status': record.status
+                        }
+                        
+                        # Apply SOLR-gated inclusion logic for bootstrap
+                        if not should_include_in_sitemap(record_dict):
+                            continue
+                        
                         # Calculate sitemap filename efficiently
                         if records_in_current_file >= max_records_per_sitemap:
                             current_file_index += 1
@@ -541,119 +663,102 @@ def task_manage_sitemap(bibcodes, action):
         return
     
     elif action == 'remove':
-        affected_files = set()
-        files_to_delete = set()  # Track files that become empty
-        removed_count = 0
-        
+        if isinstance(bibcodes, basestring):
+            bibcodes = [bibcodes]
+            
         with app.session_scope() as session:
-            for bibcode in bibcodes:
-                sitemap_info = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
-                if sitemap_info:
-                    affected_files.add(sitemap_info.sitemap_filename)
-                    session.delete(sitemap_info)
-                    removed_count += 1
-            
-            # Check which files now have 0 records left
-            for filename in affected_files:
-                remaining_count = session.query(SitemapInfo).filter_by(sitemap_filename=filename).count()
-                if remaining_count == 0:
-                    files_to_delete.add(filename)
-                else:
-                    # Mark remaining records for regeneration
-                    session.query(SitemapInfo).filter_by(sitemap_filename=filename).update({'update_flag': True})
-            
-            # Delete empty sitemap files from disk (all sites)
-            if files_to_delete:
-                sites_config = app.conf.get('SITES', {})
-                sitemap_dir = app.sitemap_dir
-                
-                for filename in files_to_delete:
-                    for site_key in sites_config.keys():
-                        site_filepath = os.path.join(sitemap_dir, site_key, filename)
-                        if os.path.exists(site_filepath):
-                            os.remove(site_filepath)
-                            app.logger.info(f'Deleted empty sitemap file: {site_filepath}')
-                            
-                            # # Delete from S3 if enabled
-                            # s3_success = s3_utils.delete_sitemap_file_from_s3(
-                            #     app.conf, site_key, filename
-                            # )
-                            # if not s3_success:
-                            #     logger.warning('Failed to delete %s from S3 for site %s', filename, site_key)
-        
-        app.logger.info(f'Removed {removed_count} bibcodes, deleted {len(files_to_delete)} empty files')
-        session.commit()
+            _execute_remove_action(session, bibcodes)
+            session.commit()
 
     elif action in ['add', 'force-update']:
         if isinstance(bibcodes, basestring):
             bibcodes = [bibcodes]
 
         logger.debug('Updating sitemap info for: %s', bibcodes)
-        fields = ['id', 'bibcode', 'bib_data_updated']
+        fields = ['id', 'bibcode', 'bib_data_updated', 'bib_data', 'solr_processed', 'status']
         sitemap_records = []
+        records_to_remove = []
 
         # update all record_id from records table into sitemap table
         successful_count = 0
         failed_count = 0
       
-        for bibcode in bibcodes:
-            try:
-                record = app.get_record(bibcode, load_only=fields)
-                sitemap_info = app.get_sitemap_info(bibcode) 
+        # Apply SOLR-gated inclusion logic for 'add' action
+        with app.session_scope() as session:
+            for bibcode in bibcodes:
+                try:
+                    record = app.get_record(bibcode, load_only=fields)
+                    sitemap_info = app.get_sitemap_info(bibcode) 
 
-                if record is None:
-                    logger.error('The bibcode %s doesn\'t exist!', bibcode)
-                    failed_count += 1
-                    continue
-
-                # Create sitemap record data structure with default None values for filename_lastmoddate and sitemap_filename
-                sitemap_record = {
-                        'record_id': record.get('id'), # Records object uses attribute access
-                        'bibcode': record.get('bibcode'), # Records object uses attribute access  
-                        'bib_data_updated': record.get('bib_data_updated', None),
-                        'filename_lastmoddate': None, 
-                        'sitemap_filename': None,
-                        'scix_id': None,
-                        'update_flag': False
-                }
+                    if record is None:
+                        logger.error('The bibcode %s doesn\'t exist!', bibcode)
+                        failed_count += 1
+                        continue
                     
-                # New sitemap record
-                if sitemap_info is None:            
-                    sitemap_record['update_flag'] = True
-                    sitemap_records.append((sitemap_record['record_id'], sitemap_record['bibcode']))
-                    app._populate_sitemap_table(sitemap_record) 
+                    # Apply SOLR-gated inclusion logic for 'add' action only
+                    # (bootstrap is handled separately in its own elif block)
+                    if action == 'add':
+                        if not should_include_in_sitemap(record):
+                            # Check if currently in sitemap and mark for removal
+                            if sitemap_info:
+                                records_to_remove.append(bibcode)
+                            failed_count += 1
+                            continue
+
+                    # Create sitemap record data structure with default None values for filename_lastmoddate and sitemap_filename
+                    sitemap_record = {
+                            'record_id': record.get('id'), # Records object uses attribute access
+                            'bibcode': record.get('bibcode'), # Records object uses attribute access  
+                            'bib_data_updated': record.get('bib_data_updated', None),
+                            'filename_lastmoddate': None, 
+                            'sitemap_filename': None,
+                            'scix_id': None,
+                            'update_flag': False
+                    }
                     
-
-                else:
-                    # Sitemap record exists, update it 
-                    sitemap_record['filename_lastmoddate'] = sitemap_info.get('filename_lastmoddate', None)
-                    sitemap_record['sitemap_filename'] = sitemap_info.get('sitemap_filename', None)
-
-                    bib_data_updated = sitemap_record.get('bib_data_updated', None) 
-                    file_modified = sitemap_record.get('filename_lastmoddate', None)
-
-                    # If action is 'add' and bibdata was updated, or if action is 'force-update', set update_flag to True
-                    # Sitemap files will need to be updated in task_update_sitemap_files
-                    if action == 'force-update':
+                    # New sitemap record
+                    if sitemap_info is None:            
                         sitemap_record['update_flag'] = True
-                    elif action == 'add':
-                        # Sitemap file has never been generated OR data updated since last generation
-                        if file_modified is None or (file_modified and bib_data_updated and bib_data_updated > file_modified):
+                        sitemap_records.append((sitemap_record['record_id'], sitemap_record['bibcode']))
+                        app._populate_sitemap_table(sitemap_record) 
+                        
+
+                    else:
+                        # Sitemap record exists, update it 
+                        sitemap_record['filename_lastmoddate'] = sitemap_info.get('filename_lastmoddate', None)
+                        sitemap_record['sitemap_filename'] = sitemap_info.get('sitemap_filename', None)
+
+                        bib_data_updated = sitemap_record.get('bib_data_updated', None) 
+                        file_modified = sitemap_record.get('filename_lastmoddate', None)
+
+                        # If action is 'add' and bibdata was updated, or if action is 'force-update', set update_flag to True
+                        # Sitemap files will need to be updated in task_update_sitemap_files
+                        if action == 'force-update':
                             sitemap_record['update_flag'] = True
+                        elif action == 'add':
+                            # Sitemap file has never been generated OR data updated since last generation
+                            if file_modified is None or (file_modified and bib_data_updated and bib_data_updated > file_modified):
+                                sitemap_record['update_flag'] = True
+                        
+                        app._populate_sitemap_table(sitemap_record, sitemap_info)
                     
-                    app._populate_sitemap_table(sitemap_record, sitemap_info)
-                
-                successful_count += 1
-                logger.debug('Successfully processed sitemap for bibcode: %s', bibcode)
-                
-            except Exception as e:
-                failed_count += 1
-                logger.error('Failed to populate sitemap table for bibcode %s: %s', bibcode, str(e))
-                # Continue to next bibcode instead of crashing
-                continue
-        logger.info('Sitemap population completed: %d successful, %d failed out of %d total bibcodes', 
-                    successful_count, failed_count, len(bibcodes)) 
-        logger.info('%s Total sitemap records created: %s', len(sitemap_records), sitemap_records)
+                    successful_count += 1
+                    logger.debug('Successfully processed sitemap for bibcode: %s', bibcode)
+                    
+                except Exception as e:
+                    failed_count += 1
+                    logger.error('Failed to populate sitemap table for bibcode %s: %s', bibcode, str(e))
+                    # Continue to next bibcode instead of crashing
+                    continue
+            
+            # Clean up records that should be removed (reactive cleanup mechanism)
+            if records_to_remove:
+                logger.info('Removing %d failed records from sitemaps: %s', len(records_to_remove), records_to_remove)
+                _execute_remove_action(session, records_to_remove)
+                session.commit()
+            logger.info('Sitemap population completed: %d successful, %d failed out of %d total bibcodes', 
+                        successful_count, failed_count, len(bibcodes)) 
+            logger.info('%s Total sitemap records created: %s', len(sitemap_records), sitemap_records)
 
 # TODO: Add directory names: about, help, blog  
 # TODO: Need to query github to find when above dirs are updated: https://docs.github.com/en/rest?apiVersion=2022-11-28
