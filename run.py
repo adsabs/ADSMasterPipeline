@@ -346,18 +346,20 @@ def process_all_boost(batch_size):
             if sent % 1000 == 0:
                 logger.debug('Sending %s records', sent)
 
-            batch.append(rec)
+            batch.append((rec.bibcode, rec.bib_data, rec.metrics, rec.classifications, rec.scix_id))
             if len(batch) >= batch_size:
                 logger.info('Sending batch of %s records to Boost Pipeline', len(batch))
                 # Unpack the batch into separate lists for the task
-                t = tasks.task_boost_request_batch.delay(batch)
+                bibcode_list, bib_data_list, metrics_list, classifications_list, scix_ids_list = zip(*batch)
+                t = tasks.task_boost_request_batch.delay(bibcode_list, bib_data_list, metrics_list, classifications_list, scix_ids_list)
                 _tasks.append(t)
                 batch = []
     
     if len(batch) > 0:
         logger.info('Sending final batch of %s records to Boost Pipeline', len(batch))
         # Unpack the final batch into separate lists for the task
-        t = tasks.task_boost_request_batch.delay(batch)
+        bib_data_list, metrics_list, classifications_list, scix_ids_list = zip(*batch)
+        t = tasks.task_boost_request_batch.delay(bibcode_list, bib_data_list, metrics_list, classifications_list, scix_ids_list)
         _tasks.append(t)
         logger.debug('Sending %s records', len(batch))
     

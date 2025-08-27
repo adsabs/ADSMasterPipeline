@@ -681,6 +681,10 @@ class ADSMasterPipelineCelery(ADSCelery):
         self.logger.info('Populating boost request from bib_data: {}'.format(bib_data))
         self.logger.info('Bib_data type: {}'.format(type(bib_data)))
         # Create the new nested message structure that Boost Pipeline expects
+        
+        bib_data = json.loads(bib_data) if isinstance(bib_data, str) else bib_data
+        metrics = json.loads(metrics) if isinstance(metrics, str) else metrics
+
         message = {
             # Root level fields
             'bibcode': bib_data.get('bibcode', ''),
@@ -775,7 +779,7 @@ class ADSMasterPipelineCelery(ADSCelery):
             self.logger.exception('Error sending boost request for bibcode %s: %s', bibcode, e)
             return False
 
-    def generate_boost_request_message_batch(self, bib_data, metrics, classifications, scix_id, run_id=None, output_path=None):
+    def generate_boost_request_message_batch(self, bibcode, bib_data, metrics, classifications, scix_id, run_id=None, output_path=None):
         """Build and send boost request message to Boost Pipeline.
         
         Parameters

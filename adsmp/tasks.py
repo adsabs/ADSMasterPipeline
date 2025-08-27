@@ -1010,27 +1010,22 @@ def task_boost_request(bibcodes):
     return result
 
 @app.task(queue='boost-request-batch')
-def task_boost_request_batch(records):
+def task_boost_request_batch(bibcode_list, bib_data_list, metrics_list, classifications_list, scix_ids_list):
     """Process boost requests for a batch of records
     
-    @param records: list - the list of records to process
+    @param bib_data: dictionary - the bib_data section of the record
+    @param metrics: dictionary - the metrics section of the record
+    @param classifications: list - the classifications section of the record
+    @param scix_ids: list - the scix_ids section of the record
     """
-    results = []
-    logger.info('Processing boost request for batch of records')
-    for record in records:
-        bibcode = record.get('bibcode', '')
-        bib = record.get('bib_data', '')
-        met = record.get('metrics', '')
-        cl = record.get('classifications', [])
-        scix_id = record.get('scix_id', '')
-        
-        logger.info('Processing boost request for record: {}'.format(bibcode))
-        results.append(app.generate_boost_request_message_batch(bibcode, bib, met, cl, scix_id))
-    
-    logger.info('Boost requests for %s records sent to boost pipeline', len(records))
-    logger.info('Successfully sent %s boost requests to boost pipeline', sum(results))
-    return results
 
+    logger.info('Processing boost request for batch of records')
+    for (bibcode, bib_data, met, cl, scix_id) in zip(bibcode_list, bib_data_list, metrics_list, classifications_list, scix_ids_list):
+        logger.info('Processing boost request for record: {}'.format(bibcode))
+        app.generate_boost_request_message_batch(bibcode, bib_data, met, cl, scix_id)
+    
+    logger.info('Boost requests for %s records sent to boost pipeline', len(bibcode_list))
+    return True
 
 if __name__ == '__main__':
     app.start()
