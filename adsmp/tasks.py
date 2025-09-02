@@ -758,6 +758,7 @@ def task_manage_sitemap(bibcodes, action):
                         successful_count, failed_count, len(bibcodes)) 
             logger.info('%s Total sitemap records created: %s', len(sitemap_records), sitemap_records)
 
+
 # TODO: Add directory names: about, help, blog  
 # TODO: Need to query github to find when above dirs are updated: https://docs.github.com/en/rest?apiVersion=2022-11-28
 # TODO: Need to generate an API token from ADStailor (maybe)
