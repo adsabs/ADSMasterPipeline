@@ -2215,12 +2215,15 @@ class TestSitemapWorkflow(TestWorkers):
                 session.add(record)
             session.commit()
             
-            # Also add some records to sitemap table that should be removed
-            failed_sitemap_record = SitemapInfo()
-            failed_sitemap_record.bibcode = '2023Test..1..2B'
-            failed_sitemap_record.sitemap_filename = 'sitemap_bib_1.xml'
-            failed_sitemap_record.update_flag = False
-            session.add(failed_sitemap_record)
+            # Get the record ID for the failed record and add it to sitemap table
+            failed_record = session.query(Records).filter_by(bibcode='2023Test..1..2B').first()
+            if failed_record:
+                failed_sitemap_record = SitemapInfo()
+                failed_sitemap_record.bibcode = '2023Test..1..2B'
+                failed_sitemap_record.record_id = failed_record.id
+                failed_sitemap_record.sitemap_filename = 'sitemap_bib_1.xml'
+                failed_sitemap_record.update_flag = False
+                session.add(failed_sitemap_record)
             session.commit()
         
         # Run the add action
@@ -2245,10 +2248,10 @@ class TestSitemapWorkflow(TestWorkers):
     def test_task_manage_sitemap_bootstrap_with_solr_filtering(self):
         """Test bootstrap action applies SOLR-gated filtering"""
 
-        # Clean up any existing test data
+        # Clean up ALL existing data to ensure isolated test
         with self.app.session_scope() as session:
-            session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023Boot%')).delete(synchronize_session=False)
-            session.query(Records).filter(Records.bibcode.like('2023Boot%')).delete(synchronize_session=False)
+            session.query(SitemapInfo).delete(synchronize_session=False)
+            session.query(Records).delete(synchronize_session=False)
             session.commit()
 
         # Create test records in Records table
@@ -2270,20 +2273,20 @@ class TestSitemapWorkflow(TestWorkers):
                 record.solr_processed = solr_processed
                 session.add(record)
             session.commit()
-        
+
         # Run bootstrap
         tasks.task_manage_sitemap([], 'bootstrap')
-        
+
         # Verify results
         with self.app.session_scope() as session:
             sitemap_records = session.query(SitemapInfo).all()
             included_bibcodes = [record.bibcode for record in sitemap_records]
-            
+
             # Should include: valid, metrics-failed, and pending records
             self.assertIn('2023Boot..1..1A', included_bibcodes)  # Valid
             self.assertIn('2023Boot..1..3C', included_bibcodes)  # Metrics failed
             self.assertIn('2023Boot..1..5E', included_bibcodes)  # Pending SOLR
-            
+
             # Should exclude: SOLR-failed and no-bib-data records
             self.assertNotIn('2023Boot..1..2B', included_bibcodes)  # SOLR failed
             self.assertNotIn('2023Boot..1..4D', included_bibcodes)  # No bib_data
@@ -2357,20 +2360,23 @@ class TestSitemapWorkflow(TestWorkers):
                 session.add(sitemap_record)
             session.commit()
             
-            # Remove first two records (will empty first file, partially empty second)
+            # Remove first two records (will empty first file, leave record in second file)
+            # Records mapping: 0,1 -> file 1, 2 -> file 2
             removed_count, deleted_files_count = _execute_remove_action(session, test_bibcodes[:2])
             session.commit()
-            
-            # Verify removal
+
+            # Verify removal stats
+            self.assertEqual(removed_count, 2)
+            self.assertEqual(deleted_files_count, 1)  # File 1 should be deleted (empty)
+
+            # Verify remaining record
             remaining_records = session.query(SitemapInfo).all()
             self.assertEqual(len(remaining_records), 1)
             self.assertEqual(remaining_records[0].bibcode, '2023Remove..1..3C')
-            
+            self.assertEqual(remaining_records[0].sitemap_filename, 'sitemap_bib_2.xml')
+
             # Verify the remaining record is flagged for regeneration
             self.assertTrue(remaining_records[0].update_flag)
-            
-            # Verify return values
-            self.assertEqual(removed_count, 2)
 
     def test_add_action_skips_invalid_records(self):
         """Test that add action skips invalid records without removing existing ones"""
