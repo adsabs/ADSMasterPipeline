@@ -20,6 +20,7 @@ except ImportError:
 from adsputils import setup_logging, get_date, load_config
 from adsmp.models import KeyValue, Records, SitemapInfo
 from adsmp import tasks, solr_updater, validate #s3_utils
+from adsmp.tasks import should_include_in_sitemap
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
@@ -506,13 +507,40 @@ def update_sitemap_files():
     print("Task is running in the background...")
     return result.id
 
+def cleanup_invalid_sitemaps():
+    """
+    Initiate cleanup of invalid sitemap entries using Celery task processing.
+    
+    This schedules a background task that handles records which became invalid due to:
+    - SOLR processing failures (status changed to 'solr-failed' or 'retrying')
+    - Loss of bib_data
+    - Stale processing (SOLR processing too old compared to bib_data_updated)
+    - Records deleted from main database
+    
+    Returns:
+        str: Celery task ID for monitoring cleanup progress
+    """
+    logger.info('Initiating sitemap cleanup using background task')
+    
+    # Submit cleanup task to Celery
+    cleanup_result = tasks.task_cleanup_invalid_sitemaps.apply_async(
+        priority=1  
+    )
+    
+    logger.info('Sitemap cleanup task submitted: %s', cleanup_result.id)
+    return cleanup_result.id
+
+
+
 def update_sitemaps_auto(days_back=1):
     """
     Automatically find and process records needing sitemap updates
     
-    Finds records that need sitemap updates based on:
-    1. New records not in sitemap table
-    2. Records where bib_data_updated > filename_lastmoddate
+    Finds records that need sitemap updates based on recent changes to:
+    1. bib_data_updated - new/updated bibliographic data
+    2. solr_processed - successful reindexes (catches previously failed records)
+    
+    This ensures both new content and successful reindexes are reflected in sitemaps.
     
     Args:
         days_back: Number of days to look back for changes
@@ -531,14 +559,23 @@ def update_sitemaps_auto(days_back=1):
     bibcodes_to_update = []
     
     with app.session_scope() as session:
-        # Find all records that were updated recently - these ALL need sitemap updates
-        records_query = session.query(Records).filter(
+        # Find all records that need sitemap updates:
+        # 1. Records with recently updated bib_data
+        # 2. Records with recently updated solr_processed (catches successful reindexes)
+        bib_data_updated_query = session.query(Records.bibcode).filter(
             Records.bib_data_updated >= cutoff_date
-        ).options(load_only(Records.bibcode))
+        )
         
-        bibcodes_to_update = [record.bibcode for record in records_query]
+        solr_processed_updated_query = session.query(Records.bibcode).filter(
+            Records.solr_processed >= cutoff_date
+        )
         
-        logger.info('Found %d records updated since %s', len(bibcodes_to_update), cutoff_date.isoformat())
+        # Union both queries to get all bibcodes that need updates
+        combined_query = bib_data_updated_query.union(solr_processed_updated_query)
+        bibcodes_to_update = [record.bibcode for record in combined_query]
+        
+        logger.info('Found %d records with recent bib_data or solr_processed updates since %s', 
+                   len(bibcodes_to_update), cutoff_date.isoformat())
     
     if not bibcodes_to_update:
         logger.info('No records need sitemap updates')
@@ -723,6 +760,11 @@ if __name__ == '__main__':
                         default=1,
                         dest='days_back',
                         help='number of days to look back for changed records (used with --update-sitemaps-auto)')
+    parser.add_argument('--cleanup-invalid-sitemaps',
+                        action='store_true',
+                        default=False,
+                        dest='cleanup_invalid_sitemaps',
+                        help='remove invalid sitemap entries that no longer meet inclusion criteria')
     # parser.add_argument('--sync-sitemap-s3',
     #                     action='store_true',
     #                     default=False,
@@ -957,6 +999,11 @@ if __name__ == '__main__':
             print("Tasks are running in the background...")
         else:
             print("No records needed sitemap updates")
+    elif args.cleanup_invalid_sitemaps:
+        task_id = cleanup_invalid_sitemaps()
+        print(f"Sitemap cleanup task submitted: {task_id}")
+        print("Cleanup task is running in the background")
+        print("Monitor progress in Celery logs or task monitoring system")
     # elif args.sync_sitemap_s3:
     #     sync_sitemap_to_s3()
     elif args.update_scixid:

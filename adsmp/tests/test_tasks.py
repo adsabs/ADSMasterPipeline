@@ -22,6 +22,7 @@ from mock import Mock, patch, MagicMock
 
 from adsmp import app, tasks
 from adsmp.models import Base, Records, SitemapInfo
+from adsmp.tasks import should_include_in_sitemap, _execute_remove_action
 
 import logging
 logger = logging.getLogger(__name__)
@@ -2093,6 +2094,424 @@ class TestSitemapWorkflow(TestWorkers):
             # Records should maintain their original state
             for record in final_records:
                 self.assertIn(record.bibcode, existing_bibcodes)
+
+    def test_should_include_in_sitemap_function(self):
+        """Test should_include_in_sitemap logic with various record states"""
+        
+        
+        # Test case 1: No bib_data - should exclude
+        record_no_data = {
+            'bibcode': '2023Test..1..1A',
+            'bib_data': None,
+            'status': 'success'
+        }
+        self.assertFalse(should_include_in_sitemap(record_no_data))
+        
+        # Test case 2: Has bib_data, no solr_processed - should include
+        record_pending = {
+            'bibcode': '2023Test..1..2B',
+            'bib_data': '{"title": "Test"}',
+            'solr_processed': None,
+            'status': None
+        }
+        self.assertTrue(should_include_in_sitemap(record_pending))
+        
+        # Test case 3: SOLR failed - should exclude
+        record_solr_failed = {
+            'bibcode': '2023Test..1..3C',
+            'bib_data': '{"title": "Test"}',
+            'solr_processed': get_date() - timedelta(hours=1),
+            'status': 'solr-failed'
+        }
+        self.assertFalse(should_include_in_sitemap(record_solr_failed))
+        
+        # Test case 4: Metrics failed but SOLR succeeded - should include
+        record_metrics_failed = {
+            'bibcode': '2023Test..1..4D',
+            'bib_data': '{"title": "Test"}',
+            'solr_processed': get_date() - timedelta(hours=1),
+            'status': 'metrics-failed'
+        }
+        self.assertTrue(should_include_in_sitemap(record_metrics_failed))
+        
+        # Test case 5: Links failed but SOLR succeeded - should include
+        record_links_failed = {
+            'bibcode': '2023Test..1..5E',
+            'bib_data': '{"title": "Test"}',
+            'solr_processed': get_date() - timedelta(hours=1),
+            'status': 'links-failed'
+        }
+        self.assertTrue(should_include_in_sitemap(record_links_failed))
+        
+        # Test case 6: Retrying status - should exclude (previously failed record)
+        record_retrying = {
+            'bibcode': '2023Test..1..6F',
+            'bib_data': '{"title": "Test"}',
+            'solr_processed': get_date() - timedelta(hours=1),
+            'status': 'retrying'
+        }
+        self.assertFalse(should_include_in_sitemap(record_retrying))
+        
+        # Test case 7: Success status - should include
+        record_success = {
+            'bibcode': '2023Test..1..7G',
+            'bib_data': '{"title": "Test"}',
+            'solr_processed': get_date() - timedelta(hours=1),
+            'status': 'success'
+        }
+        self.assertTrue(should_include_in_sitemap(record_success))
+        
+        # Test case 8: Stale processing (> 1 day) - should exclude
+        record_stale = {
+            'bibcode': '2023Test..1..8H',
+            'bib_data': '{"title": "Test"}',
+            'bib_data_updated': get_date() - timedelta(hours=1),
+            'solr_processed': get_date() - timedelta(days=2),
+            'status': 'success'
+        }
+        self.assertFalse(should_include_in_sitemap(record_stale))
+
+    def test_task_manage_sitemap_add_with_solr_filtering(self):
+        """Test add action applies SOLR-gated filtering and removes failed records"""
+        
+        # Create test records with different statuses
+        test_bibcodes = [
+            '2023Test..1..1A',  # Valid record
+            '2023Test..1..2B',  # SOLR failed - should be excluded
+            '2023Test..1..3C',  # Metrics failed - should be included
+            '2023Test..1..4D'   # No bib_data - should be excluded
+        ]
+        
+        with self.app.session_scope() as session:
+            # Add test records to Records table
+            for i, bibcode in enumerate(test_bibcodes):
+                record = Records()
+                record.id = i + 1
+                record.bibcode = bibcode
+                record.bib_data_updated = get_date() - timedelta(days=1)
+                
+                if bibcode == '2023Test..1..1A':  # Valid
+                    record.bib_data = '{"title": "Valid Paper"}'
+                    record.status = 'success'
+                    record.solr_processed = get_date() - timedelta(hours=1)
+                elif bibcode == '2023Test..1..2B':  # SOLR failed
+                    record.bib_data = '{"title": "Failed Paper"}'
+                    record.status = 'solr-failed'
+                    record.solr_processed = get_date() - timedelta(hours=1)
+                elif bibcode == '2023Test..1..3C':  # Metrics failed
+                    record.bib_data = '{"title": "Metrics Failed Paper"}'
+                    record.status = 'metrics-failed'
+                    record.solr_processed = get_date() - timedelta(hours=1)
+                elif bibcode == '2023Test..1..4D':  # No bib_data
+                    record.bib_data = None
+                    record.status = 'success'
+                    record.solr_processed = get_date() - timedelta(hours=1)
+                
+                session.add(record)
+            session.commit()
+            
+            # Also add some records to sitemap table that should be removed
+            failed_sitemap_record = SitemapInfo()
+            failed_sitemap_record.bibcode = '2023Test..1..2B'
+            failed_sitemap_record.sitemap_filename = 'sitemap_bib_1.xml'
+            failed_sitemap_record.update_flag = False
+            session.add(failed_sitemap_record)
+            session.commit()
+        
+        # Run the add action
+        tasks.task_manage_sitemap(test_bibcodes, 'add')
+        
+        # Verify results
+        with self.app.session_scope() as session:
+            sitemap_records = session.query(SitemapInfo).all()
+            included_bibcodes = [record.bibcode for record in sitemap_records]
+            
+            # Should include valid record and metrics-failed record
+            self.assertIn('2023Test..1..1A', included_bibcodes)  # Valid
+            self.assertIn('2023Test..1..3C', included_bibcodes)  # Metrics failed but SOLR OK
+            
+            # Should exclude SOLR-failed and no-bib-data records
+            self.assertNotIn('2023Test..1..2B', included_bibcodes)  # SOLR failed
+            self.assertNotIn('2023Test..1..4D', included_bibcodes)  # No bib_data
+            
+            # Should have exactly 2 records
+            self.assertEqual(len(sitemap_records), 2)
+
+    def test_task_manage_sitemap_bootstrap_with_solr_filtering(self):
+        """Test bootstrap action applies SOLR-gated filtering"""
+        
+        # Clear any existing sitemap records
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).delete()
+            session.commit()
+        
+        # Create test records in Records table
+        test_data = [
+            ('2023Boot..1..1A', '{"title": "Valid"}', 'success', get_date() - timedelta(hours=1)),
+            ('2023Boot..1..2B', '{"title": "Failed"}', 'solr-failed', get_date() - timedelta(hours=1)),
+            ('2023Boot..1..3C', '{"title": "Metrics Failed"}', 'metrics-failed', get_date() - timedelta(hours=1)),
+            ('2023Boot..1..4D', None, 'success', get_date() - timedelta(hours=1)),  # No bib_data
+            ('2023Boot..1..5E', '{"title": "Pending"}', None, None),  # Pending SOLR
+        ]
+        
+        with self.app.session_scope() as session:
+            for i, (bibcode, bib_data, status, solr_processed) in enumerate(test_data):
+                record = Records()
+                record.id = i + 1
+                record.bibcode = bibcode
+                record.bib_data = bib_data
+                record.bib_data_updated = get_date() - timedelta(days=1)
+                record.status = status
+                record.solr_processed = solr_processed
+                session.add(record)
+            session.commit()
+        
+        # Run bootstrap
+        tasks.task_manage_sitemap([], 'bootstrap')
+        
+        # Verify results
+        with self.app.session_scope() as session:
+            sitemap_records = session.query(SitemapInfo).all()
+            included_bibcodes = [record.bibcode for record in sitemap_records]
+            
+            # Should include: valid, metrics-failed, and pending records
+            self.assertIn('2023Boot..1..1A', included_bibcodes)  # Valid
+            self.assertIn('2023Boot..1..3C', included_bibcodes)  # Metrics failed
+            self.assertIn('2023Boot..1..5E', included_bibcodes)  # Pending SOLR
+            
+            # Should exclude: SOLR-failed and no-bib-data records
+            self.assertNotIn('2023Boot..1..2B', included_bibcodes)  # SOLR failed
+            self.assertNotIn('2023Boot..1..4D', included_bibcodes)  # No bib_data
+            
+            # Should have exactly 3 records
+            self.assertEqual(len(sitemap_records), 3)
+
+    def test_task_manage_sitemap_force_update_skips_filtering(self):
+        """Test force-update action skips SOLR-gated filtering"""
+        
+        # Create a record that would normally be excluded
+        test_bibcode = '2023Force..1..1A'
+        
+        with self.app.session_scope() as session:
+            record = Records()
+            record.id = 1
+            record.bibcode = test_bibcode
+            record.bib_data = '{"title": "Force Test"}'
+            record.bib_data_updated = get_date() - timedelta(days=1)
+            record.status = 'solr-failed'  # Would be excluded in 'add' action
+            record.solr_processed = get_date() - timedelta(hours=1)
+            session.add(record)
+            session.commit()
+        
+        # Run force-update action
+        tasks.task_manage_sitemap([test_bibcode], 'force-update')
+        
+        # Verify record was included despite SOLR failure
+        with self.app.session_scope() as session:
+            sitemap_record = session.query(SitemapInfo).filter_by(bibcode=test_bibcode).first()
+            self.assertIsNotNone(sitemap_record)
+            self.assertEqual(sitemap_record.bibcode, test_bibcode)
+
+    def test_execute_remove_action_helper(self):
+        """Test _execute_remove_action helper function"""
+        
+        # Set up test data
+        test_bibcodes = ['2023Remove..1..1A', '2023Remove..1..2B', '2023Remove..1..3C']
+        
+        with self.app.session_scope() as session:
+            # Add sitemap records
+            for i, bibcode in enumerate(test_bibcodes):
+                sitemap_record = SitemapInfo()
+                sitemap_record.bibcode = bibcode
+                sitemap_record.sitemap_filename = f'sitemap_bib_{(i // 2) + 1}.xml'  # 2 files
+                sitemap_record.update_flag = False
+                session.add(sitemap_record)
+            session.commit()
+            
+            # Remove first two records (will empty first file, partially empty second)
+            removed_count, deleted_files_count = _execute_remove_action(session, test_bibcodes[:2])
+            session.commit()
+            
+            # Verify removal
+            remaining_records = session.query(SitemapInfo).all()
+            self.assertEqual(len(remaining_records), 1)
+            self.assertEqual(remaining_records[0].bibcode, '2023Remove..1..3C')
+            
+            # Verify the remaining record is flagged for regeneration
+            self.assertTrue(remaining_records[0].update_flag)
+            
+            # Verify return values
+            self.assertEqual(removed_count, 2)
+
+    def test_add_action_skips_invalid_records(self):
+        """Test that add action skips invalid records without removing existing ones"""
+        
+        # Clean up any existing test data
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023AddTest%')).delete(synchronize_session=False)
+            session.query(Records).filter(Records.bibcode.like('2023AddTest%')).delete(synchronize_session=False)
+            session.commit()
+        
+        # Set up scenario: existing sitemap with mixed valid/invalid records
+        test_bibcodes = [
+            '2023AddTest..1..1A',  # Valid - should be updated
+            '2023AddTest..1..2B',  # SOLR failed - should be skipped (but existing entry remains)
+            '2023AddTest..1..3C'   # Valid - should be updated
+        ]
+        
+        with self.app.session_scope() as session:
+            # Add Records (let database auto-assign IDs)
+            record_ids = []
+            for i, bibcode in enumerate(test_bibcodes):
+                record = Records()
+                record.bibcode = bibcode
+                record.bib_data_updated = get_date() - timedelta(days=1)
+                
+                if bibcode == '2023AddTest..1..2B':  # Failed record
+                    record.bib_data = '{"title": "Failed"}'
+                    record.status = 'solr-failed'
+                    record.solr_processed = get_date() - timedelta(hours=1)
+                else:  # Valid records
+                    record.bib_data = '{"title": "Valid"}'
+                    record.status = 'success'
+                    record.solr_processed = get_date() - timedelta(hours=1)
+                
+                session.add(record)
+                session.flush()  # Get the auto-assigned ID
+                record_ids.append(record.id)
+            
+            # Add existing sitemap records for all bibcodes
+            for i, bibcode in enumerate(test_bibcodes):
+                sitemap_record = SitemapInfo()
+                sitemap_record.bibcode = bibcode
+                sitemap_record.sitemap_filename = 'sitemap_bib_1.xml'
+                sitemap_record.update_flag = False
+                sitemap_record.record_id = record_ids[i]  # Use the auto-assigned IDs
+                session.add(sitemap_record)
+            
+            session.commit()
+        
+        # Run add action (should skip invalid records but not remove them)
+        tasks.task_manage_sitemap(test_bibcodes, 'add')
+        
+        # Verify results
+        with self.app.session_scope() as session:
+            sitemap_records = session.query(SitemapInfo).all()
+            included_bibcodes = [record.bibcode for record in sitemap_records]
+            
+            # Should still include all records (add action doesn't remove)
+            self.assertIn('2023AddTest..1..1A', included_bibcodes)
+            self.assertIn('2023AddTest..1..2B', included_bibcodes)  # Still exists, just not updated
+            self.assertIn('2023AddTest..1..3C', included_bibcodes)
+            
+            # Should have all 3 records
+            self.assertEqual(len(sitemap_records), 3)
+            
+            # Only valid records should be flagged for regeneration
+            for record in sitemap_records:
+                if record.bibcode in ['2023AddTest..1..1A', '2023AddTest..1..3C']:
+                    self.assertTrue(record.update_flag, f"Valid record {record.bibcode} should be flagged")
+                else:
+                    self.assertFalse(record.update_flag, f"Invalid record {record.bibcode} should not be flagged")
+
+    def test_task_cleanup_invalid_sitemaps(self):
+        """Test the new Celery cleanup task"""
+        
+        # Clean up any existing test data
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023Cleanup%')).delete(synchronize_session=False)
+            session.query(Records).filter(Records.bibcode.like('2023Cleanup%')).delete(synchronize_session=False)
+            session.commit()
+        
+        # Set up test data with mixed valid/invalid records
+        test_bibcodes = [
+            '2023Cleanup..1..1A',  # Valid - should stay
+            '2023Cleanup..1..2B',  # SOLR failed - should be removed
+            '2023Cleanup..1..3C',  # Retrying status - should be removed  
+            '2023Cleanup..1..4D',  # Valid - should stay
+            '2023Cleanup..1..5E'   # Missing from Records table - should be removed
+        ]
+        
+        with self.app.session_scope() as session:
+            # Add Records (note: we intentionally don't add record for 5E)
+            record_ids = []
+            for i, bibcode in enumerate(test_bibcodes[:-1]):  # Skip last one
+                record = Records()
+                record.bibcode = bibcode
+                record.bib_data_updated = get_date() - timedelta(days=1)
+                
+                if bibcode == '2023Cleanup..1..2B':  # SOLR failed
+                    record.bib_data = '{"title": "Failed"}'
+                    record.status = 'solr-failed'
+                    record.solr_processed = get_date() - timedelta(hours=1)
+                elif bibcode == '2023Cleanup..1..3C':  # Retrying
+                    record.bib_data = '{"title": "Retrying"}'
+                    record.status = 'retrying'
+                    record.solr_processed = get_date() - timedelta(hours=1)
+                else:  # Valid records
+                    record.bib_data = '{"title": "Valid"}'
+                    record.status = 'success'
+                    record.solr_processed = get_date() - timedelta(hours=1)
+                
+                session.add(record)
+                session.flush()  # Get the auto-assigned ID
+                record_ids.append(record.id)
+            
+            # Add sitemap records for ALL bibcodes (including the missing one)
+            for i, bibcode in enumerate(test_bibcodes):
+                sitemap_record = SitemapInfo()
+                sitemap_record.bibcode = bibcode
+                sitemap_record.sitemap_filename = 'sitemap_bib_1.xml'
+                sitemap_record.update_flag = False
+                
+                # Set record_id for records that exist, use first record's ID for missing record
+                if i < len(record_ids):  # Record exists
+                    sitemap_record.record_id = record_ids[i]
+                else:  # Missing record (2023Cleanup..1..5E) - use first record's ID as dummy
+                    sitemap_record.record_id = record_ids[0]
+                
+                session.add(sitemap_record)
+            
+            session.commit()
+        
+        # Run cleanup task
+        with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_files:
+            mock_files_result = Mock()
+            mock_files_result.id = 'test-files-123'
+            mock_files.return_value = mock_files_result
+            
+            result = tasks.task_cleanup_invalid_sitemaps()
+        
+        # Verify results
+        with self.app.session_scope() as session:
+            remaining_records = session.query(SitemapInfo).all()
+            remaining_bibcodes = [record.bibcode for record in remaining_records]
+            
+            # Should keep valid records
+            self.assertIn('2023Cleanup..1..1A', remaining_bibcodes)
+            self.assertIn('2023Cleanup..1..4D', remaining_bibcodes)
+            
+            # Should remove invalid records
+            self.assertNotIn('2023Cleanup..1..2B', remaining_bibcodes)  # SOLR failed
+            self.assertNotIn('2023Cleanup..1..3C', remaining_bibcodes)  # Retrying
+            self.assertNotIn('2023Cleanup..1..5E', remaining_bibcodes)  # Missing from Records
+            
+            # Should have exactly 2 valid records remaining
+            self.assertEqual(len(remaining_records), 2)
+        
+        # Verify return value structure
+        self.assertIsInstance(result, dict)
+        self.assertIn('removed_count', result)
+        self.assertIn('batches_processed', result)
+        self.assertIn('total_records_checked', result)
+        self.assertIn('file_regeneration_task', result)
+        
+        # Should have removed 3 invalid records
+        self.assertEqual(result['removed_count'], 3)
+        self.assertEqual(result['file_regeneration_task'], 'test-files-123')
+        
+        # Verify file regeneration was scheduled
+        mock_files.assert_called_once_with(countdown=60)
 
     def test_task_manage_sitemap_bootstrap_performance(self):
         """Test bootstrap action performance with dataset simulation"""

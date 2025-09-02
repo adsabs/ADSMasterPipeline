@@ -8,7 +8,7 @@ import testing.postgresql
 
 from adsmp import app
 from adsmp.models import Base, Records, SitemapInfo
-from run import reindex_failed_bibcodes, manage_sitemap, update_sitemap_files, update_sitemaps_auto
+from run import reindex_failed_bibcodes, manage_sitemap, update_sitemap_files, update_sitemaps_auto, cleanup_invalid_sitemaps
 from datetime import datetime, timedelta, timezone
 
 class TestFixDbDuplicates(unittest.TestCase):
@@ -435,9 +435,12 @@ class TestSitemapCommandLine(unittest.TestCase):
                     mock_session = Mock()
                     mock_session_scope.return_value.__enter__.return_value = mock_session
                     
-                    # Mock the query chain - return the records directly
-                    mock_records_query = [mock_recent_record1, mock_recent_record2]
-                    mock_session.query.return_value.filter.return_value.options.return_value = mock_records_query
+                    # Mock the UNION query structure
+                    mock_bib_data_query = Mock()
+                    mock_bib_data_query.union.return_value = [mock_recent_record1, mock_recent_record2]
+                    
+                    # Set up the query chain for the new union structure
+                    mock_session.query.return_value.filter.return_value = mock_bib_data_query
                     
                     # Set up mock results
                     mock_manage_result = Mock()
@@ -488,8 +491,12 @@ class TestSitemapCommandLine(unittest.TestCase):
                 mock_session = Mock()
                 mock_session_scope.return_value.__enter__.return_value = mock_session
                 
-                # Mock the query chain - return record directly
-                mock_session.query.return_value.filter.return_value.options.return_value = [mock_record]
+                # Mock the UNION query structure
+                mock_bib_data_query = Mock()
+                mock_bib_data_query.union.return_value = [mock_record]
+                
+                # Set up the query chain for the new union structure
+                mock_session.query.return_value.filter.return_value = mock_bib_data_query
                 
                 mock_manage.side_effect = Exception("Task submission failed")
                 
@@ -497,6 +504,82 @@ class TestSitemapCommandLine(unittest.TestCase):
                     update_sitemaps_auto(days_back=1)
                 
                 self.assertEqual(str(context.exception), "Task submission failed")
+
+    def test_update_sitemaps_auto_with_solr_processed_updates(self):
+        """Test update_sitemaps_auto catches records with recent solr_processed updates"""
+        
+        # Mock records with recent solr_processed (successful reindexes)
+        mock_reindexed_record1 = Mock()
+        mock_reindexed_record1.bibcode = '2023ApJ...123..789C'
+        
+        mock_reindexed_record2 = Mock()
+        mock_reindexed_record2.bibcode = '2023ApJ...123..790D'
+        
+        # Mock records with recent bib_data_updated
+        mock_new_record = Mock()
+        mock_new_record.bibcode = '2023ApJ...123..791E'
+        
+        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
+            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_files:
+                with patch('run.app.session_scope') as mock_session_scope:
+                    # Mock the session
+                    mock_session = Mock()
+                    mock_session_scope.return_value.__enter__.return_value = mock_session
+                    
+                    # Mock the two separate queries
+                    # First query: bib_data_updated records
+                    mock_bib_data_query = Mock()
+                    mock_bib_data_query.union.return_value = [
+                        mock_new_record,           # From bib_data_updated query
+                        mock_reindexed_record1,    # From solr_processed query  
+                        mock_reindexed_record2     # From solr_processed query
+                    ]
+                    
+                    # Set up the query chain for the new union structure
+                    mock_session.query.return_value.filter.return_value = mock_bib_data_query
+                    
+                    # Set up mock task results
+                    mock_manage_result = Mock()
+                    mock_manage_result.id = 'test-solr-manage-123'
+                    mock_manage.return_value = mock_manage_result
+                    
+                    mock_files_result = Mock()
+                    mock_files_result.id = 'test-solr-files-456'
+                    mock_files.return_value = mock_files_result
+                    
+                    # Call the function
+                    manage_task_id, file_task_id = update_sitemaps_auto(days_back=1)
+                    
+                    # Verify results
+                    self.assertEqual(manage_task_id, 'test-solr-manage-123')
+                    self.assertEqual(file_task_id, 'test-solr-files-456')
+                    
+                    # Verify manage task was called with all bibcodes
+                    self.assertTrue(mock_manage.called)
+                    manage_call_args = mock_manage.call_args
+                    bibcodes_passed = manage_call_args[1]['args'][0]  # args=(bibcodes, 'add')
+                    
+                    # Should include bibcodes from both bib_data_updated and solr_processed queries
+                    expected_bibcodes = ['2023ApJ...123..791E', '2023ApJ...123..789C', '2023ApJ...123..790D']
+                    self.assertEqual(set(bibcodes_passed), set(expected_bibcodes))
+
+    def test_cleanup_invalid_sitemaps(self):
+        """Test cleanup_invalid_sitemaps function"""
+        
+        with patch('run.tasks.task_cleanup_invalid_sitemaps.apply_async') as mock_cleanup:
+            # Mock the cleanup task result
+            mock_result = Mock()
+            mock_result.id = 'test-cleanup-task-123'
+            mock_cleanup.return_value = mock_result
+            
+            # Call the function
+            task_id = cleanup_invalid_sitemaps()
+            
+            # Verify task was submitted correctly
+            mock_cleanup.assert_called_once_with(priority=1)
+            
+            # Verify return value
+            self.assertEqual(task_id, 'test-cleanup-task-123')
 
 if __name__ == "__main__":
     unittest.main()
