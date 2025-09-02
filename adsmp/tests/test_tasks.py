@@ -856,7 +856,7 @@ class TestSitemapWorkflow(TestWorkers):
         with self.app.session_scope() as session:
             session.query(SitemapInfo).filter(
                 SitemapInfo.bibcode.in_(bibcodes)
-            ).update({'update_flag': False})
+            ).update({'update_flag': False}, synchronize_session=False)
             session.commit()
 
             # Check records are created and update_flag is False
@@ -984,7 +984,7 @@ class TestSitemapWorkflow(TestWorkers):
             ).update({
                 'filename_lastmoddate': get_date() - timedelta(hours=1),
                 'update_flag': False
-            })
+            }, synchronize_session=False)
             session.commit()
         
         # Now force-update
@@ -2182,14 +2182,14 @@ class TestSitemapWorkflow(TestWorkers):
 
         # Create test records with different statuses
         test_bibcodes = [
-            '2023Test..1..1A',  # Valid record
+            '2023Test..1..1A',  # Valid record - should be included
             '2023Test..1..2B',  # SOLR failed - should be excluded
             '2023Test..1..3C',  # Metrics failed - should be included
             '2023Test..1..4D'   # No bib_data - should be excluded
         ]
 
         with self.app.session_scope() as session:
-            # Add test records to Records table (let database auto-assign IDs)
+            # Add test records to Records table
             for i, bibcode in enumerate(test_bibcodes):
                 record = Records()
                 record.bibcode = bibcode
@@ -2235,15 +2235,17 @@ class TestSitemapWorkflow(TestWorkers):
             included_bibcodes = [record.bibcode for record in sitemap_records]
             
             # Should include valid record and metrics-failed record
-            self.assertIn('2023Test..1..1A', included_bibcodes)  # Valid
-            self.assertIn('2023Test..1..3C', included_bibcodes)  # Metrics failed but SOLR OK
+            self.assertIn('2023Test..1..1A', included_bibcodes)  # Valid - added
+            self.assertIn('2023Test..1..3C', included_bibcodes)  # Metrics failed but SOLR OK - added
+
+            # SOLR-failed record should still be in sitemap (add action doesn't remove existing)
+            self.assertIn('2023Test..1..2B', included_bibcodes)  # SOLR failed - pre-existing, not removed
+
+            # No-bib-data record should not be added (but would remain if pre-existing)
+            self.assertNotIn('2023Test..1..4D', included_bibcodes)  # No bib_data - not added
             
-            # Should exclude SOLR-failed and no-bib-data records
-            self.assertNotIn('2023Test..1..2B', included_bibcodes)  # SOLR failed
-            self.assertNotIn('2023Test..1..4D', included_bibcodes)  # No bib_data
-            
-            # Should have exactly 2 records
-            self.assertEqual(len(sitemap_records), 2)
+            # Should have exactly 3 records (2 added + 1 pre-existing even if invalid because add action doesn't remove existing)
+            self.assertEqual(len(sitemap_records), 3)
 
     def test_task_manage_sitemap_bootstrap_with_solr_filtering(self):
         """Test bootstrap action applies SOLR-gated filtering"""
@@ -2375,8 +2377,9 @@ class TestSitemapWorkflow(TestWorkers):
             self.assertEqual(remaining_records[0].bibcode, '2023Remove..1..3C')
             self.assertEqual(remaining_records[0].sitemap_filename, 'sitemap_bib_2.xml')
 
-            # Verify the remaining record is flagged for regeneration
-            self.assertTrue(remaining_records[0].update_flag)
+            # Verify the remaining record is NOT flagged (file was unaffected by removal)
+            # The sitemap index will be regenerated to reflect the deleted file
+            self.assertFalse(remaining_records[0].update_flag)
 
     def test_add_action_skips_invalid_records(self):
         """Test that add action skips invalid records without removing existing ones"""

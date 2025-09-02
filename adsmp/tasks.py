@@ -471,9 +471,14 @@ def _execute_remove_action(session, bibcodes_to_remove):
         remaining_count = session.query(SitemapInfo).filter_by(sitemap_filename=filename).count()
         if remaining_count == 0:
             files_to_delete.add(filename)
+            logger.debug('File %s is now empty, will be deleted', filename)
         else:
-            # Mark remaining records for regeneration
-            session.query(SitemapInfo).filter_by(sitemap_filename=filename).update({'update_flag': True})
+            # Mark remaining records in affected files for regeneration
+            updated_count = session.query(SitemapInfo).filter_by(sitemap_filename=filename).update({'update_flag': True})
+            logger.debug('File %s has %d remaining records, marked %d for regeneration', 
+                        filename, remaining_count, updated_count)
+    
+    session.flush()  # Ensure the updates are applied
     
     # Delete empty files from disk
     if files_to_delete:
