@@ -2173,7 +2173,13 @@ class TestSitemapWorkflow(TestWorkers):
 
     def test_task_manage_sitemap_add_with_solr_filtering(self):
         """Test add action applies SOLR-gated filtering and removes failed records"""
-        
+
+        # Clean up any existing test data
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023Test%')).delete(synchronize_session=False)
+            session.query(Records).filter(Records.bibcode.like('2023Test%')).delete(synchronize_session=False)
+            session.commit()
+
         # Create test records with different statuses
         test_bibcodes = [
             '2023Test..1..1A',  # Valid record
@@ -2181,12 +2187,11 @@ class TestSitemapWorkflow(TestWorkers):
             '2023Test..1..3C',  # Metrics failed - should be included
             '2023Test..1..4D'   # No bib_data - should be excluded
         ]
-        
+
         with self.app.session_scope() as session:
-            # Add test records to Records table
+            # Add test records to Records table (let database auto-assign IDs)
             for i, bibcode in enumerate(test_bibcodes):
                 record = Records()
-                record.id = i + 1
                 record.bibcode = bibcode
                 record.bib_data_updated = get_date() - timedelta(days=1)
                 
@@ -2239,12 +2244,13 @@ class TestSitemapWorkflow(TestWorkers):
 
     def test_task_manage_sitemap_bootstrap_with_solr_filtering(self):
         """Test bootstrap action applies SOLR-gated filtering"""
-        
-        # Clear any existing sitemap records
+
+        # Clean up any existing test data
         with self.app.session_scope() as session:
-            session.query(SitemapInfo).delete()
+            session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023Boot%')).delete(synchronize_session=False)
+            session.query(Records).filter(Records.bibcode.like('2023Boot%')).delete(synchronize_session=False)
             session.commit()
-        
+
         # Create test records in Records table
         test_data = [
             ('2023Boot..1..1A', '{"title": "Valid"}', 'success', get_date() - timedelta(hours=1)),
@@ -2253,11 +2259,10 @@ class TestSitemapWorkflow(TestWorkers):
             ('2023Boot..1..4D', None, 'success', get_date() - timedelta(hours=1)),  # No bib_data
             ('2023Boot..1..5E', '{"title": "Pending"}', None, None),  # Pending SOLR
         ]
-        
+
         with self.app.session_scope() as session:
             for i, (bibcode, bib_data, status, solr_processed) in enumerate(test_data):
                 record = Records()
-                record.id = i + 1
                 record.bibcode = bibcode
                 record.bib_data = bib_data
                 record.bib_data_updated = get_date() - timedelta(days=1)
@@ -2288,13 +2293,18 @@ class TestSitemapWorkflow(TestWorkers):
 
     def test_task_manage_sitemap_force_update_skips_filtering(self):
         """Test force-update action skips SOLR-gated filtering"""
-        
+
+        # Clean up any existing test data
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023Force%')).delete(synchronize_session=False)
+            session.query(Records).filter(Records.bibcode.like('2023Force%')).delete(synchronize_session=False)
+            session.commit()
+
         # Create a record that would normally be excluded
         test_bibcode = '2023Force..1..1A'
-        
+
         with self.app.session_scope() as session:
             record = Records()
-            record.id = 1
             record.bibcode = test_bibcode
             record.bib_data = '{"title": "Force Test"}'
             record.bib_data_updated = get_date() - timedelta(days=1)
@@ -2314,15 +2324,34 @@ class TestSitemapWorkflow(TestWorkers):
 
     def test_execute_remove_action_helper(self):
         """Test _execute_remove_action helper function"""
-        
+
+        # Clean up any existing test data
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023Remove%')).delete(synchronize_session=False)
+            session.query(Records).filter(Records.bibcode.like('2023Remove%')).delete(synchronize_session=False)
+            session.commit()
+
         # Set up test data
         test_bibcodes = ['2023Remove..1..1A', '2023Remove..1..2B', '2023Remove..1..3C']
-        
+
         with self.app.session_scope() as session:
-            # Add sitemap records
+            # Add Records first to get proper IDs
+            record_ids = []
+            for i, bibcode in enumerate(test_bibcodes):
+                record = Records()
+                record.bibcode = bibcode
+                record.bib_data = '{"title": "Test"}'
+                record.bib_data_updated = get_date() - timedelta(days=1)
+                record.status = 'success'
+                session.add(record)
+                session.flush()  # Get the auto-assigned ID
+                record_ids.append(record.id)
+            
+            # Add sitemap records with proper record_ids
             for i, bibcode in enumerate(test_bibcodes):
                 sitemap_record = SitemapInfo()
                 sitemap_record.bibcode = bibcode
+                sitemap_record.record_id = record_ids[i]
                 sitemap_record.sitemap_filename = f'sitemap_bib_{(i // 2) + 1}.xml'  # 2 files
                 sitemap_record.update_flag = False
                 session.add(sitemap_record)
