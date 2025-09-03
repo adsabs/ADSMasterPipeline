@@ -478,8 +478,6 @@ def _execute_remove_action(session, bibcodes_to_remove):
             logger.debug('File %s has %d remaining records, marked %d for regeneration', 
                         filename, remaining_count, updated_count)
     
-    session.flush()  # Ensure the updates are applied
-    
     # Delete empty files from disk
     if files_to_delete:
         sites_config = app.conf.get('SITES', {})
@@ -1118,7 +1116,7 @@ def task_boost_request(bibcodes):
 @app.task(queue='manage-sitemap')
 def task_cleanup_invalid_sitemaps():
     """
-    Cleanup invalid sitemap entries using optimized database queries.
+    Cleanup invalid sitemap entries.
     
     This task processes all sitemap records in batches and removes those that
     no longer meet inclusion criteria. 
@@ -1166,12 +1164,6 @@ def task_cleanup_invalid_sitemaps():
             
             for sitemap_bibcode, bib_data, bib_data_updated, solr_processed, status in batch_records:
                 try:
-                    if bib_data is None:
-                        # Record no longer exists in main database
-                        logger.debug('Sitemap record %s no longer exists in main database', sitemap_bibcode)
-                        invalid_bibcodes.append(sitemap_bibcode)
-                        continue
-                    
                     # Create record dict for should_include_in_sitemap check
                     record = {
                         'bibcode': sitemap_bibcode,
@@ -1195,7 +1187,6 @@ def task_cleanup_invalid_sitemaps():
             if invalid_bibcodes:
                 logger.info('Batch %d: removing %d invalid records', batch_count + 1, len(invalid_bibcodes))
                 
-                # Use direct database removal for efficiency (synchronous within task)
                 _execute_remove_action(session, invalid_bibcodes)
                 session.commit()
                 
@@ -1213,7 +1204,7 @@ def task_cleanup_invalid_sitemaps():
         
         # Schedule file regeneration
         file_result = task_update_sitemap_files.apply_async(
-            countdown=60  # 1 minute delay
+            countdown=60 
         )
         logger.info('File regeneration scheduled: %s', file_result.id)
         
