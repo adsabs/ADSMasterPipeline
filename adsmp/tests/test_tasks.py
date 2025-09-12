@@ -819,155 +819,6 @@ class TestSitemapWorkflow(TestWorkers):
             pass
         TestWorkers.tearDown(self)
     
-    def test_task_populate_sitemap_table_add_action(self):
-        """Test task_populate_sitemap_table with 'add' action for new bibcodes"""
-        
-        bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-        
-        # Test the actual task
-        tasks.task_manage_sitemap(bibcodes, 'add')
-        
-        # Verify sitemap info records were created
-        with self.app.session_scope() as session:
-            sitemap_infos = session.query(SitemapInfo).filter(
-                SitemapInfo.bibcode.in_(bibcodes)
-            ).all()
-            
-            self.assertEqual(len(sitemap_infos), 2)
-            
-            # Verify the records have correct data
-            for sitemap_info in sitemap_infos:
-                self.assertIn(sitemap_info.bibcode, bibcodes)
-                self.assertIsNotNone(sitemap_info.record_id)
-                self.assertIsNotNone(sitemap_info.sitemap_filename)
-                self.assertTrue(sitemap_info.update_flag)  # New records should need updating
-                self.assertEqual(sitemap_info.sitemap_filename, 'sitemap_bib_1.xml')
-    
-    def test_task_populate_sitemap_table_force_update_action(self):
-        """Test task_populate_sitemap_table with 'force-update' action"""
-        
-        bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-        
-        # First add records normally
-        tasks.task_manage_sitemap(bibcodes, 'add')
-        
-        # Simulate files being generated (set update_flag to False)
-        with self.app.session_scope() as session:
-            session.query(SitemapInfo).filter(
-                SitemapInfo.bibcode.in_(bibcodes)
-            ).update({'update_flag': False})
-            session.commit()
-
-            # Check records are created and update_flag is False
-            sitemap_infos = session.query(SitemapInfo).filter(
-                SitemapInfo.bibcode.in_(bibcodes)
-            ).all()
-            self.assertEqual(len(sitemap_infos), 2)
-            for sitemap_info in sitemap_infos:
-                self.assertFalse(sitemap_info.update_flag)
-        
-        # Now force-update - should set update_flag back to True
-        tasks.task_manage_sitemap(bibcodes, 'force-update')
-        
-        # Verify all records now have update_flag = True
-        with self.app.session_scope() as session:
-            sitemap_infos = session.query(SitemapInfo).filter(
-                SitemapInfo.bibcode.in_(bibcodes)
-            ).all()
-            
-            self.assertEqual(len(sitemap_infos), 2)
-            for sitemap_info in sitemap_infos:
-                self.assertTrue(sitemap_info.update_flag, f"Record {sitemap_info.bibcode} should be marked for update")
-    
-    def test_task_populate_sitemap_table_mixed_new_and_existing(self):
-        """Test task_populate_sitemap_table with mix of new and existing records"""
-        
-        # Temporarily set small MAX_RECORDS_PER_SITEMAP for this test
-        original_max = self.app.conf.get('MAX_RECORDS_PER_SITEMAP', 10000)
-        self.app.conf['MAX_RECORDS_PER_SITEMAP'] = 2
-        try:
-            # Add first batch
-            first_batch = ['2023ApJ...123..456A', '2023ApJ...123..457B']
-            tasks.task_manage_sitemap(first_batch, 'add')
-            
-            # Create a record that will have sitemap files already generated
-            existing_with_files = ['2023ApJ...123..459D']
-            tasks.task_manage_sitemap(existing_with_files, 'add')
-            
-            # Generate sitemap files for record D to simulate it already having files
-            with tempfile.TemporaryDirectory() as temp_dir:
-                self.app.conf['SITEMAP_DIR'] = temp_dir
-                
-                # Get record D info and generate its sitemap file
-                with self.app.session_scope() as session:
-                    info_d = session.query(SitemapInfo).filter_by(bibcode='2023ApJ...123..459D').first()
-                    record_ids = [info_d.id]
-                    sitemap_filename = info_d.sitemap_filename
-                
-                # Generate the sitemap file - this will set filename_lastmoddate and update_flag=False
-                tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
-            
-            # Add second batch (one existing without files, one new, one existing with files)
-            second_batch = ['2023ApJ...123..457B', '2023ApJ...123..458C', '2023ApJ...123..459D']  
-            # B exists but no files, C is new, D exists with files already generated
-            tasks.task_manage_sitemap(second_batch, 'add')
-            
-            # Should have 4 total records (A, B, C, D)
-            with self.app.session_scope() as session:
-                sitemap_infos = session.query(SitemapInfo).order_by(SitemapInfo.bibcode).all()
-                
-                bibcodes = [info.bibcode for info in sitemap_infos]
-                
-                self.assertEqual(len(sitemap_infos), 4)
-                self.assertIn('2023ApJ...123..456A', bibcodes)
-                self.assertIn('2023ApJ...123..457B', bibcodes)
-                self.assertIn('2023ApJ...123..458C', bibcodes)
-                self.assertIn('2023ApJ...123..459D', bibcodes)
-                
-                # Check that all records have the expected sitemap filename
-                # With MAX_RECORDS_PER_SITEMAP = 2, records should be distributed across files
-                for sitemap_info in sitemap_infos:
-                    if sitemap_info.bibcode in ['2023ApJ...123..458C', '2023ApJ...123..459D']:
-                        self.assertEqual(sitemap_info.sitemap_filename, 'sitemap_bib_2.xml')
-                    else:
-                        self.assertEqual(sitemap_info.sitemap_filename, 'sitemap_bib_1.xml')
-                
-                # Check update_flag values for each specific record
-                sitemap_info_map = {info.bibcode: info for info in sitemap_infos}
-                
-                # A: New record from first batch -> update_flag should be True
-                self.assertTrue(sitemap_info_map['2023ApJ...123..456A'].update_flag, 
-                            "New record A should have update_flag=True")
-                
-                # B: Existing record from second batch, but no files generated yet -> update_flag should be True
-                # (since filename_lastmoddate is None)
-                self.assertTrue(sitemap_info_map['2023ApJ...123..457B'].update_flag, 
-                                "Existing record B should have update_flag=True when no files generated yet")
-                
-                # C: New record from second batch -> update_flag should be True  
-                self.assertTrue(sitemap_info_map['2023ApJ...123..458C'].update_flag, 
-                            "New record C should have update_flag=True")
-                
-                # D: Existing record with files already generated, data hasn't changed -> update_flag should be False
-                self.assertFalse(sitemap_info_map['2023ApJ...123..459D'].update_flag, 
-                                "Existing record D should have update_flag=False when files exist and data unchanged")
-                
-                # Verify that D has filename_lastmoddate set (files were generated)
-                self.assertIsNotNone(sitemap_info_map['2023ApJ...123..459D'].filename_lastmoddate,
-                                    "Record D should have filename_lastmoddate set after file generation")
-                
-                # Verify that A, B, C still have filename_lastmoddate as None (no files generated for them)
-                self.assertIsNone(sitemap_info_map['2023ApJ...123..456A'].filename_lastmoddate,
-                                "Record A should have filename_lastmoddate=None until files are generated")
-                self.assertIsNone(sitemap_info_map['2023ApJ...123..457B'].filename_lastmoddate,
-                                "Record B should have filename_lastmoddate=None until files are generated")
-                self.assertIsNone(sitemap_info_map['2023ApJ...123..458C'].filename_lastmoddate,
-                                "Record C should have filename_lastmoddate=None until files are generated")
-        finally:
-            # Restore original MAX_RECORDS_PER_SITEMAP
-            self.app.conf['MAX_RECORDS_PER_SITEMAP'] = original_max
-    
-    
     def test_force_update_workflow(self):
         """Test force-update action on existing records"""
 
@@ -983,7 +834,7 @@ class TestSitemapWorkflow(TestWorkers):
             ).update({
                 'filename_lastmoddate': get_date() - timedelta(hours=1),
                 'update_flag': False
-            })
+            }, synchronize_session=False)
             session.commit()
         
         # Now force-update
@@ -1207,9 +1058,6 @@ class TestSitemapWorkflow(TestWorkers):
 
     def test_workflow_performance_with_large_batch(self):
         """Test workflow performance with larger batches"""
-        from adsmp.models import SitemapInfo
-        import time
-        
         # Create a larger batch of bibcodes (within test limits)
         large_batch = [f'2023TEST.{i:03d}..{chr(65+i%26)}' for i in range(10)]
         
@@ -2175,6 +2023,262 @@ class TestSitemapWorkflow(TestWorkers):
             # Verify the task completed successfully
             self.assertTrue(True, "Bootstrap completed successfully")
 
+    def test_bulk_processing_methods(self):
+        """Test all new bulk processing methods"""
+        
+        # Setup test data with unique bibcodes to avoid scix_id conflicts
+        timestamp = int(time.time() * 1000) % 10000  # Get unique suffix
+        bibcodes = [f'2023Bulk{timestamp}.{i:03d}.{i:03d}A' for i in range(3)]
+        
+        # Add records to database first
+        for i, bibcode in enumerate(bibcodes):
+            self.app.update_storage(bibcode, 'bib_data', {
+                'bibcode': bibcode, 
+                'title': f'Test Title {i+1}'
+            })
+        
+        # Test get_records_bulk
+        records_data = self.app.get_records_bulk(bibcodes, load_only=['id', 'bibcode', 'bib_data_updated'])
+        self.assertEqual(len(records_data), 3)
+        for bibcode in bibcodes:
+            self.assertIn(bibcode, records_data)
+            self.assertIn('id', records_data[bibcode])
+            self.assertIn('bibcode', records_data[bibcode])
+        
+        # Test get_sitemap_infos_bulk (should be empty initially)
+        sitemap_infos = self.app.get_sitemap_info_bulk(bibcodes)
+        self.assertEqual(len(sitemap_infos), 0)
+        
+        # Test get_current_sitemap_state
+        sitemap_state = self.app.get_current_sitemap_state()
+        self.assertIn('filename', sitemap_state)
+        self.assertIn('count', sitemap_state)
+        self.assertIn('index', sitemap_state)
+        self.assertEqual(sitemap_state['filename'], 'sitemap_bib_1.xml')
+        self.assertEqual(sitemap_state['count'], 0)
+        self.assertEqual(sitemap_state['index'], 1)
+        
+        # Test process_sitemap_batch
+        successful, failed, sitemap_records = self.app.process_sitemap_batch(bibcodes, 'add')
+        self.assertEqual(successful, 3)
+        self.assertEqual(failed, 0)
+        self.assertEqual(len(sitemap_records), 3)
+        
+        # Verify records were inserted
+        sitemap_infos_after = self.app.get_sitemap_info_bulk(bibcodes)
+        self.assertEqual(len(sitemap_infos_after), 3)
+        for bibcode in bibcodes:
+            self.assertIn(bibcode, sitemap_infos_after)
+            self.assertEqual(sitemap_infos_after[bibcode]['sitemap_filename'], 'sitemap_bib_1.xml')
+            self.assertTrue(sitemap_infos_after[bibcode]['update_flag'])
+        
+
+    def test_bulk_processing_mixed_scenarios(self):
+        """Test bulk processing with mixed new/existing records"""
+        
+        # Use timestamp to ensure unique bibcodes
+        timestamp = int(time.time() * 1000) % 10000
+        bibcodes = [f'2023Mixed{timestamp}.{i:03d}.{i:03d}A' for i in range(3)]
+        
+        # Add records to database
+        for bibcode in bibcodes:
+            self.app.update_storage(bibcode, 'bib_data', {'bibcode': bibcode})
+        
+        # First, add only first two records to sitemap
+        tasks.task_manage_sitemap(bibcodes[:2], 'add')
+        
+        # Verify initial state
+        with self.app.session_scope() as session:
+            count = session.query(SitemapInfo).filter(
+                SitemapInfo.bibcode.like(f'2023Mixed{timestamp}%')
+            ).count()
+            self.assertEqual(count, 2)
+        
+        # Now add all three (should handle mix of existing and new)
+        successful, failed, sitemap_records = self.app.process_sitemap_batch(bibcodes, 'add')
+        self.assertEqual(successful, 3)
+        self.assertEqual(failed, 0)
+        # Only one new record should be in sitemap_records
+        self.assertEqual(len(sitemap_records), 1)
+        
+        # Verify final state
+        with self.app.session_scope() as session:
+            count = session.query(SitemapInfo).filter(
+                SitemapInfo.bibcode.like(f'2023Mixed{timestamp}%')
+            ).count()
+            self.assertEqual(count, 3)
+        
+
+    def test_bulk_processing_filename_rollover(self):
+        """Test filename rollover during bulk processing"""
+        
+        # Use timestamp to ensure unique bibcodes
+        timestamp = int(time.time() * 1000) % 10000
+        bibcodes = [f'2023Roll{timestamp}.{i:03d}.{i:03d}A' for i in range(4)]
+        
+        # Set a very low MAX_RECORDS_PER_SITEMAP for testing
+        original_max = self.app.conf.get('MAX_RECORDS_PER_SITEMAP', 50000)
+        self.app.conf['MAX_RECORDS_PER_SITEMAP'] = 2
+        
+        try:
+            # Add records to database
+            for bibcode in bibcodes:
+                self.app.update_storage(bibcode, 'bib_data', {'bibcode': bibcode})
+            
+            # Process all at once
+            successful, failed, sitemap_records = self.app.process_sitemap_batch(bibcodes, 'add')
+            self.assertEqual(successful, 4)
+            self.assertEqual(failed, 0)
+            
+            # Verify filename rollover occurred
+            with self.app.session_scope() as session:
+                sitemap_infos = session.query(SitemapInfo).filter(
+                    SitemapInfo.bibcode.like('2023Roll%')
+                ).all()
+                
+                filenames = [info.sitemap_filename for info in sitemap_infos]
+                unique_filenames = set(filenames)
+                
+                # Should have records in multiple files
+                self.assertGreater(len(unique_filenames), 1)
+                self.assertIn('sitemap_bib_1.xml', unique_filenames)
+                self.assertIn('sitemap_bib_2.xml', unique_filenames)
+            
+        
+        finally:
+            # Restore original setting
+            self.app.conf['MAX_RECORDS_PER_SITEMAP'] = original_max
+
+    def test_bulk_processing_error_handling(self):
+        """Test error handling in bulk processing"""
+        
+        # Test with non-existent bibcodes
+        non_existent_bibcodes = ['2023NotExist..001..001A', '2023NotExist..001..002B']
+        
+        successful, failed, sitemap_records = self.app.process_sitemap_batch(non_existent_bibcodes, 'add')
+        self.assertEqual(successful, 0)
+        self.assertEqual(failed, 2)
+        self.assertEqual(len(sitemap_records), 0)
+        
+        # Test empty batch
+        successful, failed, sitemap_records = self.app.process_sitemap_batch([], 'add')
+        self.assertEqual(successful, 0)
+        self.assertEqual(failed, 0)
+        self.assertEqual(len(sitemap_records), 0)
+
+    def test_bulk_processing_force_update_scenario(self):
+        """Test bulk processing with force-update action"""
+        
+        # Use timestamp to ensure unique bibcodes
+        timestamp = int(time.time() * 1000) % 10000
+        bibcodes = [f'2023Force{timestamp}.{i:03d}.{i:03d}A' for i in range(3)]
+        
+        # Add records to database
+        for bibcode in bibcodes:
+            self.app.update_storage(bibcode, 'bib_data', {'bibcode': bibcode})
+        
+        # First add normally
+        tasks.task_manage_sitemap(bibcodes, 'add')
+        
+        # Simulate files being generated (set update_flag to False)
+        with self.app.session_scope() as session:
+            session.query(SitemapInfo).filter(
+                SitemapInfo.bibcode.like(f'2023Force{timestamp}%')
+            ).update({'update_flag': False}, synchronize_session=False)
+            session.commit()
+        
+        # Now force-update using batch processing
+        successful, failed, sitemap_records = self.app.process_sitemap_batch(bibcodes, 'force-update')
+        self.assertEqual(successful, 3)
+        self.assertEqual(failed, 0)
+        # No new sitemap_records since all are updates
+        self.assertEqual(len(sitemap_records), 0)
+        
+        # Verify all update_flags are now True
+        sitemap_infos = self.app.get_sitemap_info_bulk(bibcodes)
+        for bibcode in bibcodes:
+            self.assertTrue(sitemap_infos[bibcode]['update_flag'])
+        
+
+    def test_bulk_vs_individual_processing_equivalence(self):
+        """Test that bulk processing produces same results as individual processing"""
+        
+        # Use timestamp to ensure unique bibcodes
+        timestamp = int(time.time() * 1000) % 10000
+        bibcodes_bulk = [f'2023BulkEq{timestamp}.{i:03d}.{i:03d}A' for i in range(3)]
+        bibcodes_individual = [f'2023IndvEq{timestamp}.{i:03d}.{i:03d}A' for i in range(3)]
+        
+        # Add records to database for both sets
+        for bibcode in bibcodes_bulk + bibcodes_individual:
+            self.app.update_storage(bibcode, 'bib_data', {'bibcode': bibcode})
+        
+        # Process with bulk method 
+        tasks.task_manage_sitemap(bibcodes_bulk, 'add')
+        
+        # Process with individual calls 
+        for bibcode in bibcodes_individual:
+            tasks.task_manage_sitemap([bibcode], 'add')
+        
+        # Compare results
+        bulk_results = self.app.get_sitemap_info_bulk(bibcodes_bulk)
+        individual_results = self.app.get_sitemap_info_bulk(bibcodes_individual)
+        
+        # Should have same number of results
+        self.assertEqual(len(bulk_results), len(individual_results))
+        
+        # All should have update_flag = True and proper filenames
+        for bibcode in bibcodes_bulk:
+            self.assertTrue(bulk_results[bibcode]['update_flag'])
+            self.assertIsNotNone(bulk_results[bibcode]['sitemap_filename'])
+        
+        for bibcode in bibcodes_individual:
+            self.assertTrue(individual_results[bibcode]['update_flag'])
+            self.assertIsNotNone(individual_results[bibcode]['sitemap_filename'])
+        
+
+    def test_batch_boundary_conditions(self):
+        """Test batch processing at various boundary conditions"""
+        
+        # Test with exactly batch_size (use smaller number for testing)
+        test_batch_size = 10
+        original_batch_size = self.app.conf.get('SITEMAP_BOOTSTRAP_BATCH_SIZE', 50000)
+        self.app.conf['SITEMAP_BOOTSTRAP_BATCH_SIZE'] = test_batch_size
+        
+        try:
+            # Use timestamp to ensure unique bibcodes
+            timestamp = int(time.time() * 1000) % 10000
+            
+            # Test exactly batch_size
+            bibcodes_exact = [f'2023Exact{timestamp}.{i:03d}.{i:03d}A' for i in range(test_batch_size)]
+            
+            # Test batch_size + 1
+            bibcodes_over = [f'2023Over{timestamp}.{i:03d}.{i:03d}A' for i in range(test_batch_size + 1)]
+            
+            # Test batch_size - 1
+            bibcodes_under = [f'2023Under{timestamp}.{i:03d}.{i:03d}A' for i in range(test_batch_size - 1)]
+            
+            # Add all records to database
+            all_bibcodes = bibcodes_exact + bibcodes_over + bibcodes_under
+            for bibcode in all_bibcodes:
+                self.app.update_storage(bibcode, 'bib_data', {'bibcode': bibcode})
+            
+            # Test each scenario
+            for bibcodes, name in [(bibcodes_exact, 'exact'), (bibcodes_over, 'over'), (bibcodes_under, 'under')]:
+                with self.subTest(scenario=name):
+                    tasks.task_manage_sitemap(bibcodes, 'add')
+                    
+                    # Verify all records processed
+                    pattern = f'2023{name.capitalize()}%'
+                    with self.app.session_scope() as session:
+                        count = session.query(SitemapInfo).filter(
+                            SitemapInfo.bibcode.like(pattern)
+                        ).count()
+                        self.assertEqual(count, len(bibcodes))
+            
+        
+        finally:
+            # Restore original batch size
+            self.app.conf['SITEMAP_BOOTSTRAP_BATCH_SIZE'] = original_batch_size
 
 
 if __name__ == "__main__":
