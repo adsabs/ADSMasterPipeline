@@ -2080,9 +2080,19 @@ class TestSitemapWorkflow(TestWorkers):
         timestamp = int(time.time() * 1000) % 10000
         bibcodes = [f'2023Mixed{timestamp}.{i:03d}.{i:03d}A' for i in range(3)]
         
-        # Add records to database
-        for bibcode in bibcodes:
-            self.app.update_storage(bibcode, 'bib_data', {'bibcode': bibcode})
+        # Add records to database with varied bib_data to ensure unique scix_ids
+        for i, bibcode in enumerate(bibcodes):
+            bib_data = {
+                'bibcode': bibcode,
+                'title': f'Test Title {i} for {bibcode}',
+                'abstract': f'Test abstract {i} with unique content for bibcode {bibcode}',
+                'author': [f'Author{i}, Test'],
+                'year': '2023',
+                'pub': f'TestJournal{i}',
+                'volume': str(i + 100),
+                'page': [str(i * 10)]
+            }
+            self.app.update_storage(bibcode, 'bib_data', bib_data)
         
         # First, add only first two records to sitemap
         tasks.task_manage_sitemap(bibcodes[:2], 'add')
@@ -2121,9 +2131,19 @@ class TestSitemapWorkflow(TestWorkers):
         self.app.conf['MAX_RECORDS_PER_SITEMAP'] = 2
         
         try:
-            # Add records to database
-            for bibcode in bibcodes:
-                self.app.update_storage(bibcode, 'bib_data', {'bibcode': bibcode})
+            # Add records to database with varied bib_data to ensure unique scix_ids
+            for i, bibcode in enumerate(bibcodes):
+                bib_data = {
+                    'bibcode': bibcode,
+                    'title': f'Test Title {i} for {bibcode}',
+                    'abstract': f'Test abstract {i} with unique content for bibcode {bibcode}',
+                    'author': [f'Author{i}, Test'],
+                    'year': '2023',
+                    'pub': f'TestJournal{i}',
+                    'volume': str(i + 100),
+                    'page': [str(i * 10)]
+                }
+                self.app.update_storage(bibcode, 'bib_data', bib_data)
             
             # Process all at once
             successful, failed, sitemap_records = self.app.process_sitemap_batch(bibcodes, 'add')
@@ -2173,9 +2193,19 @@ class TestSitemapWorkflow(TestWorkers):
         timestamp = int(time.time() * 1000) % 10000
         bibcodes = [f'2023Force{timestamp}.{i:03d}.{i:03d}A' for i in range(3)]
         
-        # Add records to database
-        for bibcode in bibcodes:
-            self.app.update_storage(bibcode, 'bib_data', {'bibcode': bibcode})
+        # Add records to database with varied bib_data to ensure unique scix_ids
+        for i, bibcode in enumerate(bibcodes):
+            bib_data = {
+                'bibcode': bibcode,
+                'title': f'Test Title {i} for {bibcode}',
+                'abstract': f'Test abstract {i} with unique content for bibcode {bibcode}',
+                'author': [f'Author{i}, Test'],
+                'year': '2023',
+                'pub': f'TestJournal{i}',
+                'volume': str(i + 100),
+                'page': [str(i * 10)]
+            }
+            self.app.update_storage(bibcode, 'bib_data', bib_data)
         
         # First add normally
         tasks.task_manage_sitemap(bibcodes, 'add')
@@ -2208,9 +2238,20 @@ class TestSitemapWorkflow(TestWorkers):
         bibcodes_bulk = [f'2023BulkEq{timestamp}.{i:03d}.{i:03d}A' for i in range(3)]
         bibcodes_individual = [f'2023IndvEq{timestamp}.{i:03d}.{i:03d}A' for i in range(3)]
         
-        # Add records to database for both sets
-        for bibcode in bibcodes_bulk + bibcodes_individual:
-            self.app.update_storage(bibcode, 'bib_data', {'bibcode': bibcode})
+        # Add records to database for both sets with varied bib_data to ensure unique scix_ids
+        all_bibcodes = bibcodes_bulk + bibcodes_individual
+        for i, bibcode in enumerate(all_bibcodes):
+            bib_data = {
+                'bibcode': bibcode,
+                'title': f'Test Title {i} for {bibcode}',
+                'abstract': f'Test abstract {i} with unique content for bibcode {bibcode}',
+                'author': [f'Author{i}, Test'],
+                'year': '2023',
+                'pub': f'TestJournal{i}',
+                'volume': str(i + 100),
+                'page': [str(i * 10)]
+            }
+            self.app.update_storage(bibcode, 'bib_data', bib_data)
         
         # Process with bulk method 
         tasks.task_manage_sitemap(bibcodes_bulk, 'add')
@@ -2257,10 +2298,20 @@ class TestSitemapWorkflow(TestWorkers):
             # Test batch_size - 1
             bibcodes_under = [f'2023Under{timestamp}.{i:03d}.{i:03d}A' for i in range(test_batch_size - 1)]
             
-            # Add all records to database
+            # Add all records to database with varied bib_data to ensure unique scix_ids
             all_bibcodes = bibcodes_exact + bibcodes_over + bibcodes_under
-            for bibcode in all_bibcodes:
-                self.app.update_storage(bibcode, 'bib_data', {'bibcode': bibcode})
+            for i, bibcode in enumerate(all_bibcodes):
+                bib_data = {
+                    'bibcode': bibcode,
+                    'title': f'Test Title {i} for {bibcode}',
+                    'abstract': f'Test abstract {i} with unique content for bibcode {bibcode}',
+                    'author': [f'Author{i}, Test'],
+                    'year': '2023',
+                    'pub': f'TestJournal{i}',
+                    'volume': str(i + 100),
+                    'page': [str(i * 10)]
+                }
+                self.app.update_storage(bibcode, 'bib_data', bib_data)
             
             # Test each scenario
             for bibcodes, name in [(bibcodes_exact, 'exact'), (bibcodes_over, 'over'), (bibcodes_under, 'under')]:
