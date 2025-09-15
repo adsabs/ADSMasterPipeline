@@ -23,6 +23,7 @@ from copy import deepcopy
 import sys
 from sqlalchemy.dialects.postgresql import insert
 import csv
+from datetime import timedelta
 from SciXPipelineUtils import scix_id
 
 class ADSMasterPipelineCelery(ADSCelery):
@@ -835,10 +836,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         Returns:
             bool: True if record should be included in sitemap, False otherwise
         """
-        from datetime import timedelta
-        import logging
         
-        logger = logging.getLogger(__name__)
         
         # Extract values from record dictionary
         bibcode = record.get('bibcode', 'unknown')
@@ -849,29 +847,29 @@ class ADSMasterPipelineCelery(ADSCelery):
         
         # Must have bibliographic data
         if not bib_data:
-            logger.debug('Excluding %s from sitemap: No bib_data', bibcode)
+            self.logger.debug('Excluding %s from sitemap: No bib_data', bibcode)
             return False
         
         # If never processed by SOLR, include it (will be processed soon)
         if not solr_processed:
-            logger.debug('Including %s in sitemap: Has bib_data, pending SOLR processing', bibcode)
+            self.logger.debug('Including %s in sitemap: Has bib_data, pending SOLR processing', bibcode)
             return True
         
         # Exclude if SOLR failed or if record is being retried (previously failed)
         if status in ['solr-failed', 'retrying']:
-            logger.warning('Excluding %s from sitemap: SOLR failed or retrying (status: %s)', bibcode, status)
+            self.logger.warning('Excluding %s from sitemap: SOLR failed or retrying (status: %s)', bibcode, status)
             return False
         
         # If we have both timestamps, check staleness
         if bib_data_updated and solr_processed:
             processing_lag = bib_data_updated - solr_processed
             if processing_lag > timedelta(days=1):
-                logger.warning('Excluding %s from sitemap: SOLR processing stale by %s (bib_data_updated: %s, solr_processed: %s)',
+                self.logger.warning('Excluding %s from sitemap: SOLR processing stale by %s (bib_data_updated: %s, solr_processed: %s)',
                             bibcode, processing_lag, bib_data_updated, solr_processed)
                 return False
         
         # All good - include in sitemap
-        logger.debug('Including %s in sitemap: Valid (status: %s, solr_processed: %s)', bibcode, status, solr_processed)
+        self.logger.debug('Including %s in sitemap: Valid (status: %s, solr_processed: %s)', bibcode, status, solr_processed)
         return True
 
 
