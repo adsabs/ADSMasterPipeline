@@ -24,6 +24,8 @@ import sys
 from sqlalchemy.dialects.postgresql import insert
 import csv
 from SciXPipelineUtils import scix_id
+from adsmp.tasks import should_include_in_sitemap
+
 
 class ADSMasterPipelineCelery(ADSCelery):
 
@@ -954,8 +956,8 @@ class ADSMasterPipelineCelery(ADSCelery):
                     'count': count,
                     'index': index
                 }
-            else:
-                return {
+            
+            return {
                     'filename': 'sitemap_bib_1.xml',
                     'count': 0,
                     'index': 1
@@ -968,7 +970,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         :param action: 'add' or 'force-update'
         :return: tuple (successful_count, failed_count, sitemap_records)
         """
-        fields = ['id', 'bibcode', 'bib_data_updated']
+        fields = ['id', 'bibcode', 'bib_data', 'bib_data_updated', 'solr_processed', 'status']
         
         # Get all data for this batch in bulk
         records_data = self.get_records_bulk(bibcodes, load_only=fields)
@@ -993,6 +995,13 @@ class ADSMasterPipelineCelery(ADSCelery):
                 record = records_data.get(bibcode)
                 if record is None:
                     self.logger.error('The bibcode %s doesn\'t exist!', bibcode)
+                    failed_count += 1
+                    continue
+                                
+                # Check if record should be included in sitemap based on SOLR status 
+                # for both add and force-update actions
+                if not should_include_in_sitemap(record):
+                    self.logger.debug('Skipping %s: does not meet sitemap inclusion criteria', bibcode)
                     failed_count += 1
                     continue
                 

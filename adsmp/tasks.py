@@ -3,9 +3,11 @@ from past.builtins import basestring
 import os
 import time
 import adsputils
+from datetime import timedelta
 from adsmp import app as app_module
 from adsmp import solr_updater
 from adsmp import templates
+from sqlalchemy import func
 # from adsmp import s3_utils
 from kombu import Queue
 from adsmsg.msg import Msg
@@ -393,6 +395,214 @@ def task_delete_documents(bibcode):
     else:
         logger.debug('Failed to deleted metrics record: %s', bibcode)
 
+
+def should_include_in_sitemap(record):
+    """
+    Determine if a record should be included in the sitemap based on SOLR processing status.
+    Logs the reasoning for inclusion/exclusion decisions.
+    
+    Include record in sitemap if:
+    1. Has bib_data (will be processed by SOLR)
+    2. SOLR processing succeeded (not solr-failed or retrying)
+    3. If processed, processing isn't too stale
+    
+    Args:
+        record: Dictionary with record data including bib_data, status, timestamps
+        
+    Returns:
+        bool: True if record should be included in sitemap, False otherwise
+    """
+    # Extract values from record dictionary
+    bibcode = record.get('bibcode', 'unknown')
+    bib_data = record.get('bib_data', None)
+    bib_data_updated = record.get('bib_data_updated')
+    solr_processed = record.get('solr_processed') 
+    status = record.get('status')
+    
+    # Must have bibliographic data
+    if not bib_data:
+        logger.debug('Excluding %s from sitemap: No bib_data', bibcode)
+        return False
+    
+    # If never processed by SOLR, include it (will be processed soon)
+    if not solr_processed:
+        logger.debug('Including %s in sitemap: Has bib_data, pending SOLR processing', bibcode)
+        return True
+    
+    # Exclude if SOLR failed or if record is being retried (previously failed)
+    if status in ['solr-failed', 'retrying']:
+        logger.warning('Excluding %s from sitemap: SOLR failed or retrying (status: %s)', bibcode, status)
+        return False
+    
+    # If we have both timestamps, check staleness
+    if bib_data_updated and solr_processed:
+        processing_lag = bib_data_updated - solr_processed
+        if processing_lag > timedelta(days=1):
+            logger.warning('Excluding %s from sitemap: SOLR processing stale by %s (bib_data_updated: %s, solr_processed: %s)',
+                         bibcode, processing_lag, bib_data_updated, solr_processed)
+            return False
+    
+    # All good - include in sitemap
+    logger.debug('Including %s in sitemap: Valid (status: %s, solr_processed: %s)', bibcode, status, solr_processed)
+    return True
+
+
+def _execute_remove_action(session, bibcodes_to_remove):
+    """
+    Args:
+        session: Database session
+        bibcodes_to_remove: List of bibcodes to remove from sitemaps
+        
+    Returns:
+        tuple: (removed_count: int, deleted_files_count: int)
+    """
+    affected_files = set()
+    files_to_delete = set()
+    removed_count = 0
+
+    # Delete records from database 
+    if bibcodes_to_remove:
+        # Get affected files before deletion
+        affected_files = set(
+            filename for filename, in session.query(SitemapInfo.sitemap_filename)
+            .filter(SitemapInfo.bibcode.in_(bibcodes_to_remove))
+            .filter(SitemapInfo.sitemap_filename.isnot(None))
+            .distinct()
+        )
+        
+        # Bulk delete
+        removed_count = session.query(SitemapInfo).filter(
+            SitemapInfo.bibcode.in_(bibcodes_to_remove)
+        ).delete(synchronize_session=False)
+
+    # Check which files are now empty and mark others for regeneration
+    for filename in affected_files:
+        updated_count = session.query(SitemapInfo).filter_by(sitemap_filename=filename).update(
+            {'update_flag': True}, synchronize_session=False
+        )
+        
+        if updated_count == 0:
+            files_to_delete.add(filename)
+            logger.debug('File %s is now empty, will be deleted', filename)
+        else:
+            logger.debug('File %s has %d remaining records, marked for regeneration', 
+                        filename, updated_count)
+
+    # Delete empty files from disk
+    if files_to_delete:
+        sites_config = app.conf.get('SITES', {})
+        sitemap_dir = app.sitemap_dir
+
+        for filename in files_to_delete:
+            for site_key in sites_config.keys():
+                site_filepath = os.path.join(sitemap_dir, site_key, filename)
+                if os.path.exists(site_filepath):
+                    os.remove(site_filepath)
+                    logger.info('Deleted empty sitemap file: %s', site_filepath)
+
+    logger.info('Removed %d bibcodes, deleted %d empty files', removed_count, len(files_to_delete))
+    return removed_count, len(files_to_delete)
+
+
+@app.task(queue='manage-sitemap')
+def task_cleanup_invalid_sitemaps():
+    """
+    Cleanup invalid sitemap entries using efficient batch processing.
+    
+    This task processes all sitemap records in batches and removes those that
+    no longer meet inclusion criteria based on SOLR status, bib_data availability,
+    and processing staleness.
+    
+    Returns:
+        dict: Cleanup results with removed count and processing stats
+    """
+    
+    logger.info('Starting sitemap cleanup task')
+    
+    batch_size = app.conf.get('SITEMAP_BOOTSTRAP_BATCH_SIZE', 50000)
+    total_removed = 0
+    batch_count = 0
+    total_processed = 0
+    files_regenerated = False
+    
+    offset = 0
+    while True:
+        with app.session_scope() as session:
+            # Get batch of sitemap records with associated Records data
+            batch_query = (
+                session.query(
+                    SitemapInfo.bibcode,
+                    Records.bib_data,
+                    Records.bib_data_updated,
+                    Records.solr_processed,
+                    Records.status
+                )
+                .outerjoin(Records, SitemapInfo.bibcode == Records.bibcode)
+                .offset(offset)
+                .limit(batch_size)
+            )
+            
+            batch_records = batch_query.all()
+            
+            if not batch_records:
+                break
+                
+            batch_count += 1
+            total_processed += len(batch_records)
+            
+            # Check which records should be removed
+            bibcodes_to_remove = []
+            
+            for record_data in batch_records:
+                # Convert to dict for should_include_in_sitemap function
+                record_dict = {
+                    'bibcode': record_data.bibcode,
+                    'bib_data': record_data.bib_data,
+                    'bib_data_updated': record_data.bib_data_updated,
+                    'solr_processed': record_data.solr_processed,
+                    'status': record_data.status
+                }
+                
+                # Check if record should still be in sitemap
+                if not should_include_in_sitemap(record_dict):
+                    bibcodes_to_remove.append(record_data.bibcode)
+            
+            # Remove invalid records from this batch
+            if bibcodes_to_remove:
+                logger.info('Batch %d: removing %d invalid records (processed %d total)', 
+                           batch_count, len(bibcodes_to_remove), total_processed)
+                
+                # Use our existing remove action helper
+                removed_count, deleted_files_count = _execute_remove_action(session, bibcodes_to_remove)
+                session.commit()
+                
+                total_removed += removed_count
+                
+                # Track if any files were affected (for regeneration)
+                if deleted_files_count > 0:
+                    files_regenerated = True
+            else:
+                logger.debug('Batch %d: no invalid records found (processed %d total)', 
+                           batch_count, total_processed)
+            
+            offset += batch_size
+    
+    # Schedule sitemap file regeneration if any files were affected
+    if files_regenerated:
+        logger.info('Scheduling sitemap file regeneration after cleanup')
+        task_update_sitemap_files.apply_async(countdown=60)
+    
+    cleanup_result = {
+        'total_processed': total_processed,
+        'total_removed': total_removed,
+        'batches_processed': batch_count,
+        'files_regenerated': files_regenerated
+    }
+    
+    logger.info('Sitemap cleanup completed: %s', cleanup_result)
+    return cleanup_result
+
+
 @app.task(queue='manage-sitemap') 
 def task_manage_sitemap(bibcodes, action):
     """
@@ -598,10 +808,9 @@ def task_manage_sitemap(bibcodes, action):
         
         for i in range(0, len(bibcodes), batch_size):
             batch = bibcodes[i:i + batch_size]
-            logger.info('Processing batch %d/%d (size: %d)', 
-                       i // batch_size + 1, 
-                       (len(bibcodes) + batch_size - 1) // batch_size, 
-                       len(batch))
+            batch_num = i // batch_size + 1
+            total_batches = (len(bibcodes) + batch_size - 1) // batch_size
+            logger.info('Processing batch %d/%d (%d records)', batch_num, total_batches, len(batch))
             
             # Process this batch
             batch_successful, batch_failed, batch_sitemap_records = app.process_sitemap_batch(
