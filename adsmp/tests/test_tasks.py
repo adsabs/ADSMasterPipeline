@@ -22,7 +22,7 @@ from mock import Mock, patch, MagicMock
 
 from adsmp import app, tasks
 from adsmp.models import Base, Records, SitemapInfo
-from adsmp.tasks import should_include_in_sitemap, _execute_remove_action
+from adsmp.tasks import _execute_remove_action
 
 import logging
 logger = logging.getLogger(__name__)
@@ -2341,7 +2341,7 @@ class TestSitemapWorkflow(TestWorkers):
             'bib_data': None,
             'status': 'success'
         }
-        self.assertFalse(should_include_in_sitemap(record_no_data))
+        self.assertFalse(self.app.should_include_in_sitemap(record_no_data))
 
         # Test case 2: Has bib_data, no solr_processed - should include
         record_pending = {
@@ -2350,7 +2350,7 @@ class TestSitemapWorkflow(TestWorkers):
             'solr_processed': None,
             'status': None
         }
-        self.assertTrue(should_include_in_sitemap(record_pending))
+        self.assertTrue(self.app.should_include_in_sitemap(record_pending))
 
         # Test case 3: SOLR failed - should exclude
         record_solr_failed = {
@@ -2359,7 +2359,7 @@ class TestSitemapWorkflow(TestWorkers):
             'solr_processed': get_date() - timedelta(hours=1),
             'status': 'solr-failed'
         }
-        self.assertFalse(should_include_in_sitemap(record_solr_failed))
+        self.assertFalse(self.app.should_include_in_sitemap(record_solr_failed))
 
         # Test case 4: Metrics failed but SOLR succeeded - should include
         record_metrics_failed = {
@@ -2368,7 +2368,7 @@ class TestSitemapWorkflow(TestWorkers):
             'solr_processed': get_date() - timedelta(hours=1),
             'status': 'metrics-failed'
         }
-        self.assertTrue(should_include_in_sitemap(record_metrics_failed))
+        self.assertTrue(self.app.should_include_in_sitemap(record_metrics_failed))
 
         # Test case 5: Links failed but SOLR succeeded - should include
         record_links_failed = {
@@ -2377,7 +2377,7 @@ class TestSitemapWorkflow(TestWorkers):
             'solr_processed': get_date() - timedelta(hours=1),
             'status': 'links-failed'
         }
-        self.assertTrue(should_include_in_sitemap(record_links_failed))
+        self.assertTrue(self.app.should_include_in_sitemap(record_links_failed))
 
         # Test case 6: Retrying status - should exclude (previously failed record)
         record_retrying = {
@@ -2386,7 +2386,7 @@ class TestSitemapWorkflow(TestWorkers):
             'solr_processed': get_date() - timedelta(hours=1),
             'status': 'retrying'
         }
-        self.assertFalse(should_include_in_sitemap(record_retrying))
+        self.assertFalse(self.app.should_include_in_sitemap(record_retrying))
 
         # Test case 7: Success status - should include
         record_success = {
@@ -2395,7 +2395,7 @@ class TestSitemapWorkflow(TestWorkers):
             'solr_processed': get_date() - timedelta(hours=1),
             'status': 'success'
         }
-        self.assertTrue(should_include_in_sitemap(record_success))
+        self.assertTrue(self.app.should_include_in_sitemap(record_success))
 
         # Test case 8: Stale processing (> 1 day) - should exclude
         record_stale = {
@@ -2405,7 +2405,7 @@ class TestSitemapWorkflow(TestWorkers):
             'solr_processed': get_date() - timedelta(days=2),
             'status': 'success'
         }
-        self.assertFalse(should_include_in_sitemap(record_stale))
+        self.assertFalse(self.app.should_include_in_sitemap(record_stale))
 
     def test_task_manage_sitemap_add_with_solr_filtering(self):
         """Test add action applies SOLR-gated filtering and skips invalid records"""

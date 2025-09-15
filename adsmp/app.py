@@ -24,8 +24,6 @@ import sys
 from sqlalchemy.dialects.postgresql import insert
 import csv
 from SciXPipelineUtils import scix_id
-from adsmp.tasks import should_include_in_sitemap
-
 
 class ADSMasterPipelineCelery(ADSCelery):
 
@@ -821,6 +819,63 @@ class ADSMasterPipelineCelery(ADSCelery):
                     self.logger.error('invalid value in bib data, bibcode = {}, type = {}, value = {}'.format(bibcode, type(bib_links_record), bib_links_record))
         return resolver_record
 
+    def should_include_in_sitemap(self, record):
+        """
+        Determine if a record should be included in the sitemap based on SOLR processing status.
+        Logs the reasoning for inclusion/exclusion decisions.
+        
+        Include record in sitemap if:
+        1. Has bib_data (will be processed by SOLR)
+        2. SOLR processing succeeded (not solr-failed or retrying)
+        3. If processed, processing isn't too stale
+        
+        Args:
+            record: Dictionary with record data including bib_data, status, timestamps
+            
+        Returns:
+            bool: True if record should be included in sitemap, False otherwise
+        """
+        from datetime import timedelta
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        # Extract values from record dictionary
+        bibcode = record.get('bibcode', 'unknown')
+        bib_data = record.get('bib_data', None)
+        bib_data_updated = record.get('bib_data_updated')
+        solr_processed = record.get('solr_processed') 
+        status = record.get('status')
+        
+        # Must have bibliographic data
+        if not bib_data:
+            logger.debug('Excluding %s from sitemap: No bib_data', bibcode)
+            return False
+        
+        # If never processed by SOLR, include it (will be processed soon)
+        if not solr_processed:
+            logger.debug('Including %s in sitemap: Has bib_data, pending SOLR processing', bibcode)
+            return True
+        
+        # Exclude if SOLR failed or if record is being retried (previously failed)
+        if status in ['solr-failed', 'retrying']:
+            logger.warning('Excluding %s from sitemap: SOLR failed or retrying (status: %s)', bibcode, status)
+            return False
+        
+        # If we have both timestamps, check staleness
+        if bib_data_updated and solr_processed:
+            processing_lag = bib_data_updated - solr_processed
+            if processing_lag > timedelta(days=1):
+                logger.warning('Excluding %s from sitemap: SOLR processing stale by %s (bib_data_updated: %s, solr_processed: %s)',
+                            bibcode, processing_lag, bib_data_updated, solr_processed)
+                return False
+        
+        # All good - include in sitemap
+        logger.debug('Including %s in sitemap: Valid (status: %s, solr_processed: %s)', bibcode, status, solr_processed)
+        return True
+
+
+
     
     def _populate_sitemap_table(self, sitemap_record, sitemap_info=None): 
         """Populate the sitemap with the given record id and action. 
@@ -1000,7 +1055,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                                 
                 # Check if record should be included in sitemap based on SOLR status 
                 # for both add and force-update actions
-                if not should_include_in_sitemap(record):
+                if not self.should_include_in_sitemap(record):
                     self.logger.debug('Skipping %s: does not meet sitemap inclusion criteria', bibcode)
                     failed_count += 1
                     continue

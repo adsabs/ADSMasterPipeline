@@ -396,55 +396,6 @@ def task_delete_documents(bibcode):
         logger.debug('Failed to deleted metrics record: %s', bibcode)
 
 
-def should_include_in_sitemap(record):
-    """
-    Determine if a record should be included in the sitemap based on SOLR processing status.
-    Logs the reasoning for inclusion/exclusion decisions.
-    
-    Include record in sitemap if:
-    1. Has bib_data (will be processed by SOLR)
-    2. SOLR processing succeeded (not solr-failed or retrying)
-    3. If processed, processing isn't too stale
-    
-    Args:
-        record: Dictionary with record data including bib_data, status, timestamps
-        
-    Returns:
-        bool: True if record should be included in sitemap, False otherwise
-    """
-    # Extract values from record dictionary
-    bibcode = record.get('bibcode', 'unknown')
-    bib_data = record.get('bib_data', None)
-    bib_data_updated = record.get('bib_data_updated')
-    solr_processed = record.get('solr_processed') 
-    status = record.get('status')
-    
-    # Must have bibliographic data
-    if not bib_data:
-        logger.debug('Excluding %s from sitemap: No bib_data', bibcode)
-        return False
-    
-    # If never processed by SOLR, include it (will be processed soon)
-    if not solr_processed:
-        logger.debug('Including %s in sitemap: Has bib_data, pending SOLR processing', bibcode)
-        return True
-    
-    # Exclude if SOLR failed or if record is being retried (previously failed)
-    if status in ['solr-failed', 'retrying']:
-        logger.warning('Excluding %s from sitemap: SOLR failed or retrying (status: %s)', bibcode, status)
-        return False
-    
-    # If we have both timestamps, check staleness
-    if bib_data_updated and solr_processed:
-        processing_lag = bib_data_updated - solr_processed
-        if processing_lag > timedelta(days=1):
-            logger.warning('Excluding %s from sitemap: SOLR processing stale by %s (bib_data_updated: %s, solr_processed: %s)',
-                         bibcode, processing_lag, bib_data_updated, solr_processed)
-            return False
-    
-    # All good - include in sitemap
-    logger.debug('Including %s in sitemap: Valid (status: %s, solr_processed: %s)', bibcode, status, solr_processed)
-    return True
 
 
 def _execute_remove_action(session, bibcodes_to_remove):
@@ -564,7 +515,7 @@ def task_cleanup_invalid_sitemaps():
                 }
                 
                 # Check if record should still be in sitemap
-                if not should_include_in_sitemap(record_dict):
+                if not app.should_include_in_sitemap(record_dict):
                     bibcodes_to_remove.append(record_data.bibcode)
             
             # Remove invalid records from this batch

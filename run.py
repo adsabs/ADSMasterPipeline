@@ -20,7 +20,6 @@ except ImportError:
 from adsputils import setup_logging, get_date, load_config
 from adsmp.models import KeyValue, Records, SitemapInfo
 from adsmp import tasks, solr_updater, validate #s3_utils
-from adsmp.tasks import should_include_in_sitemap
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 
