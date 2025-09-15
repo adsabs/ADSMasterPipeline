@@ -1054,7 +1054,6 @@ class ADSMasterPipelineCelery(ADSCelery):
                     continue
                                 
                 # Check if record should be included in sitemap based on SOLR status 
-                # for both add and force-update actions
                 if not self.should_include_in_sitemap(record):
                     self.logger.debug('Skipping %s: does not meet sitemap inclusion criteria', bibcode)
                     failed_count += 1

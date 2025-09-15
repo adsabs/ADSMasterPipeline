@@ -628,7 +628,8 @@ def task_manage_sitemap(bibcodes, action):
             while True:
                 # Use keyset pagination instead of OFFSET/LIMIT for O(1) performance
                 records_batch = (
-                    session.query(Records.id, Records.bibcode, Records.bib_data_updated)
+                    session.query(Records.id, Records.bibcode, Records.bib_data_updated, 
+                                Records.bib_data, Records.solr_processed, Records.status)
                     .filter(Records.id > last_id)
                     .order_by(Records.id)
                     .limit(batch_size)
@@ -642,6 +643,21 @@ def task_manage_sitemap(bibcodes, action):
                 bulk_data = []
                 for record in records_batch:
                     try:
+                        # Apply SOLR filtering - convert record to dict for should_include_in_sitemap
+                        record_dict = {
+                            'bibcode': record.bibcode,
+                            'bib_data': record.bib_data,
+                            'bib_data_updated': record.bib_data_updated,
+                            'solr_processed': record.solr_processed,
+                            'status': record.status
+                        }
+                        
+                        # Check if record should be included in sitemap based on SOLR status
+                        if not app.should_include_in_sitemap(record_dict):
+                            logger.debug('Skipping %s in bootstrap: does not meet sitemap inclusion criteria', record.bibcode)
+                            failed_count += 1
+                            continue
+                        
                         # Calculate sitemap filename efficiently
                         if records_in_current_file >= max_records_per_sitemap:
                             current_file_index += 1

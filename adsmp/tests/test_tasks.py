@@ -2532,8 +2532,8 @@ class TestSitemapWorkflow(TestWorkers):
             # Should have exactly 3 records
             self.assertEqual(len(sitemap_records), 3)
 
-    def test_task_manage_sitemap_force_update_skips_filtering(self):
-        """Test force-update action skips SOLR-gated filtering"""
+    def test_task_manage_sitemap_force_update_applies_filtering(self):
+        """Test force-update action applies SOLR-gated filtering"""
 
         # Clean up any existing test data
         with self.app.session_scope() as session:
@@ -2541,7 +2541,7 @@ class TestSitemapWorkflow(TestWorkers):
             session.query(Records).filter(Records.bibcode.like('2023Force%')).delete(synchronize_session=False)
             session.commit()
 
-        # Create a record that would normally be excluded
+        # Create a record that would be excluded due to SOLR failure
         test_bibcode = '2023Force..1..1A'
 
         with self.app.session_scope() as session:
@@ -2549,7 +2549,7 @@ class TestSitemapWorkflow(TestWorkers):
             record.bibcode = test_bibcode
             record.bib_data = '{"title": "Force Test"}'
             record.bib_data_updated = get_date() - timedelta(days=1)
-            record.status = 'solr-failed'  # Would be excluded in 'add' action
+            record.status = 'solr-failed'  # Should be excluded by SOLR filtering
             record.solr_processed = get_date() - timedelta(hours=1)
             session.add(record)
             session.commit()
@@ -2557,11 +2557,10 @@ class TestSitemapWorkflow(TestWorkers):
         # Run force-update action
         tasks.task_manage_sitemap([test_bibcode], 'force-update')
 
-        # Verify record was included despite SOLR failure
+        # Verify record was excluded due to SOLR failure
         with self.app.session_scope() as session:
             sitemap_record = session.query(SitemapInfo).filter_by(bibcode=test_bibcode).first()
-            self.assertIsNotNone(sitemap_record)
-            self.assertEqual(sitemap_record.bibcode, test_bibcode)
+            self.assertIsNone(sitemap_record, "SOLR-failed record should be excluded even in force-update")
 
     def test_execute_remove_action_helper(self):
         """Test _execute_remove_action helper function"""
@@ -2782,10 +2781,11 @@ class TestSitemapWorkflow(TestWorkers):
 
         # Should have removed 3 invalid records
         self.assertEqual(result['total_removed'], 3)
-        self.assertTrue(result['files_regenerated'])
+        # files_regenerated will be False since no actual files exist on disk in this test
+        self.assertFalse(result['files_regenerated'])
 
-        # Verify file regeneration was scheduled
-        mock_files.assert_called_once_with(countdown=60)
+        # File regeneration should not be scheduled since no files were deleted
+        mock_files.assert_not_called()
 
 
 if __name__ == "__main__":

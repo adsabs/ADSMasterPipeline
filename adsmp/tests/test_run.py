@@ -435,9 +435,14 @@ class TestSitemapCommandLine(unittest.TestCase):
                     mock_session = Mock()
                     mock_session_scope.return_value.__enter__.return_value = mock_session
                     
-                    # Mock the query chain - return the records directly
-                    mock_records_query = [mock_recent_record1, mock_recent_record2]
-                    mock_session.query.return_value.filter.return_value.options.return_value = mock_records_query
+                    # Mock the UNION query structure
+                    mock_bib_data_query = Mock()
+                    mock_solr_query = Mock()
+                    mock_union_result = [mock_recent_record1, mock_recent_record2]
+                    
+                    # Mock the query chain
+                    mock_session.query.return_value.filter.side_effect = [mock_bib_data_query, mock_solr_query]
+                    mock_bib_data_query.union.return_value = mock_union_result
                     
                     # Set up mock results
                     mock_manage_result = Mock()
@@ -488,8 +493,14 @@ class TestSitemapCommandLine(unittest.TestCase):
                 mock_session = Mock()
                 mock_session_scope.return_value.__enter__.return_value = mock_session
                 
-                # Mock the query chain - return record directly
-                mock_session.query.return_value.filter.return_value.options.return_value = [mock_record]
+                # Mock the UNION query structure
+                mock_bib_data_query = Mock()
+                mock_solr_query = Mock()
+                mock_union_result = [mock_record]
+                
+                # Mock the query chain
+                mock_session.query.return_value.filter.side_effect = [mock_bib_data_query, mock_solr_query]
+                mock_bib_data_query.union.return_value = mock_union_result
                 
                 mock_manage.side_effect = Exception("Task submission failed")
                 
