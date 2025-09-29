@@ -811,6 +811,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             test_bibcodes.append(bibcode)
             
             # Create highly unique bib_data to ensure different scix_ids
+            
             bib_data = {
                 'title': f'Test State Paper {i} - Unique Content {i*17} - {bibcode}',
                 'year': 2023 + (i % 10),  # Vary the year
@@ -948,7 +949,6 @@ class TestAdsOrcidCelery(unittest.TestCase):
             # Add some records with None filenames
             none_bibcodes = ['2023None..1..1A', '2023None..2..2A']
             for i, bibcode in enumerate(none_bibcodes):
-                import time
                 bib_data = {
                     'title': f'Test None {i} - {bibcode}', 
                     'year': 2024 + i,
