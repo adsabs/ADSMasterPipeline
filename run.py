@@ -478,7 +478,7 @@ def manage_sitemap(bibcodes, action):
     Actions:
     - 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
     - 'force-update': force update sitemap table entries for given bibcodes  
-    - 'remove': remove bibcodes from sitemap table (TODO: not implemented)
+    - 'remove': remove bibcodes from sitemap table
     - 'delete-table': delete all contents of sitemap table and backup files
     - 'update-robots': force update robots.txt files for all sites
     
@@ -557,7 +557,6 @@ def update_sitemaps_auto(days_back=1):
     
     with app.session_scope() as session:
         # Find all records that were updated recently OR had SOLR processing recently
-        # Use UNION to combine both criteria for comprehensive coverage
         bib_data_query = session.query(Records.bibcode).filter(
             Records.bib_data_updated >= cutoff_date
         )
@@ -586,27 +585,14 @@ def update_sitemaps_auto(days_back=1):
     )
     logger.info('Submitted sitemap management task: %s', manage_result.id)
     
-    # Submit file generation task with 5-minute delay
+    # Submit file generation task after the manage task is completed
     file_result = tasks.task_update_sitemap_files.apply_async(
-        countdown=300  # 5 minutes
+        link=manage_result.id 
     )
     logger.info('Scheduled sitemap file generation task: %s', file_result.id)
     
     return manage_result.id, file_result.id
 
-# def sync_sitemap_to_s3():
-#     """
-#     Manually sync all sitemap files to S3
-#     """
-#     sitemap_dir = app.sitemap_dir
-#     print(f"Syncing sitemap files from {sitemap_dir} to S3...")
-    
-    # success = s3_utils.sync_sitemap_files_to_s3(app.conf, sitemap_dir)
-    # if success:
-    #     print("S3 sync completed successfully")
-    # else:
-    #     print("S3 sync failed - check logs for details")
-    #     sys.exit(1)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process user input.')
@@ -996,9 +982,12 @@ if __name__ == '__main__':
             print(f"Automatic sitemap update initiated:")
             print(f"  Management task: {manage_task_id}")
             print(f"  File generation task: {file_task_id} (scheduled with 5-minute delay)")
-            print("Tasks are running in the background...")
+          
         else:
             print("No records needed sitemap updates")
+    elif args.cleanup_invalid_sitemaps:
+        task_id = cleanup_invalid_sitemaps()
+        print(f"Sitemap cleanup task submitted: {task_id}")
     # elif args.sync_sitemap_s3:
     #     sync_sitemap_to_s3()
     elif args.update_scixid:

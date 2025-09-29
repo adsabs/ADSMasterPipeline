@@ -106,13 +106,13 @@ class TestSitemapCommandLine(unittest.TestCase):
                 'ads': {
                     'name': 'ADS',
                     'base_url': 'https://ui.adsabs.harvard.edu/',
-                    'sitemap_url': 'https://ui.adsabs.harvard.edu/sitemap_index.xml',
+                    'sitemap_url': 'https://ui.adsabs.harvard.edu/sitemap',
                     'abs_url_pattern': 'https://ui.adsabs.harvard.edu/abs/{bibcode}'
                 },
                 'scix': {
                     'name': 'SciX',
                     'base_url': 'https://scixplorer.org/',
-                    'sitemap_url': 'https://scixplorer.org/sitemap_index.xml',
+                    'sitemap_url': 'https://scixplorer.org/sitemap',
                     'abs_url_pattern': 'https://scixplorer.org/abs/{bibcode}'
                 }
             }
@@ -326,17 +326,10 @@ class TestSitemapCommandLine(unittest.TestCase):
                 args_action = None  # Simulating missing --action
                 
                 if not args_action:
-                    print("Error: --action is required when using --populate-sitemap-table")
-                    print("Available actions: add, remove, force-update, delete-table, update-robots")
                     sys.exit(1)
                 
                 # Verify sys.exit(1) was called
                 mock_exit.assert_called_once_with(1)
-                
-                # Verify error message was printed
-                output = sys.stdout.getvalue()
-                self.assertIn("Error: --action is required", output)
-                self.assertIn("Available actions:", output)
 
     def test_actions_requiring_bibcodes_without_bibcodes_causes_sys_exit(self):
         """Test that actions requiring bibcodes without bibcodes cause sys.exit(1)"""
@@ -357,17 +350,10 @@ class TestSitemapCommandLine(unittest.TestCase):
                         
                         if action in ['add', 'remove', 'force-update']:
                             if not bibcodes:
-                                print(f"Error: --action {action} requires bibcodes")
-                                print("Provide bibcodes using --bibcodes or --filename")
                                 sys.exit(1)
                         
                         # Verify sys.exit(1) was called
                         mock_exit.assert_called_once_with(1)
-                        
-                        # Verify error message was printed
-                        output = sys.stdout.getvalue()
-                        self.assertIn(f"Error: --action {action} requires bibcodes", output)
-                        self.assertIn("Provide bibcodes using --bibcodes or --filename", output)
 
     def test_valid_command_line_execution_flow(self):
         """Test valid command line execution doesn't cause sys.exit"""
@@ -471,9 +457,9 @@ class TestSitemapCommandLine(unittest.TestCase):
                     self.assertIn('2023ApJ...123..456A', submitted_bibcodes)
                     self.assertIn('2023ApJ...123..457B', submitted_bibcodes)
                     
-                    # Check files task arguments (should have countdown delay)
+                    # Check files task arguments (should have link to manage task)
                     files_call_args = mock_files.call_args
-                    self.assertEqual(files_call_args[1]['countdown'], 300)  # 5 minutes
+                    self.assertEqual(files_call_args[1]['link'], 'test-auto-manage-123')  # Linked to manage task
                     
                     # Verify return values
                     self.assertEqual(manage_task_id, 'test-auto-manage-123')
