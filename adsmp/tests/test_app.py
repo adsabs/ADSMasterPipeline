@@ -810,10 +810,18 @@ class TestAdsOrcidCelery(unittest.TestCase):
             bibcode = f'2023State..{i:04d}..{i:04d}A'
             test_bibcodes.append(bibcode)
             
-            # Simple test data
+            # Create highly unique bib_data to ensure different scix_ids
             bib_data = {
-                'title': f'Test State Paper {i}',
-                'year': 2023
+                'title': f'Test State Paper {i} - Unique Content {i*17} - {bibcode}',
+                'year': 2023 + (i % 10),  # Vary the year
+                'bibcode': bibcode,  # Include bibcode for uniqueness
+                'abstract': f'This is a unique abstract for paper {i} with specific content {i*23} and bibcode {bibcode}',
+                'authors': [f'Author{i}_{bibcode}', f'CoAuthor{i*2}_{bibcode}'],
+                'unique_field': f'unique_value_{i}_{i*37}_{bibcode}_{int(time.time()*1000000) % 1000000}',
+                'doi': f'10.1000/test.{i}.{i*41}',
+                'page': f'{i*100}-{i*100+10}',
+                'volume': str(i % 100 + 1),
+                'issue': str(i % 12 + 1)
             }
             
             # Store record in database
@@ -921,9 +929,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
                            "Should return 80 records for the latest file (fewer scenario)")
             self.assertEqual(result['index'], 5, 
                            "Should return index 5 for the latest file")
-            
-            print(f"✅ get_current_sitemap_state performance (FEWER): query completed in {query_time_fewer:.3f}s")
-        
+                    
         # Test 3: Verify state reflects the actual database content (using fewer scenario data)
         with self.app.session_scope() as session:
             # Verify the count matches actual database records
@@ -941,8 +947,16 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             # Add some records with None filenames
             none_bibcodes = ['2023None..1..1A', '2023None..2..2A']
-            for bibcode in none_bibcodes:
-                bib_data = {'title': 'Test None', 'year': 2023}
+            for i, bibcode in enumerate(none_bibcodes):
+                import time
+                bib_data = {
+                    'title': f'Test None {i} - {bibcode}', 
+                    'year': 2024 + i,
+                    'bibcode': bibcode,
+                    'unique_field': f'none_test_{i}_{bibcode}_{int(time.time()*1000000) % 1000000}',
+                    'abstract': f'Unique abstract for none test {i} with bibcode {bibcode}',
+                    'authors': [f'NoneAuthor{i}_{bibcode}']
+                }
                 self.app.update_storage(bibcode, 'bib_data', bib_data)
             
             # Get the record IDs
