@@ -478,7 +478,7 @@ def manage_sitemap(bibcodes, action):
     Actions:
     - 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
     - 'force-update': force update sitemap table entries for given bibcodes  
-    - 'remove': remove bibcodes from sitemap table (TODO: not implemented)
+    - 'remove': remove bibcodes from sitemap table
     - 'delete-table': delete all contents of sitemap table and backup files
     - 'update-robots': force update robots.txt files for all sites
     
@@ -506,13 +506,38 @@ def update_sitemap_files():
     print("Task is running in the background...")
     return result.id
 
+def cleanup_invalid_sitemaps():
+    """
+    Initiate cleanup of invalid sitemap entries 
+    
+    This schedules a background task that handles records which became invalid due to:
+    - SOLR processing failures (status changed to 'solr-failed' or 'retrying')
+    - Loss of bib_data
+    - Stale processing (SOLR processing too old compared to bib_data_updated)
+    - Records deleted from main database
+    
+    Returns:
+        str: Celery task ID for monitoring cleanup progress
+    """
+    logger.info('Initiating sitemap cleanup using background task')
+    
+    cleanup_result = tasks.task_cleanup_invalid_sitemaps.apply_async(
+        priority=1  # Lower priority than daily updates
+    )
+    
+    logger.info('Sitemap cleanup task submitted: %s', cleanup_result.id)
+    return cleanup_result.id
+
 def update_sitemaps_auto(days_back=1):
     """
     Automatically find and process records needing sitemap updates
     
     Finds records that need sitemap updates based on:
-    1. New records not in sitemap table
-    2. Records where bib_data_updated > filename_lastmoddate
+    1. Records where bib_data_updated >= cutoff_date
+    2. Records where solr_processed >= cutoff_date
+    
+    Uses UNION to combine both criteria, ensuring records that are either
+    newly ingested OR recently processed by SOLR are included in sitemaps.
     
     Args:
         days_back: Number of days to look back for changes
@@ -531,12 +556,19 @@ def update_sitemaps_auto(days_back=1):
     bibcodes_to_update = []
     
     with app.session_scope() as session:
-        # Find all records that were updated recently - these ALL need sitemap updates
-        records_query = session.query(Records).filter(
+        # Find all records that were updated recently OR had SOLR processing recently
+        bib_data_query = session.query(Records.bibcode).filter(
             Records.bib_data_updated >= cutoff_date
-        ).options(load_only(Records.bibcode))
+        )
         
-        bibcodes_to_update = [record.bibcode for record in records_query]
+        solr_processed_query = session.query(Records.bibcode).filter(
+            Records.solr_processed >= cutoff_date
+        )
+        
+        # UNION automatically eliminates duplicates
+        combined_query = bib_data_query.union(solr_processed_query)
+        
+        bibcodes_to_update = [record.bibcode for record in combined_query]
         
         logger.info('Found %d records updated since %s', len(bibcodes_to_update), cutoff_date.isoformat())
     
@@ -553,27 +585,14 @@ def update_sitemaps_auto(days_back=1):
     )
     logger.info('Submitted sitemap management task: %s', manage_result.id)
     
-    # Submit file generation task with 5-minute delay
+    # Submit file generation task after the manage task is completed
     file_result = tasks.task_update_sitemap_files.apply_async(
-        countdown=300  # 5 minutes
+        link=manage_result.id 
     )
     logger.info('Scheduled sitemap file generation task: %s', file_result.id)
     
     return manage_result.id, file_result.id
 
-# def sync_sitemap_to_s3():
-#     """
-#     Manually sync all sitemap files to S3
-#     """
-#     sitemap_dir = app.sitemap_dir
-#     print(f"Syncing sitemap files from {sitemap_dir} to S3...")
-    
-    # success = s3_utils.sync_sitemap_files_to_s3(app.conf, sitemap_dir)
-    # if success:
-    #     print("S3 sync completed successfully")
-    # else:
-    #     print("S3 sync failed - check logs for details")
-    #     sys.exit(1)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Process user input.')
@@ -723,6 +742,11 @@ if __name__ == '__main__':
                         default=1,
                         dest='days_back',
                         help='number of days to look back for changed records (used with --update-sitemaps-auto)')
+    parser.add_argument('--cleanup-invalid-sitemaps',
+                        dest='cleanup_invalid_sitemaps',
+                        action='store_true',
+                        default=False,
+                        help='Cleanup invalid sitemap entries (records that became invalid due to SOLR failures, missing data, etc.)')
     # parser.add_argument('--sync-sitemap-s3',
     #                     action='store_true',
     #                     default=False,
@@ -768,6 +792,10 @@ if __name__ == '__main__':
 
     elif args.delete_obsolete:
         delete_obsolete_records(args.since, batch_size=args.batch_size)
+
+    elif args.cleanup_invalid_sitemaps:
+        task_id = cleanup_invalid_sitemaps()
+        print(f"Sitemap cleanup task submitted: {task_id}")
 
     elif args.validate:
         fields = ('abstract', 'ack', 'aff', 'alternate_bibcode', 'alternate_title', 'arxiv_class', 'author',
@@ -896,9 +924,12 @@ if __name__ == '__main__':
             print(f"Automatic sitemap update initiated:")
             print(f"  Management task: {manage_task_id}")
             print(f"  File generation task: {file_task_id} (scheduled with 5-minute delay)")
-            print("Tasks are running in the background...")
+          
         else:
             print("No records needed sitemap updates")
+    elif args.cleanup_invalid_sitemaps:
+        task_id = cleanup_invalid_sitemaps()
+        print(f"Sitemap cleanup task submitted: {task_id}")
     # elif args.sync_sitemap_s3:
     #     sync_sitemap_to_s3()
     elif args.update_scixid:
