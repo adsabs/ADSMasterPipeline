@@ -167,10 +167,10 @@ class SitemapInfo(Base):
 
     id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, autoincrement=True) #bigint
     record_id = Column(BigInteger, ForeignKey('records.id'), nullable=False) 
-    bibcode = Column(String(255), nullable=False)
+    bibcode = Column(String(255), nullable=False, index=True, unique=True)  # Index for bibcode lookups
     scix_id = Column(String(255), nullable=True)
     bib_data_updated = Column(UTCDateTime, default=None)
-    sitemap_filename = Column(String(255))
+    sitemap_filename = Column(String(255), index=True)  # Index for filename lookups
     filename_lastmoddate = Column(UTCDateTime, default=None)
     update_flag = Column(Boolean, default=False)
 

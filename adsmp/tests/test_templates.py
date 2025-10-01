@@ -399,18 +399,18 @@ class TestTemplates(unittest.TestCase):
         """Test robots.txt content for different sites"""
         
         # Test ADS robots.txt
-        ads_sitemap_url = 'https://ui.adsabs.harvard.edu/sitemap_index.xml'
+        ads_sitemap_url = 'https://ui.adsabs.harvard.edu/sitemap'
         ads_robots = templates.render_robots_txt(ads_sitemap_url)
         
         self.assertIn('User-agent: *', ads_robots)
-        self.assertIn('https://ui.adsabs.harvard.edu/sitemap_index.xml', ads_robots)
+        self.assertIn('https://ui.adsabs.harvard.edu/sitemap/sitemap_index.xml', ads_robots)
         
         # Test SciX robots.txt
-        scix_sitemap_url = 'https://scixplorer.org/sitemap_index.xml'
+        scix_sitemap_url = 'https://scixplorer.org/sitemap'
         scix_robots = templates.render_robots_txt(scix_sitemap_url)
         
         self.assertIn('User-agent: *', scix_robots)
-        self.assertIn('https://scixplorer.org/sitemap_index.xml', scix_robots)
+        self.assertIn('https://scixplorer.org/sitemap/sitemap_index.xml', scix_robots)
         
         # Verify content is different for different sites
         self.assertNotEqual(ads_robots, scix_robots)

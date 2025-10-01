@@ -1,15 +1,14 @@
 from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 import os
-from collections import defaultdict
-from itertools import chain
+from itertools import chain, islice
 from . import exceptions
 from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records, SitemapInfo
 from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList, BoostRequestRecord, BoostRequestRecordList, BoostResponseRecord, BoostResponseRecordList,Status as AdsMsgStatus
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session, contextmanager
 from sqlalchemy.orm import load_only as _load_only
-from sqlalchemy import Table, bindparam
+from sqlalchemy import Table, bindparam, func
 import adsputils
 import json
 from adsmp import solr_updater
@@ -23,6 +22,7 @@ from copy import deepcopy
 import sys
 from sqlalchemy.dialects.postgresql import insert
 import csv
+from datetime import timedelta
 from SciXPipelineUtils import scix_id
 
 class ADSMasterPipelineCelery(ADSCelery):
@@ -165,16 +165,48 @@ class ADSMasterPipelineCelery(ADSCelery):
     def delete_by_bibcode(self, bibcode):
         with self.session_scope() as session:
             r = session.query(Records).filter_by(bibcode=bibcode).first()
+            # Get affected sitemap files BEFORE deletion so we can mark them for regeneration
+            affected_files = session.query(SitemapInfo.sitemap_filename)\
+                               .filter_by(bibcode=bibcode)\
+                               .distinct().all()
+            
             if r is not None:
+                
+                # First delete any associated SitemapInfo records
+                session.query(SitemapInfo).filter_by(bibcode=bibcode).delete(synchronize_session=False)
+                # Then delete the Records entry and create ChangeLog
                 session.add(ChangeLog(key='bibcode:%s' % bibcode, type='deleted', oldvalue=serializer.dumps(r.toJSON())))
                 session.delete(r)
+                
+                # Mark affected sitemap files for regeneration
+                # This ensures deleted bibcodes are removed from XML files
+                for (filename,) in affected_files:
+                    if filename:  # Skip None filenames
+                        session.query(SitemapInfo)\
+                               .filter_by(sitemap_filename=filename)\
+                               .update({'update_flag': True}, synchronize_session=False)
+                
                 session.commit()
                 return True
+            
+            # Handle orphaned SitemapInfo records (if Records was already deleted)
             s = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
             if s is not None:
+                # Get the filename before deleting the orphaned record
+                orphaned_filename = s.sitemap_filename
                 session.delete(s)
+                
+                # Mark the file for regeneration if it has a filename
+                if orphaned_filename:
+                    session.query(SitemapInfo)\
+                           .filter_by(sitemap_filename=orphaned_filename)\
+                           .update({'update_flag': True}, synchronize_session=False)
+                
                 session.commit()
                 return True
+            
+            # Neither Records nor SitemapInfo found
+            return None
 
     def rename_bibcode(self, old_bibcode, new_bibcode):
         assert old_bibcode and new_bibcode
@@ -819,95 +851,290 @@ class ADSMasterPipelineCelery(ADSCelery):
                     self.logger.error('invalid value in bib data, bibcode = {}, type = {}, value = {}'.format(bibcode, type(bib_links_record), bib_links_record))
         return resolver_record
 
-    
-    def _populate_sitemap_table(self, sitemap_record, sitemap_info=None): 
-        """Populate the sitemap with the given record id and action. 
-        Only used for 'add' and 'force-update' actions. 
-
-        :param sitemap_record: dictionary with record data
-        :param sitemap_info: existing SitemapInfo object if updating
+    def should_include_in_sitemap(self, record):
         """
-
-        with self.session_scope() as session:
-            # If the sitemap_record is new, add it to the database 
-            if sitemap_info is None:
-                sitemap_info = SitemapInfo(
-                    record_id=sitemap_record.get('record_id'),
-                    bibcode=sitemap_record.get('bibcode'),
-                    bib_data_updated=sitemap_record.get('bib_data_updated'),
-                    scix_id=sitemap_record.get('scix_id'),
-                    sitemap_filename=sitemap_record.get('sitemap_filename'),
-                    filename_lastmoddate=sitemap_record.get('filename_lastmoddate'),
-                    update_flag=sitemap_record.get('update_flag', False)
-                )
-                session.add(sitemap_info)
-                
-                # Handle sitemap filename assignment for new records
-                # get list of all sitemap filenames from the SiteMapInfo table
-                sitemap_files = session.query(SitemapInfo.sitemap_filename).all()
-                
-                # flatten the list of tuples into a list of strings
-                sitemap_files = list(chain.from_iterable(sitemap_files))
-                
-                # remove None values from the list
-                sitemap_files = list(filter(lambda sitemap_file: sitemap_file is not None, sitemap_files))
-
-                if sitemap_files:
-                    # split all the filenames to get the index of the latest sitemap file
-                    sitemap_file_indices = [int(sitemap_file.split('_bib_')[-1].split('.')[0]) for sitemap_file in sitemap_files]
-                    latest_index = max(sitemap_file_indices)
-                    sitemap_file_latest = 'sitemap_bib_{}.xml'.format(latest_index)
-
-                    # Check the number of records assigned to sitemap_file_latest
-                    sitemap_file_latest_count = session.query(SitemapInfo).filter_by(sitemap_filename=sitemap_file_latest).count()
-                
-                    if sitemap_file_latest_count >= self.conf.get('MAX_RECORDS_PER_SITEMAP', 3): 
-                        latest_index += 1
-                        sitemap_filename = 'sitemap_bib_{}.xml'.format(latest_index)
-                    else:
-                        sitemap_filename = sitemap_file_latest
-                    
-                    sitemap_info.sitemap_filename = sitemap_filename
-                else:
-                    sitemap_info.sitemap_filename = 'sitemap_bib_1.xml'
-                    
-                
-            else:
-                # For existing records, update only the fields that can change
-                # The sitemap_record already contains the preserved values from sitemap_info
-                update_data = {}
-                
-                # Always update these fields if they exist in sitemap_record
-                for field in ['bib_data_updated', 'sitemap_filename', 'filename_lastmoddate']:
-                    if field in sitemap_record:
-                        update_data[field] = sitemap_record[field]
-                
-                # Always update update_flag (this is the key field for force-update)
-                update_data['update_flag'] = sitemap_record.get('update_flag', False)
-                
-                session.query(SitemapInfo).filter_by(record_id=sitemap_record['record_id']).update(update_data)
-               
-            try:
-                session.commit() 
-            except exc.IntegrityError as e:
-                self.logger.error('Could not update sitemap table for record_id: %s', sitemap_record['record_id'])
-                session.rollback()
-                raise
-            except Exception as e:
-                session.rollback()
-                raise
-
+        Determine if a record should be included in the sitemap based on SOLR processing status.
+        Logs the reasoning for inclusion/exclusion decisions.
         
-    def get_sitemap_info(self, bibcode):
-        """Get sitemap info for given bibcode.
-
-        :param bibcode: bibcode of record to be updated
+        Include record in sitemap if:
+        1. Has bib_data (will be processed by SOLR)
+        2. SOLR processing succeeded (not solr-failed or retrying)
+        3. If processed, processing isn't too stale
+        
+        Args:
+            record: Dictionary with record data including bib_data, status, timestamps
+            
+        Returns:
+            bool: True if record should be included in sitemap, False otherwise
         """
-        with self.session_scope() as session:
-            info = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
-            if info is None:
-                return None
-            return info.toJSON()
+        
+        
+        # Extract values from record dictionary
+        bibcode = record.get('bibcode', None)
+        bib_data = record.get('bib_data', None)
+        bib_data_updated = record.get('bib_data_updated')
+        solr_processed = record.get('solr_processed') 
+        status = record.get('status')
+        
+        # Must have bibliographic data
+        if not bib_data or not bibcode or (isinstance(bib_data, str) and not bib_data.strip()):
+            self.logger.debug('Excluding %s from sitemap: No bibcode or bib_data', bibcode)
+            return False
+        
+         # Exclude if SOLR failed or if record is being retried (previously failed)
+        if status in ['solr-failed', 'retrying']:
+            self.logger.warning('Excluding %s from sitemap: SOLR failed or retrying (status: %s)', bibcode, status)
+            return False
+        
+        # If never processed by SOLR, include it (will be processed soon)
+        if not solr_processed:
+            self.logger.debug('Including %s in sitemap: Has bib_data, pending SOLR processing', bibcode)
+            return True
+    
+        
+        # If we have both timestamps, check staleness (but still include in sitemap)
+        if bib_data_updated and solr_processed:
+            processing_lag = bib_data_updated - solr_processed
+            if processing_lag > timedelta(days=5):
+                self.logger.warning('SOLR processing might be stale for %s by %s (bib_data_updated: %s, solr_processed: %s) - keeping in sitemap',
+                            bibcode, processing_lag, bib_data_updated, solr_processed)
+                return True
+        
+        # All good - include in sitemap
+        self.logger.debug('Including %s in sitemap: Valid (status: %s, solr_processed: %s)', bibcode, status, solr_processed)
+        return True
+    
+    def get_records_bulk(self, bibcodes, session, load_only=None):
+        """Get multiple records efficiently using provided session.
+        
+        :param bibcodes: list of bibcodes
+        :param session: database session to use
+        :param load_only: list of fields to load
+        :return: dict mapping bibcode to record data
+        """
+        if not bibcodes:
+            return {}
+        
+        query = session.query(Records).filter(Records.bibcode.in_(bibcodes))
+        if load_only:
+            query = query.options(_load_only(*load_only))
+        
+        records = query.all()
+        
+        # Convert to dictionary for fast lookup
+        records_dict = {}
+        for record in records:
+            record_data = {}
+            for field in (load_only or ['id', 'bibcode', 'bib_data', 'bib_data_updated', 'solr_processed', 'status']):
+                record_data[field] = getattr(record, field, None)
+            records_dict[record.bibcode] = record_data
+        
+        return records_dict
+    
+    
+    def get_sitemap_info_bulk(self, bibcodes, session):
+        """Get multiple sitemap infos efficiently using provided session.
+        
+        :param bibcodes: list of bibcodes
+        :param session: database session to use
+        :return: dict mapping bibcode to sitemap info data
+        """
+        if not bibcodes:
+            return {}
+        
+        sitemap_infos = session.query(SitemapInfo).filter(SitemapInfo.bibcode.in_(bibcodes)).all()
+        return {info.bibcode: info.toJSON() for info in sitemap_infos}
+    
+    
+    def get_current_sitemap_state(self, session):
+        """Get current sitemap state using provided session.
+        
+        :param session: Database session to use
+        :return: dict with current filename, count, and index
+        """
+        result = session.query(
+            SitemapInfo.sitemap_filename,
+            func.count(SitemapInfo.id).label('record_count')
+        ).filter(
+            SitemapInfo.sitemap_filename.isnot(None)
+        ).group_by(
+            SitemapInfo.sitemap_filename
+        ).order_by(
+            SitemapInfo.sitemap_filename.desc()
+        ).first()
+        
+        if result:
+            filename = result.sitemap_filename
+            count = result.record_count
+            index = int(filename.split('_bib_')[1].split('.')[0])
+            return {
+                'filename': filename,
+                'count': count,
+                'index': index
+            }
+        
+        return {
+            'filename': 'sitemap_bib_1.xml',
+            'count': 0,
+            'index': 1
+        }
+    
+    def _process_sitemap_batch(self, bibcodes, action, session, sitemap_state):
+        """Process a batch of bibcodes with provided session and state.
+        
+        :param bibcodes: list of bibcodes to process
+        :param action: 'add' or 'force-update'
+        :param session: database session to use
+        :param sitemap_state: current sitemap state dict
+        :return: tuple (successful_count, failed_count, sitemap_records, updated_state)
+        """
+        fields = ['id', 'bibcode', 'bib_data', 'bib_data_updated', 'solr_processed', 'status']
+        
+        # Get all data for this batch in bulk using the provided session
+        records_data = self.get_records_bulk(bibcodes, session, load_only=fields)
+        sitemap_infos = self.get_sitemap_info_bulk(bibcodes, session)
+        
+        # Use provided sitemap state
+        current_filename = sitemap_state['filename']
+        current_count = sitemap_state['count']
+        current_index = sitemap_state['index']
+        max_records = self.conf.get('MAX_RECORDS_PER_SITEMAP', 50000)
+        
+        # Process records
+        new_records = []
+        update_records = []
+        sitemap_records = []
+        successful_count = 0
+        failed_count = 0
+        
+        for bibcode in bibcodes:
+            try:
+                record = records_data.get(bibcode)
+                if record is None:
+                    self.logger.error('The bibcode %s doesn\'t exist!', bibcode)
+                    failed_count += 1
+                    continue
+                                
+                # Check if record should be included in sitemap based on SOLR status 
+                if not self.should_include_in_sitemap(record):
+                    self.logger.debug('Skipping %s: does not meet sitemap inclusion criteria', bibcode)
+                    failed_count += 1
+                    continue
+                
+                sitemap_info = sitemap_infos.get(bibcode)
+                
+                # Create sitemap record data structure
+                sitemap_record = {
+                    'record_id': record.get('id'),
+                    'bibcode': record.get('bibcode'),
+                    'bib_data_updated': record.get('bib_data_updated', None),
+                    'filename_lastmoddate': None,
+                    'sitemap_filename': None,
+                    'scix_id': None,
+                    'update_flag': False
+                }
+                
+                if sitemap_info is None:
+                    # New sitemap record - assign filename
+                    if current_count >= max_records:
+                        current_index += 1
+                        current_filename = f'sitemap_bib_{current_index}.xml'
+                        current_count = 0
+                    
+                    sitemap_record['sitemap_filename'] = current_filename
+                    sitemap_record['update_flag'] = True
+                    # filename_lastmoddate stays None for new records until files are generated
+                    new_records.append(sitemap_record)
+                    sitemap_records.append((sitemap_record['record_id'], sitemap_record['bibcode']))
+                    current_count += 1
+                    
+                else:
+                    # Existing sitemap record - update it
+                    sitemap_record['filename_lastmoddate'] = sitemap_info.get('filename_lastmoddate', None)
+                    sitemap_record['sitemap_filename'] = sitemap_info.get('sitemap_filename', None)
+                    
+                    bib_data_updated = sitemap_record.get('bib_data_updated', None)
+                    file_modified = sitemap_record.get('filename_lastmoddate', None)
+                    
+                    # Determine if update_flag should be True
+                    if action == 'force-update':
+                        sitemap_record['update_flag'] = True
+                        # Update filename_lastmoddate to bib_data_updated when forcing update
+                        sitemap_record['filename_lastmoddate'] = bib_data_updated
+                    elif action == 'add':
+                        # Sitemap file has never been generated OR data updated since last generation
+                        if file_modified is None or (file_modified and bib_data_updated and bib_data_updated > file_modified):
+                            sitemap_record['update_flag'] = True
+                            # Update filename_lastmoddate to bib_data_updated when updating
+                            sitemap_record['filename_lastmoddate'] = bib_data_updated
+                    
+                    update_records.append((sitemap_record, sitemap_info))
+                
+                successful_count += 1
+                self.logger.debug('Successfully processed sitemap for bibcode: %s', bibcode)
+                
+            except Exception as e:
+                failed_count += 1
+                self.logger.error('Failed to process sitemap for bibcode %s: %s', bibcode, str(e))
+                continue
+        
+        # Bulk database operations using the provided session
+        try:
+            if new_records:
+                self.bulk_insert_sitemap_records(new_records, session)
+            if update_records:
+                self.bulk_update_sitemap_records(update_records, session)
+        except Exception as e:
+            self.logger.error('Failed to perform bulk database operations: %s', str(e))
+            raise
+        
+        # Return updated state for next batch
+        updated_state = {
+            'filename': current_filename,
+            'count': current_count,
+            'index': current_index
+        }
+        
+        return successful_count, failed_count, sitemap_records, updated_state
+    
+    
+    def bulk_insert_sitemap_records(self, sitemap_records, session):
+        """Bulk insert sitemap records using provided session.
+        
+        :param sitemap_records: list of sitemap record dictionaries
+        :param session: database session to use
+        """
+        if not sitemap_records:
+            return
+        
+        session.bulk_insert_mappings(SitemapInfo, sitemap_records)
+    
+    def bulk_update_sitemap_records(self, update_records, session):
+        """Bulk update sitemap records using provided session.
+        
+        :param update_records: list of tuples (sitemap_record, sitemap_info)
+        :param session: database session to use
+        """
+        if not update_records:
+            return
+            
+        # Prepare bulk update data
+        update_mappings = []
+        for sitemap_record, sitemap_info in update_records:
+            # Use the primary key 'id' from sitemap_info for bulk update
+            update_data = {'id': sitemap_info['id']}
+            
+            # Add fields that need updating
+            for field in ['bib_data_updated', 'sitemap_filename', 'filename_lastmoddate']:
+                if field in sitemap_record:
+                    update_data[field] = sitemap_record[field]
+            
+            # Set update_flag from sitemap_record (will be True for records needing regeneration)
+            update_data['update_flag'] = sitemap_record.get('update_flag', False)
+            update_mappings.append(update_data)
+        
+        session.bulk_update_mappings(SitemapInfo, update_mappings)
+
         
     def delete_contents(self, table):
         """Delete all contents of the table
@@ -930,4 +1157,97 @@ class ADSMasterPipelineCelery(ADSCelery):
         os.system('mkdir -p {}'.format(tmpdir))
         os.system('mv {}/* {}/'.format(directory, tmpdir))
         return
+    
+    def _execute_remove_action(self, session, bibcodes_to_remove):
+        """
+        Efficiently remove bibcodes from sitemaps using optimized bulk operations.
+        
+        Args:
+            session: Database session
+            bibcodes_to_remove: List of bibcodes to remove from sitemaps
+            
+        Returns:
+            tuple: (removed_count: int, files_to_delete: set)
+        """
+        if not bibcodes_to_remove:
+            return 0, set()
 
+        # Get affected files before deletion
+        file_counts_before = dict(
+            session.query(SitemapInfo.sitemap_filename, func.count(SitemapInfo.id))
+            .filter(
+                SitemapInfo.bibcode.in_(bibcodes_to_remove),
+                SitemapInfo.sitemap_filename.isnot(None)
+            )
+            .group_by(SitemapInfo.sitemap_filename)
+            .all()
+        )
+        
+        if not file_counts_before:
+            return 0, set()
+        
+        affected_files = set(file_counts_before.keys())
+        
+        # Bulk delete target records
+        removed_count = session.query(SitemapInfo).filter(
+            SitemapInfo.bibcode.in_(bibcodes_to_remove)
+        ).delete(synchronize_session=False)
+        
+        # Get file counts after deletion 
+        file_counts_after = dict(
+            session.query(SitemapInfo.sitemap_filename, func.count(SitemapInfo.id))
+            .filter(SitemapInfo.sitemap_filename.in_(affected_files))
+            .group_by(SitemapInfo.sitemap_filename)
+            .all()
+        )
+        
+        # Identify empty files and files that still have records
+        files_to_delete = set(file for file in affected_files if file not in file_counts_after)
+        files_to_update = affected_files - files_to_delete
+        
+        # Only update records in files that still exist and were affected (targeted update)
+        updated_count = 0
+        if files_to_update:
+            updated_count = session.query(SitemapInfo).filter(
+                SitemapInfo.sitemap_filename.in_(files_to_update)
+            ).update({'update_flag': True}, synchronize_session=False)
+        
+        self.logger.info('Removed %d bibcodes from %d files, %d files now empty, %d records marked for regeneration', 
+                    removed_count, len(affected_files), len(files_to_delete), updated_count)
+        
+        return removed_count, files_to_delete
+
+
+    def delete_sitemap_files(self, files_to_delete, sitemap_dir):
+        """
+        Helper function to delete empty sitemap files from all sites.
+        
+        Args:
+            files_to_delete: Set of sitemap filenames to delete
+            sitemap_dir: Base sitemap directory path
+        """
+        if not files_to_delete:
+            return
+        
+        sites_config = self.conf.get('SITES', {})
+        deleted_count = 0
+        
+        for filename in files_to_delete:
+            for site_key in sites_config.keys():
+                site_filepath = os.path.join(sitemap_dir, site_key, filename)
+                if os.path.exists(site_filepath):
+                    os.remove(site_filepath)
+                    self.logger.info('Deleted empty sitemap file: %s', site_filepath)
+                    deleted_count += 1
+        
+        self.logger.info('Deleted %d empty sitemap files across all sites', deleted_count)
+
+
+    def chunked(self, iterable, chunk_size):
+        """Yield successive chunks from iterable without copying data"""
+        iterator = iter(iterable)
+        while True:
+            chunk = list(islice(iterator, chunk_size))
+            if not chunk:
+                break
+            yield chunk
