@@ -530,31 +530,6 @@ class ADSMasterPipelineCelery(ADSCelery):
         else:
             self.logger.debug('request_aff_augment called but bibcode {} has no aff data'.format(bibcode))
 
-    def prepare_bibcode(self, bibcode):
-        """prepare data for classifier pipeline
-        
-        Parameters
-        ----------
-        bibcode = reference ID for record (Needs to include SciXID)
-
-        """
-        rec = self.get_record(bibcode)
-        if rec is None:
-            self.logger.warning('request_classifier called but no data at all for bibcode {}'.format(bibcode))
-            return
-        bib_data = rec.get('bib_data', None)
-        if bib_data is None:
-            self.logger.warning('request_classifier called but no bib data for bibcode {}'.format(bibcode))
-            return
-        title = bib_data.get('title', '')
-        abstract = bib_data.get('abstract', '')
-        data = {
-            'bibcode': bibcode,
-            'title': title,
-            'abstract': abstract,
-        }
-        return data
-
     def _populate_boost_request_from_record(self, rec, metrics, classifications, 
                                             run_id=None, output_path=None, request_type=None):
         """
