@@ -113,12 +113,6 @@ class ADSMasterPipelineCelery(ADSCelery):
                 oldval = 'not-stored'
                 r.augments = payload
                 r.augments_updated = now
-            elif type == 'classify':
-                # payload contains new value for collections field
-                # r.augments holds a list, save it in database
-                oldval = 'not-stored'
-                r.classifications = payload
-                r.classifications_updated = now
             elif type == 'boost':
                 # payload contains new value for boost fields
                 # r.augments holds a dict, save it in database
