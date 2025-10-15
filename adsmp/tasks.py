@@ -17,7 +17,6 @@ import math
 from collections import defaultdict
 import pdb
 from sqlalchemy.orm import load_only
-from celery import chord
 
 
 
@@ -939,18 +938,25 @@ def task_generate_single_sitemap(sitemap_filename, record_ids):
         logger.error('Failed to generate sitemap file %s: %s', sitemap_filename, str(e))
         return False
 
-@app.task(queue='generate-single-sitemap')
-def task_generate_sitemap_index():
-    """Generate sitemap index files after individual sitemap files are complete"""
+@app.task(queue='update-sitemap-files', bind=True, max_retries=30)
+def task_generate_sitemap_index(self, retry_count=0):
+    """Generate sitemap index files after individual sitemap files are complete
+    
+    This task will automatically retry if there are still pending file generation tasks,
+    waiting for all files to be complete before generating the index.
+    """
     try:
-        logger.info('Generating sitemap index files')
+        logger.info('Generating sitemap index files (attempt %d)', retry_count + 1)
         
         with app.session_scope() as session:
             pending_count = session.query(SitemapInfo).filter(SitemapInfo.update_flag == True).count()
             
             if pending_count > 0:
-                logger.warning('Found %d records still pending file generation - index may be incomplete', pending_count)
-                # Continue anyway - index will include completed files, exclude incomplete ones
+                # Files still being generated - retry after delay
+                retry_delay = 10  # 10 seconds between retries
+                logger.info('Found %d records still pending file generation - will retry in %ds (attempt %d/30)', 
+                           pending_count, retry_delay, retry_count + 1)
+                raise self.retry(countdown=retry_delay, kwargs={'retry_count': retry_count + 1})
         
         success = update_sitemap_index()
         
@@ -966,8 +972,12 @@ def task_generate_sitemap_index():
         raise
 
 @app.task(queue='update-sitemap-files') 
-def task_update_sitemap_files():
-    """Orchestrator task: Updates robots.txt first, then spawns parallel tasks for each sitemap file"""
+def task_update_sitemap_files(previous_result=None):
+    """Orchestrator task: Updates robots.txt first, then spawns parallel tasks for each sitemap file
+    
+    Args:
+        previous_result: Result from previous task in chain (ignored, but required for chaining)
+    """
     
     try:
         logger.info('Starting sitemap workflow')
@@ -1016,17 +1026,18 @@ def task_update_sitemap_files():
         # Spawn parallel Celery tasks - one per file
         logger.info('Starting file generation for %d sitemap files (%d total records)', len(files_dict), len(all_records))
 
-        tasks = []
-
         for sitemap_filename, record_ids in files_dict.items():
-            # Collect signatures for each task
-            tasks.append(task_generate_single_sitemap.s(sitemap_filename, record_ids))
+            # Spawn each task independently
+            task_generate_single_sitemap.apply_async(args=(sitemap_filename, record_ids))
             logger.debug('Spawned task for %s with %d records', sitemap_filename, len(record_ids))
         
-        if tasks:
-            chord(tasks)(task_generate_sitemap_index.s())
+        # Trigger index generation immediately
+        # The index task will automatically retry if files aren't ready yet (max 30 retries = 5 min)
+        if files_dict:
+            task_generate_sitemap_index.apply_async()
+            logger.info('Index generation task submitted (will wait for files to complete)')
         
-        logger.info('Sitemap file generation tasks submitted, index generation scheduled')
+        logger.info('Sitemap file generation tasks submitted')
         
     except Exception as e:
         logger.error('Error in orchestrator task: %s', str(e))

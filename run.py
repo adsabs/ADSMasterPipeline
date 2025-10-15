@@ -22,6 +22,7 @@ from adsmp.models import KeyValue, Records, SitemapInfo
 from adsmp import tasks, solr_updater, validate #s3_utils
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import InstrumentedAttribute
+from celery import chain
 
 # ============================= INITIALIZATION ==================================== #
 proj_home = os.path.realpath(os.path.dirname(__file__))
@@ -482,14 +483,36 @@ def manage_sitemap(bibcodes, action):
     - 'delete-table': delete all contents of sitemap table and backup files
     - 'update-robots': force update robots.txt files for all sites
     
+    For actions that modify records (add/remove/force-update), automatically chains
+    task_update_sitemap_files to ensure files are regenerated after management completes.
+    
+    Args:
+        bibcodes: List of bibcodes to process
+        action: Action to perform
+    
     Returns:
         str: Celery task ID for monitoring task progress
     """
-    result = tasks.task_manage_sitemap.apply_async(args=(bibcodes, action))
-    print(f"Sitemap management task submitted: {result.id}")
-    print(f"Action: {action}")
+    
+    
+    # Actions that modify records should automatically update files
     if action in ['add', 'remove', 'force-update']:
+        # Chain: manage_sitemap → update_sitemap_files
+        workflow = chain(
+            tasks.task_manage_sitemap.s(bibcodes, action),
+            tasks.task_update_sitemap_files.s()
+        )
+        result = workflow.apply_async()
+        print(f"Sitemap workflow (manage + update files) submitted: {result.id}")
+        print(f"Action: {action}")
         print(f"Processing {len(bibcodes)} bibcodes")
+        print("Files will be automatically updated after management completes")
+    else:
+        # Other actions (delete-table, update-robots, bootstrap) run standalone
+        result = tasks.task_manage_sitemap.apply_async(args=(bibcodes, action))
+        print(f"Sitemap management task submitted: {result.id}")
+        print(f"Action: {action}")
+    
     print("Task is running in the background...")
     return result.id
 
