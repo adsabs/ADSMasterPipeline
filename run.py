@@ -480,10 +480,11 @@ def manage_sitemap(bibcodes, action):
     - 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
     - 'force-update': force update sitemap table entries for given bibcodes  
     - 'remove': remove bibcodes from sitemap table
+    - 'bootstrap': populate entire sitemap table from all valid records in database
     - 'delete-table': delete all contents of sitemap table and backup files
     - 'update-robots': force update robots.txt files for all sites
     
-    For actions that modify records (add/remove/force-update), automatically chains
+    For actions that modify records (add/remove/force-update/bootstrap), automatically chains
     task_update_sitemap_files to ensure files are regenerated after management completes.
     
     Args:
@@ -496,7 +497,7 @@ def manage_sitemap(bibcodes, action):
     
     
     # Actions that modify records should automatically update files
-    if action in ['add', 'remove', 'force-update']:
+    if action in ['add', 'remove', 'force-update', 'bootstrap']:
         # Chain: manage_sitemap → update_sitemap_files
         workflow = chain(
             tasks.task_manage_sitemap.s(bibcodes, action),
@@ -508,7 +509,7 @@ def manage_sitemap(bibcodes, action):
         print(f"Processing {len(bibcodes)} bibcodes")
         print("Files will be automatically updated after management completes")
     else:
-        # Other actions (delete-table, update-robots, bootstrap) run standalone
+        # Other actions (delete-table, update-robots) run standalone
         result = tasks.task_manage_sitemap.apply_async(args=(bibcodes, action))
         print(f"Sitemap management task submitted: {result.id}")
         print(f"Action: {action}")
