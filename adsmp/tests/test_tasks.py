@@ -1812,7 +1812,7 @@ class TestSitemapWorkflow(unittest.TestCase):
                 site_dir = os.path.join(temp_dir, site_key)
                 os.makedirs(site_dir, exist_ok=True)
             
-            # Execute the full workflow synchronously (not using async)
+            # Execute the full workflow
             # Call the orchestrator which will identify files to generate
             with self.app.session_scope() as session:
                 files_to_generate = session.query(SitemapInfo.sitemap_filename).filter(
@@ -1915,13 +1915,13 @@ class TestSitemapWorkflow(unittest.TestCase):
             site_dir = os.path.join(temp_dir, 'ads')
             os.makedirs(site_dir, exist_ok=True)
             
-            # Execute the workflow synchronously (not using async)
+            # Execute the workflow synchronously
             with self.app.session_scope() as session:
                 files_to_generate = session.query(SitemapInfo.sitemap_filename).filter(
                     SitemapInfo.update_flag == True
                 ).distinct().all()
                 
-            # Generate each sitemap file synchronously
+            # Generate each sitemap file 
             for (filename,) in files_to_generate:
                 with self.app.session_scope() as session:
                     record_ids = session.query(SitemapInfo.id).filter(
@@ -2101,7 +2101,7 @@ class TestSitemapWorkflow(unittest.TestCase):
             site_dir = os.path.join(temp_dir, 'ads')
             os.makedirs(site_dir, exist_ok=True)
             
-            # Execute the workflow synchronously (not using async)
+            # Execute the workflow synchronously
             with self.app.session_scope() as session:
                 files_to_generate = session.query(SitemapInfo.sitemap_filename).filter(
                     SitemapInfo.update_flag == True
