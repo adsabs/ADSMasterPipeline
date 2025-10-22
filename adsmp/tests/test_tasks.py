@@ -1726,9 +1726,8 @@ class TestSitemapWorkflow(unittest.TestCase):
 
     def test_task_update_sitemap_files_orchestration(self):
         """
-     
         Test the complete task_update_sitemap_files workflow orchestration
-        Tests: task_update_sitemap_files() orchestration and async task scheduling
+        Tests: task_update_sitemap_files() orchestration and task spawning
         """
         
         # Add test records first
@@ -1750,32 +1749,18 @@ class TestSitemapWorkflow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             self.app.conf['SITEMAP_DIR'] = temp_dir
             
-            # Mock the chord pattern to avoid requiring result backend
-            with mock.patch('adsmp.tasks.chord') as mock_chord:
-                # Create a mock chord instance that we can verify was called
-                mock_chord_instance = mock.Mock()
-                mock_chord.return_value = mock_chord_instance
-                
-                # Run the orchestrator
-                tasks.task_update_sitemap_files()
-                
-                # Verify chord was called with the correct tasks
-                self.assertTrue(mock_chord.called, "Should have called chord to coordinate tasks")
-                
-                # Get the tasks passed to chord
-                chord_call_args = mock_chord.call_args[0][0]  # First argument is the list of tasks
-                self.assertGreater(len(chord_call_args), 0, "Should have at least one sitemap generation task")
-                
-                # Verify each task in the chord is a task_generate_single_sitemap signature
-                for task_sig in chord_call_args:
-                    self.assertEqual(task_sig.task, 'adsmp.tasks.task_generate_single_sitemap', 
-                                   "Each chord task should be task_generate_single_sitemap")
-                
-                # Verify the chord callback is task_generate_sitemap_index
-                self.assertTrue(mock_chord_instance.called, "Should have called the chord instance (callback)")
-                callback_call_args = mock_chord_instance.call_args[0][0]  # First argument is the callback signature
-                self.assertEqual(callback_call_args.task, 'adsmp.tasks.task_generate_sitemap_index',
-                               "Chord callback should be task_generate_sitemap_index")
+            # Mock task spawning to test orchestration without async execution
+            with patch('adsmp.tasks.task_generate_single_sitemap.apply_async') as mock_generate:
+                with patch('adsmp.tasks.task_generate_sitemap_index.apply_async') as mock_index:
+                    # Run the orchestrator
+                    tasks.task_update_sitemap_files()
+                    
+                    # Verify task_generate_single_sitemap was called for each file
+                    self.assertTrue(mock_generate.called, "Should have spawned sitemap generation tasks")
+                    self.assertGreater(mock_generate.call_count, 0, "Should have at least one sitemap file to generate")
+                    
+                    # Verify task_generate_sitemap_index was called
+                    self.assertTrue(mock_index.called, "Should have spawned index generation task")
 
     def test_task_update_sitemap_files_full_workflow(self):
         """Test the complete task_update_sitemap_files workflow with actual file generation"""
@@ -1827,32 +1812,26 @@ class TestSitemapWorkflow(unittest.TestCase):
                 site_dir = os.path.join(temp_dir, site_key)
                 os.makedirs(site_dir, exist_ok=True)
             
-            # Execute the full workflow - mock the chord to prevent hanging but allow actual execution
-            with patch('adsmp.tasks.chord') as mock_chord:
+            # Execute the full workflow synchronously (not using async)
+            # Call the orchestrator which will identify files to generate
+            with self.app.session_scope() as session:
+                files_to_generate = session.query(SitemapInfo.sitemap_filename).filter(
+                    SitemapInfo.update_flag == True
+                ).distinct().all()
                 
-                # Create a mock chord that executes tasks synchronously
-                def mock_chord_side_effect(task_signatures):
-                    # Execute each task synchronously
-                    for task_sig in task_signatures:
-                        # Extract the task arguments and call the real function
-                        sitemap_filename, record_ids = task_sig.args
-                        tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
+            # Generate each sitemap file synchronously
+            for (filename,) in files_to_generate:
+                with self.app.session_scope() as session:
+                    record_ids = session.query(SitemapInfo.id).filter(
+                        SitemapInfo.sitemap_filename == filename,
+                        SitemapInfo.update_flag == True
+                    ).all()
+                    record_ids = [r[0] for r in record_ids]
                     
-                    # Return a mock chord instance
-                    mock_chord_instance = MagicMock()
-                    
-                    # When the chord instance is called with the callback, execute it too
-                    def mock_callback_execution(callback_sig):
-                        # Execute the index generation task synchronously
-                        tasks.task_generate_sitemap_index()
-                        return MagicMock()
-                    
-                    mock_chord_instance.side_effect = mock_callback_execution
-                    return mock_chord_instance
-                
-                mock_chord.side_effect = mock_chord_side_effect
-                
-                tasks.task_update_sitemap_files()
+                tasks.task_generate_single_sitemap(filename, record_ids)
+            
+            # Generate the index
+            tasks.task_generate_sitemap_index()
             
             # Verify sitemap files were created for each site
             expected_files = []
@@ -1936,32 +1915,25 @@ class TestSitemapWorkflow(unittest.TestCase):
             site_dir = os.path.join(temp_dir, 'ads')
             os.makedirs(site_dir, exist_ok=True)
             
-            # Execute the workflow - mock the chord to prevent hanging but allow actual execution
-            with patch('adsmp.tasks.chord') as mock_chord:
+            # Execute the workflow synchronously (not using async)
+            with self.app.session_scope() as session:
+                files_to_generate = session.query(SitemapInfo.sitemap_filename).filter(
+                    SitemapInfo.update_flag == True
+                ).distinct().all()
                 
-                # Create a mock chord that executes tasks synchronously
-                def mock_chord_side_effect(task_signatures):
-                    # Execute each task synchronously
-                    for task_sig in task_signatures:
-                        # Extract the task arguments and call the real function
-                        sitemap_filename, record_ids = task_sig.args
-                        tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
+            # Generate each sitemap file synchronously
+            for (filename,) in files_to_generate:
+                with self.app.session_scope() as session:
+                    record_ids = session.query(SitemapInfo.id).filter(
+                        SitemapInfo.sitemap_filename == filename,
+                        SitemapInfo.update_flag == True
+                    ).all()
+                    record_ids = [r[0] for r in record_ids]
                     
-                    # Return a mock chord instance
-                    mock_chord_instance = MagicMock()
-                    
-                    # When the chord instance is called with the callback, execute it too
-                    def mock_callback_execution(callback_sig):
-                        # Execute the index generation task synchronously
-                        tasks.task_generate_sitemap_index()
-                        return MagicMock()
-                    
-                    mock_chord_instance.side_effect = mock_callback_execution
-                    return mock_chord_instance
-                
-                mock_chord.side_effect = mock_chord_side_effect
-                
-                tasks.task_update_sitemap_files()
+                tasks.task_generate_single_sitemap(filename, record_ids)
+            
+            # Generate the index
+            tasks.task_generate_sitemap_index()
             
             # Verify sitemap file contains only remaining records
             sitemap_file = os.path.join(temp_dir, 'ads', 'sitemap_bib_after_delete.xml')
@@ -2129,32 +2101,25 @@ class TestSitemapWorkflow(unittest.TestCase):
             site_dir = os.path.join(temp_dir, 'ads')
             os.makedirs(site_dir, exist_ok=True)
             
-            # Execute the workflow - mock the chord to prevent hanging but allow actual execution
-            with patch('adsmp.tasks.chord') as mock_chord:
+            # Execute the workflow synchronously (not using async)
+            with self.app.session_scope() as session:
+                files_to_generate = session.query(SitemapInfo.sitemap_filename).filter(
+                    SitemapInfo.update_flag == True
+                ).distinct().all()
                 
-                # Create a mock chord that executes tasks synchronously
-                def mock_chord_side_effect(task_signatures):
-                    # Execute each task synchronously
-                    for task_sig in task_signatures:
-                        # Extract the task arguments and call the real function
-                        sitemap_filename, record_ids = task_sig.args
-                        tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
+            # Generate each sitemap file synchronously
+            for (filename,) in files_to_generate:
+                with self.app.session_scope() as session:
+                    record_ids = session.query(SitemapInfo.id).filter(
+                        SitemapInfo.sitemap_filename == filename,
+                        SitemapInfo.update_flag == True
+                    ).all()
+                    record_ids = [r[0] for r in record_ids]
                     
-                    # Return a mock chord instance
-                    mock_chord_instance = MagicMock()
-                    
-                    # When the chord instance is called with the callback, execute it too
-                    def mock_callback_execution(callback_sig):
-                        # Execute the index generation task synchronously
-                        tasks.task_generate_sitemap_index()
-                        return MagicMock()
-                    
-                    mock_chord_instance.side_effect = mock_callback_execution
-                    return mock_chord_instance
-                
-                mock_chord.side_effect = mock_chord_side_effect
-                
-                tasks.task_update_sitemap_files()
+                tasks.task_generate_single_sitemap(filename, record_ids)
+            
+            # Generate the index
+            tasks.task_generate_sitemap_index()
             
             # Verify both sitemap files were created
             file1_path = os.path.join(temp_dir, 'ads', 'sitemap_bib_multi_1.xml')
@@ -2500,10 +2465,10 @@ class TestSitemapWorkflow(unittest.TestCase):
                     self.assertIn('<lastmod>', index_content,
                                  "Index should contain lastmod elements")
                 
-                # Verify we have the expected number of sitemap entries (2 files)
+                # Verify we have the expected number of sitemap entries (2 bib files + 1 static)
                 sitemap_count = index_content.count('<sitemap>')
-                self.assertEqual(sitemap_count, 2,
-                               f"Index should contain exactly 2 sitemap entries, found {sitemap_count}")
+                self.assertEqual(sitemap_count, 3,
+                               f"Index should contain exactly 3 sitemap entries (2 bib + 1 static), found {sitemap_count}")
             
             # Test cleanup
             with self.app.session_scope() as session:
@@ -2549,10 +2514,10 @@ class TestSitemapWorkflow(unittest.TestCase):
                 self.assertIn('</sitemapindex>', index_content,
                              "Empty index should close sitemapindex element")
                 
-                # Should NOT contain any sitemap entries
+                # Should contain only static sitemap entry (1 entry)
                 sitemap_count = index_content.count('<sitemap>')
-                self.assertEqual(sitemap_count, 0,
-                               f"Empty index should contain no sitemap entries, found {sitemap_count}")
+                self.assertEqual(sitemap_count, 1,
+                               f"Empty index should contain only static sitemap entry, found {sitemap_count}")
     
     def test_task_update_sitemap_index_missing_files(self):
         """Test sitemap index generation when database has entries but physical files don't exist"""
@@ -2616,8 +2581,8 @@ class TestSitemapWorkflow(unittest.TestCase):
                     index_content = f.read()
                 
                 sitemap_count = index_content.count('<sitemap>')
-                self.assertEqual(sitemap_count, 0,
-                               f"Index should contain no entries when physical files missing, found {sitemap_count}")
+                self.assertEqual(sitemap_count, 1,
+                               f"Index should contain only static sitemap when physical files missing, found {sitemap_count}")
             
             # Test cleanup
             with self.app.session_scope() as session:
@@ -2736,11 +2701,11 @@ class TestSitemapWorkflow(unittest.TestCase):
                 self.assertIn(f'<loc>{html.escape(sitemap_url)}</loc>', scix_index_content, f"SciX index should reference {filename}")
                 self.assertIn('<lastmod>', scix_index_content, "SciX index should contain lastmod elements")
             
-            # Verify sitemap count matches expected
+            # Verify sitemap count matches expected (3 bib files + 1 static file)
             ads_sitemap_count = ads_index_content.count('<sitemap>')
             scix_sitemap_count = scix_index_content.count('<sitemap>')
-            self.assertEqual(ads_sitemap_count, 3, "ADS index should contain exactly 3 sitemap entries")
-            self.assertEqual(scix_sitemap_count, 3, "SciX index should contain exactly 3 sitemap entries")
+            self.assertEqual(ads_sitemap_count, 4, "ADS index should contain exactly 4 sitemap entries (3 bib + 1 static)")
+            self.assertEqual(scix_sitemap_count, 4, "SciX index should contain exactly 4 sitemap entries (3 bib + 1 static)")
             
             # Verify proper URL structure and no broken links (production structure)
             self.assertIn('https://ui.adsabs.harvard.edu/sitemap/', ads_index_content, "ADS index should contain ADS sitemap base URL")

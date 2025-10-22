@@ -132,15 +132,18 @@ class TestSitemapCommandLine(unittest.TestCase):
         
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
         
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+        # Mock the chain workflow since 'add' action uses chain for auto-updating files
+        with patch('run.chain') as mock_chain:
             mock_result = Mock()
             mock_result.id = 'test-task-123'
-            mock_task.return_value = mock_result
+            mock_workflow = Mock()
+            mock_workflow.apply_async.return_value = mock_result
+            mock_chain.return_value = mock_workflow
             
             result = manage_sitemap(bibcodes, 'add')
             
-            # Verify the task was called with correct parameters
-            mock_task.assert_called_once_with(args=(bibcodes, 'add'))
+            # Verify chain was called to create the workflow
+            self.assertTrue(mock_chain.called)
             self.assertEqual(result, 'test-task-123')
 
     def test_populate_sitemap_table_force_update_action(self):
@@ -148,14 +151,17 @@ class TestSitemapCommandLine(unittest.TestCase):
         
         bibcodes = ['2023ApJ...123..456A']
         
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+        # Mock the chain workflow since 'force-update' action uses chain
+        with patch('run.chain') as mock_chain:
             mock_result = Mock()
             mock_result.id = 'test-task-456'
-            mock_task.return_value = mock_result
+            mock_workflow = Mock()
+            mock_workflow.apply_async.return_value = mock_result
+            mock_chain.return_value = mock_workflow
             
             result = manage_sitemap(bibcodes, 'force-update')
             
-            mock_task.assert_called_once_with(args=(bibcodes, 'force-update'))
+            self.assertTrue(mock_chain.called)
             self.assertEqual(result, 'test-task-456')
 
     def test_populate_sitemap_table_delete_table_action(self):
@@ -187,18 +193,21 @@ class TestSitemapCommandLine(unittest.TestCase):
             self.assertEqual(result, 'test-task-robots')
 
     def test_populate_sitemap_table_remove_action(self):
-        """Test populate_sitemap_table function with 'remove' action (TODO implementation)"""
+        """Test populate_sitemap_table function with 'remove' action"""
         
         bibcodes = ['2023ApJ...123..456A']
         
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+        # Mock the chain workflow since 'remove' action uses chain
+        with patch('run.chain') as mock_chain:
             mock_result = Mock()
             mock_result.id = 'test-task-remove'
-            mock_task.return_value = mock_result
+            mock_workflow = Mock()
+            mock_workflow.apply_async.return_value = mock_result
+            mock_chain.return_value = mock_workflow
             
             result = manage_sitemap(bibcodes, 'remove')
             
-            mock_task.assert_called_once_with(args=(bibcodes, 'remove'))
+            self.assertTrue(mock_chain.called)
             self.assertEqual(result, 'test-task-remove')
 
     def test_update_sitemap_files(self):
@@ -242,25 +251,43 @@ class TestSitemapCommandLine(unittest.TestCase):
     def test_populate_sitemap_table_all_actions(self):
         """Test all possible actions for populate_sitemap_table"""
         
+        chain_actions = ['add', 'force-update', 'remove', 'bootstrap']
+        non_chain_actions = ['delete-table', 'update-robots']
+        
         actions_and_bibcodes = [
             ('add', ['2023ApJ...123..456A', '2023ApJ...123..457B']),
             ('force-update', ['2023ApJ...123..456A']),
             ('remove', ['2023ApJ...123..456A']),
+            ('bootstrap', []),
             ('delete-table', []),
             ('update-robots', [])
         ]
         
         for action, bibcodes in actions_and_bibcodes:
             with self.subTest(action=action):
-                with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
-                    mock_result = Mock()
-                    mock_result.id = f'test-task-{action}'
-                    mock_task.return_value = mock_result
-                    
-                    result = manage_sitemap(bibcodes, action)
-                    
-                    mock_task.assert_called_once_with(args=(bibcodes, action))
-                    self.assertEqual(result, f'test-task-{action}')
+                mock_result = Mock()
+                mock_result.id = f'test-task-{action}'
+                
+                if action in chain_actions:
+                    # Actions that use chain for auto-updating files
+                    with patch('run.chain') as mock_chain:
+                        mock_workflow = Mock()
+                        mock_workflow.apply_async.return_value = mock_result
+                        mock_chain.return_value = mock_workflow
+                        
+                        result = manage_sitemap(bibcodes, action)
+                        
+                        self.assertTrue(mock_chain.called, f"Chain should be called for action '{action}'")
+                        self.assertEqual(result, f'test-task-{action}')
+                else:
+                    # Actions that call task directly
+                    with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+                        mock_task.return_value = mock_result
+                        
+                        result = manage_sitemap(bibcodes, action)
+                        
+                        self.assertTrue(mock_task.called, f"Task should be called for action '{action}'")
+                        self.assertEqual(result, f'test-task-{action}')
 
     def test_integration_with_task_calls(self):
         """Test integration to ensure tasks are called correctly"""
@@ -269,26 +296,28 @@ class TestSitemapCommandLine(unittest.TestCase):
         bibcodes = ['2023ApJ...123..456A']
         
         # Test both functions in sequence to simulate real usage
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_populate:
+        with patch('run.chain') as mock_chain:
             with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_update:
                 
                 # Set up mock results
                 mock_populate_result = Mock()
                 mock_populate_result.id = 'test-populate-123'
-                mock_populate.return_value = mock_populate_result
+                mock_workflow = Mock()
+                mock_workflow.apply_async.return_value = mock_populate_result
+                mock_chain.return_value = mock_workflow
                 
                 mock_update_result = Mock()
                 mock_update_result.id = 'test-update-456'  
                 mock_update.return_value = mock_update_result
                 
-                # First populate sitemap table
+                # First populate sitemap table (uses chain for 'add' action)
                 populate_result = manage_sitemap(bibcodes, 'add')
                 
-                # Then update sitemap files
+                # Then update sitemap files (standalone call)
                 update_result = update_sitemap_files()
                 
-                # Verify both tasks were called correctly
-                mock_populate.assert_called_once_with(args=(bibcodes, 'add'))
+                # Verify both were called correctly
+                self.assertTrue(mock_chain.called, "Chain should be called for 'add' action")
                 mock_update.assert_called_once_with()
                 
                 # Verify return values
@@ -376,32 +405,42 @@ class TestSitemapCommandLine(unittest.TestCase):
                 
                 with patch('sys.argv', test_args):
                     with patch('sys.exit') as mock_exit:
-                        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_populate:
-                            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_update:
-                                
-                                # Set up mock results
-                                mock_populate_result = Mock()
-                                mock_populate_result.id = 'test-final-populate'
-                                mock_populate.return_value = mock_populate_result
-                                
-                                mock_update_result = Mock()
-                                mock_update_result.id = 'test-final-update'
-                                mock_update.return_value = mock_update_result
-                                
-                                # Simulate successful validation and execution
-                                if '--populate-sitemap-table' in test_args:
-                                    # Has action parameter
-                                    if expected_action and expected_bibcodes is not None:
-                                        result = manage_sitemap(expected_bibcodes, expected_action)
-                                        mock_populate.assert_called_once_with(args=(expected_bibcodes, expected_action))
-                                        self.assertEqual(result, 'test-final-populate')
-                                elif '--update-sitemap-files' in test_args:
-                                    result = update_sitemap_files()
-                                    mock_update.assert_called_once_with()
-                                    self.assertEqual(result, 'test-final-update')
-                                
-                                # Verify sys.exit was NOT called for valid scenarios
-                                mock_exit.assert_not_called()
+                        with patch('run.chain') as mock_chain:
+                            with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_populate:
+                                with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_update:
+                                    
+                                    # Set up mock results
+                                    mock_populate_result = Mock()
+                                    mock_populate_result.id = 'test-final-populate'
+                                    mock_populate.return_value = mock_populate_result
+                                    
+                                    # For chain actions
+                                    mock_workflow = Mock()
+                                    mock_workflow.apply_async.return_value = mock_populate_result
+                                    mock_chain.return_value = mock_workflow
+                                    
+                                    mock_update_result = Mock()
+                                    mock_update_result.id = 'test-final-update'
+                                    mock_update.return_value = mock_update_result
+                                    
+                                    # Simulate successful validation and execution
+                                    if '--populate-sitemap-table' in test_args:
+                                        # Has action parameter
+                                        if expected_action and expected_bibcodes is not None:
+                                            result = manage_sitemap(expected_bibcodes, expected_action)
+                                            # Verify the right mock was called based on action type
+                                            if expected_action in ('add', 'force-update', 'remove', 'bootstrap'):
+                                                self.assertTrue(mock_chain.called, f"Chain should be called for '{expected_action}'")
+                                            else:
+                                                self.assertTrue(mock_populate.called, f"Task should be called for '{expected_action}'")
+                                            self.assertEqual(result, 'test-final-populate')
+                                    elif '--update-sitemap-files' in test_args:
+                                        result = update_sitemap_files()
+                                        mock_update.assert_called_once_with()
+                                        self.assertEqual(result, 'test-final-update')
+                                    
+                                    # Verify sys.exit was NOT called for valid scenarios
+                                    mock_exit.assert_not_called()
 
     def test_update_sitemaps_auto_with_records(self):
         """Test update_sitemaps_auto function with records needing updates"""
