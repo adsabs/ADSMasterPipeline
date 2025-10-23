@@ -2414,7 +2414,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             # Test removing 2 bibcodes
             bibcodes_to_remove = test_bibcodes[:2]  # Remove first 2
-            removed_count, files_to_delete = self.app._execute_remove_action(session, bibcodes_to_remove)
+            removed_count, files_to_delete, _ = self.app._execute_remove_action(session, bibcodes_to_remove)
             
             # Verify results
             self.assertEqual(removed_count, 2, "Should remove exactly 2 bibcodes")
@@ -2488,19 +2488,21 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             # Remove records that will make file2 and file3 empty, but leave file1 with 1 record
             bibcodes_to_remove = [test_bibcodes[1], test_bibcodes[2], test_bibcodes[3]]  # Remove from file1, all of file2, all of file3
-            removed_count, files_to_delete = self.app._execute_remove_action(session, bibcodes_to_remove)
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, bibcodes_to_remove)
             
             # Verify results
             self.assertEqual(removed_count, 3, "Should remove exactly 3 bibcodes")
             self.assertEqual(files_to_delete, {'sitemap_bib_2.xml', 'sitemap_bib_3.xml'}, 
                            "Should identify files 2 and 3 as empty")
             
-            # Verify file1 still has records and is marked for update
+            # Verify file1 is in files_to_update (needs regeneration but not deletion)
+            self.assertIn('sitemap_bib_1.xml', files_to_update, "File 1 should be marked for update")
+            
+            # Verify file1 still has records
             file1_records = session.query(SitemapInfo).filter(
                 SitemapInfo.sitemap_filename == 'sitemap_bib_1.xml'
             ).all()
             self.assertEqual(len(file1_records), 1, "File 1 should have 1 remaining record")
-            self.assertTrue(file1_records[0].update_flag, "File 1 record should be marked for update")
             
             # Clean up
             session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023EmptyTest%')).delete(synchronize_session=False)
@@ -2513,7 +2515,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             # Test with non-existent bibcodes
             non_existent_bibcodes = ['2023NonExistent..1..1A', '2023NonExistent..1..2A']
-            removed_count, files_to_delete = self.app._execute_remove_action(session, non_existent_bibcodes)
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, non_existent_bibcodes)
             
             # Should return zero results
             self.assertEqual(removed_count, 0, "Should remove 0 bibcodes when none exist")
@@ -2524,7 +2526,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         
         with self.app.session_scope() as session:
             # Test with empty list
-            removed_count, files_to_delete = self.app._execute_remove_action(session, [])
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, [])
             
             # Should return zero results immediately
             self.assertEqual(removed_count, 0, "Should remove 0 bibcodes with empty input")
@@ -2575,7 +2577,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             # Test removing mix of existing and non-existing bibcodes
             mixed_bibcodes = test_bibcodes + non_existent_bibcodes
-            removed_count, files_to_delete = self.app._execute_remove_action(session, mixed_bibcodes)
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, mixed_bibcodes)
             
             # Should only remove the existing ones
             self.assertEqual(removed_count, 2, "Should remove only the 2 existing bibcodes")
@@ -2644,13 +2646,17 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             # Remove 1 record from file1 and 1 record from file2 (partial removal)
             bibcodes_to_remove = [test_bibcodes[1], test_bibcodes[3]]  # 1 from each file
-            removed_count, files_to_delete = self.app._execute_remove_action(session, bibcodes_to_remove)
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, bibcodes_to_remove)
             
             # Verify results
             self.assertEqual(removed_count, 2, "Should remove exactly 2 bibcodes")
             self.assertEqual(files_to_delete, set(), "Should not delete any files (both still have records)")
             
-            # Verify both files still have records and are marked for update
+            # Verify both files are in files_to_update
+            self.assertIn('sitemap_bib_1.xml', files_to_update, "File 1 should be marked for update")
+            self.assertIn('sitemap_bib_2.xml', files_to_update, "File 2 should be marked for update")
+            
+            # Verify both files still have records
             file1_records = session.query(SitemapInfo).filter(
                 SitemapInfo.sitemap_filename == 'sitemap_bib_1.xml'
             ).all()
@@ -2660,10 +2666,6 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             self.assertEqual(len(file1_records), 2, "File 1 should have 2 remaining records")
             self.assertEqual(len(file2_records), 1, "File 2 should have 1 remaining record")
-            
-            # All remaining records should be marked for update
-            for record in file1_records + file2_records:
-                self.assertTrue(record.update_flag, f"Record {record.bibcode} should be marked for update")
             
             # Clean up
             session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023PartialTest%')).delete(synchronize_session=False)
@@ -2714,7 +2716,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             # Time the removal operation
             start_time = time.time()
-            removed_count, files_to_delete = self.app._execute_remove_action(session, test_bibcodes)
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, test_bibcodes)
             end_time = time.time()
             
             execution_time = end_time - start_time

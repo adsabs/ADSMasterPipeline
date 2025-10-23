@@ -594,19 +594,24 @@ class TestSitemapCommandLine(unittest.TestCase):
 
     def test_cleanup_invalid_sitemaps(self):
         """Test cleanup_invalid_sitemaps function"""
-
-        with patch('run.tasks.task_cleanup_invalid_sitemaps.apply_async') as mock_cleanup:
-            # Mock the cleanup task result
+        
+        with patch('run.chain') as mock_chain:
+            # Mock the chain and its apply_async method
+            mock_workflow = Mock()
             mock_result = Mock()
             mock_result.id = 'test-cleanup-task-123'
-            mock_cleanup.return_value = mock_result
-
+            mock_workflow.apply_async.return_value = mock_result
+            mock_chain.return_value = mock_workflow
+            
             # Call the function
             task_id = cleanup_invalid_sitemaps()
-
-            # Verify task was submitted correctly
-            mock_cleanup.assert_called_once_with(priority=1)
-
+            
+            # Verify chain was created
+            self.assertEqual(mock_chain.call_count, 1, "chain() should be called once")
+            
+            # Verify apply_async was called with correct priority
+            mock_workflow.apply_async.assert_called_once_with(priority=1)
+            
             # Verify return value
             self.assertEqual(task_id, 'test-cleanup-task-123')
 

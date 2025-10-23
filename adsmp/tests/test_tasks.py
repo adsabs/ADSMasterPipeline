@@ -1246,14 +1246,15 @@ class TestSitemapWorkflow(unittest.TestCase):
             deleted_sitemap = session.query(SitemapInfo).filter_by(bibcode=bibcode_to_delete).first()
             self.assertIsNone(deleted_sitemap, "Deleted SitemapInfo entry should be gone")
             
-            # Remaining records should exist and be marked for update
+            # Remaining records should exist and exactly one should be marked for update (one-row-per-file flagging)
             remaining_sitemap_records = session.query(SitemapInfo).filter(
                 SitemapInfo.bibcode.in_(remaining_bibcodes)
             ).all()
             self.assertEqual(len(remaining_sitemap_records), 2, "Should have 2 remaining sitemap records")
             
+            flagged_count = sum(1 for r in remaining_sitemap_records if r.update_flag)
+            self.assertEqual(flagged_count, 1, "At least one remaining record should be marked for update")
             for record in remaining_sitemap_records:
-                self.assertTrue(record.update_flag, f"Update flag should be True for remaining record {record.bibcode}")
                 self.assertEqual(record.sitemap_filename, 'sitemap_bib_delete_test.xml', "Should be in same sitemap file")
             
             # Verify ChangeLog entry was created
@@ -1313,15 +1314,15 @@ class TestSitemapWorkflow(unittest.TestCase):
             result = self.app.delete_by_bibcode(bibcode_to_delete)
             self.assertTrue(result, f"Should successfully delete {bibcode_to_delete}")
             
-            # Verify remaining records are marked for update
+            # Verify exactly one remaining record is marked for update (one-row-per-file flagging)
             with self.app.session_scope() as session:
                 remaining_records = session.query(SitemapInfo).filter(
                     SitemapInfo.bibcode.in_(remaining_bibcodes)
                 ).all()
                 
                 self.assertEqual(len(remaining_records), 2, "Should have 2 remaining records")
-                for record in remaining_records:
-                    self.assertTrue(record.update_flag, f"Record {record.bibcode} should be marked for update")
+                flagged_count = sum(1 for r in remaining_records if r.update_flag)
+                self.assertEqual(flagged_count, 1, "At least one record should be marked for update")
                 
                 # Get record IDs while still in session
                 record_ids = [r.id for r in remaining_records]

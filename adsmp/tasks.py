@@ -416,6 +416,7 @@ def task_cleanup_invalid_sitemaps():
     
     batch_size = app.conf.get('SITEMAP_BOOTSTRAP_BATCH_SIZE', 50000)
     total_removed = 0
+    all_files_to_update = set()
     batch_count = 0
     total_processed = 0
     
@@ -472,16 +473,25 @@ def task_cleanup_invalid_sitemaps():
                            batch_count, len(bibcodes_to_remove), total_processed)
                 
                 # Use our existing remove action helper
-                removed_count, files_to_delete = app._execute_remove_action(session, bibcodes_to_remove)
+                removed_count, files_to_delete, files_to_update = app._execute_remove_action(session, bibcodes_to_remove)
                 session.commit()  # Commit database changes first
 
                 app.delete_sitemap_files(files_to_delete, app.sitemap_dir)
                 
                 total_removed += removed_count
+                all_files_to_update.update(files_to_update)
             else:
                 logger.debug('Batch %d: no invalid records found (processed %d total)', 
                            batch_count, total_processed)
                 
+    # Synchronously flag files to regenerate (one row per file)
+    flagged = 0
+    if all_files_to_update:
+        with app.session_scope() as flag_session:
+            for filename in sorted(all_files_to_update):
+                flagged += app.flag_one_row_for_filename(flag_session, filename)
+                flag_session.commit()
+
     pending_updates = session.query(SitemapInfo).filter(SitemapInfo.update_flag == True).count()
     
     # Schedule sitemap file regeneration if any records were removed
@@ -493,7 +503,8 @@ def task_cleanup_invalid_sitemaps():
         'total_processed': total_processed,
         'invalid_removed': total_removed,
         'batches_processed': batch_count,
-        'files_regenerated': total_removed > 0
+        'files_regenerated': total_removed > 0,
+        'files_flagged': flagged
     }
     
     logger.info('Sitemap cleanup completed: %s', cleanup_result)
@@ -534,6 +545,7 @@ def task_manage_sitemap(bibcodes, action):
         
         total_removed = 0
         all_files_to_delete = set()
+        all_files_to_update = set()
         with app.session_scope() as session:
             # Process removes in batches with commit per batch
             for batch_num, batch in enumerate(chunked(bibcodes, batch_size), 1):
@@ -541,11 +553,12 @@ def task_manage_sitemap(bibcodes, action):
                             batch_num, total_batches, len(batch))
                 
             
-                removed_count, files_to_delete = app._execute_remove_action(session, batch)
+                removed_count, files_to_delete, files_to_update = app._execute_remove_action(session, batch)
                 session.commit()  # Commit per batch 
                 
                 total_removed += removed_count
                 all_files_to_delete.update(files_to_delete)
+                all_files_to_update.update(files_to_update)
                 
                 logger.info('Batch %d completed: %d bibcodes removed, %d files marked for deletion', 
                         batch_num, removed_count, len(files_to_delete))
@@ -553,8 +566,15 @@ def task_manage_sitemap(bibcodes, action):
         # Delete all empty files after all batches are processed
         app.delete_sitemap_files(all_files_to_delete, sitemap_dir)
         
-        logger.info('Remove operation completed: %d total bibcodes removed, %d empty files deleted', 
-                    total_removed, len(all_files_to_delete))
+        # Synchronously flag files to regenerate (one row per file)
+        flagged = 0
+        with app.session_scope() as flag_session:
+            for filename in sorted(all_files_to_update):
+                flagged += app.flag_one_row_for_filename(flag_session, filename)
+                flag_session.commit()
+
+        logger.info('Remove operation completed: %d total bibcodes removed, %d empty files deleted, %d files flagged', 
+                    total_removed, len(all_files_to_delete), flagged)
         return
 
     elif action == 'update-robots':
