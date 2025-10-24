@@ -133,7 +133,7 @@ class TestSitemapCommandLine(unittest.TestCase):
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
         
         # Mock the chain workflow since 'add' action uses chain for auto-updating files
-        with patch('run.chain') as mock_chain:
+        with patch('celery.chain') as mock_chain:
             mock_result = Mock()
             mock_result.id = 'test-task-123'
             mock_workflow = Mock()
@@ -152,7 +152,7 @@ class TestSitemapCommandLine(unittest.TestCase):
         bibcodes = ['2023ApJ...123..456A']
         
         # Mock the chain workflow since 'force-update' action uses chain
-        with patch('run.chain') as mock_chain:
+        with patch('celery.chain') as mock_chain:
             mock_result = Mock()
             mock_result.id = 'test-task-456'
             mock_workflow = Mock()
@@ -198,7 +198,7 @@ class TestSitemapCommandLine(unittest.TestCase):
         bibcodes = ['2023ApJ...123..456A']
         
         # Mock the chain workflow since 'remove' action uses chain
-        with patch('run.chain') as mock_chain:
+        with patch('celery.chain') as mock_chain:
             mock_result = Mock()
             mock_result.id = 'test-task-remove'
             mock_workflow = Mock()
@@ -270,7 +270,7 @@ class TestSitemapCommandLine(unittest.TestCase):
                 
                 if action in chain_actions:
                     # Actions that use chain for auto-updating files
-                    with patch('run.chain') as mock_chain:
+                    with patch('celery.chain') as mock_chain:
                         mock_workflow = Mock()
                         mock_workflow.apply_async.return_value = mock_result
                         mock_chain.return_value = mock_workflow
@@ -296,7 +296,7 @@ class TestSitemapCommandLine(unittest.TestCase):
         bibcodes = ['2023ApJ...123..456A']
         
         # Test both functions in sequence to simulate real usage
-        with patch('run.chain') as mock_chain:
+        with patch('celery.chain') as mock_chain:
             with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_update:
                 
                 # Set up mock results
@@ -405,7 +405,7 @@ class TestSitemapCommandLine(unittest.TestCase):
                 
                 with patch('sys.argv', test_args):
                     with patch('sys.exit') as mock_exit:
-                        with patch('run.chain') as mock_chain:
+                        with patch('celery.chain') as mock_chain:
                             with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_populate:
                                 with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_update:
                                     
@@ -595,7 +595,7 @@ class TestSitemapCommandLine(unittest.TestCase):
     def test_cleanup_invalid_sitemaps(self):
         """Test cleanup_invalid_sitemaps function"""
         
-        with patch('run.chain') as mock_chain:
+        with patch('celery.chain') as mock_chain:
             # Mock the chain and its apply_async method
             mock_workflow = Mock()
             mock_result = Mock()

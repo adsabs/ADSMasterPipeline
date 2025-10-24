@@ -544,13 +544,16 @@ def cleanup_invalid_sitemaps():
         str: Celery task ID for monitoring cleanup progress
     """
     logger.info('Initiating sitemap cleanup using background task')
-    
-    cleanup_result = tasks.task_cleanup_invalid_sitemaps.apply_async(
-        priority=1  # Lower priority than daily updates
+
+    # Chain cleanup → update files to ensure flagged files are regenerated immediately
+    workflow = chain(
+        tasks.task_cleanup_invalid_sitemaps.s(),
+        tasks.task_update_sitemap_files.s()
     )
-    
-    logger.info('Sitemap cleanup task submitted: %s', cleanup_result.id)
-    return cleanup_result.id
+    result = workflow.apply_async(priority=1)
+
+    logger.info('Sitemap cleanup workflow submitted: %s', result.id)
+    return result.id
 
 def update_sitemaps_auto(days_back=1):
     """
@@ -580,7 +583,8 @@ def update_sitemaps_auto(days_back=1):
     bibcodes_to_update = []
     
     with app.session_scope() as session:
-        # Find all records that were updated recently OR had SOLR processing recently
+        # Find all records that were updated recently OR had SOLR processing recently 
+        # TODO: Should we add a check for the sitemap files to be updated?
         bib_data_query = session.query(Records.bibcode).filter(
             Records.bib_data_updated >= cutoff_date
         )
