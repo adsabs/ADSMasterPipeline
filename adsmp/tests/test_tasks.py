@@ -912,9 +912,8 @@ class TestSitemapWorkflow(unittest.TestCase):
         self.app.conf['SITEMAP_BOOTSTRAP_BATCH_SIZE'] = 2  # Small batch for testing
         
         try:
-            # Mock the Celery task that gets called at the end
-            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_apply_async, \
-                 patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
+            # Mock delete_sitemap_files  
+            with patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
                 result = tasks.task_cleanup_invalid_sitemaps()
         finally:
             # Restore original batch size
@@ -926,15 +925,14 @@ class TestSitemapWorkflow(unittest.TestCase):
         self.assertIn('invalid_removed', result, "Should include invalid_removed count")
         self.assertIn('batches_processed', result, "Should include batches_processed count")
         self.assertIn('files_regenerated', result, "Should include files_regenerated flag")
+        self.assertIn('files_flagged', result, "Should include files_flagged count")
         
         # Verify cleanup results - should have processed exactly our 5 records
         self.assertEqual(result['total_processed'], 5, "Should have processed exactly 5 records")
         self.assertEqual(result['invalid_removed'], 3, "Should have removed exactly 3 invalid records")
         self.assertGreaterEqual(result['batches_processed'], 1, "Should have processed at least 1 batch")
         self.assertTrue(result['files_regenerated'], "Should indicate files need regeneration")
-        
-        # Verify the Celery task was called since files need regeneration
-        mock_apply_async.assert_called_once_with()
+        # files_flagged may be 0 if all invalid records were in files that became completely empty
         
         # Verify delete_sitemap_files was called to clean up empty files
         self.assertTrue(mock_delete_files.called, "delete_sitemap_files should have been called")
@@ -984,6 +982,126 @@ class TestSitemapWorkflow(unittest.TestCase):
             for record in invalid_records:
                 self.assertIn(record.status, ['solr-failed', 'retrying'])
 
+    def test_task_cleanup_invalid_sitemaps_with_file_flagging(self):
+        """Test that cleanup correctly flags files for regeneration when some records remain"""
+        
+        # Setup: Create TWO files:
+        # File 1 (mixed): Has both valid and invalid records - should be flagged when invalid ones removed
+        # File 2 (invalid only): Has only invalid records - should be deleted entirely
+        test_bibcodes = [
+            '2023FlagTest1A',  # Valid - will remain in file1
+            '2023FlagTest2B',  # Valid - will remain in file1
+            '2023FlagTest3C',  # Invalid - will be removed from file1
+            '2023FlagTest4D',  # Invalid - will be removed from file2
+        ]
+        valid_bibcodes = test_bibcodes[:2]
+        invalid_bibcodes = test_bibcodes[2:]
+        
+        with self.app.session_scope() as session:
+            # Clean up any existing test data
+            session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023FlagTest%')).delete(synchronize_session=False)
+            session.query(Records).filter(Records.bibcode.like('2023FlagTest%')).delete(synchronize_session=False)
+            session.commit()
+            
+            # Create valid records (should remain in sitemap)
+            for bibcode in valid_bibcodes:
+                record = Records()
+                record.bibcode = bibcode
+                record.bib_data = '{"title": "Valid Test Record"}'
+                record.bib_data_updated = get_date() - timedelta(days=1)
+                record.solr_processed = get_date() - timedelta(hours=12)
+                record.status = 'success'
+                session.add(record)
+                session.flush()
+                
+                sitemap_record = SitemapInfo()
+                sitemap_record.bibcode = bibcode
+                sitemap_record.record_id = record.id
+                sitemap_record.sitemap_filename = 'sitemap_bib_mixed.xml'  # File 1
+                sitemap_record.update_flag = False
+                session.add(sitemap_record)
+            
+            # Create invalid records (should be removed from sitemap)
+            for i, bibcode in enumerate(invalid_bibcodes):
+                record = Records()
+                record.bibcode = bibcode
+                record.bib_data = '{"title": "Invalid Test Record"}'
+                record.bib_data_updated = get_date() - timedelta(days=1)
+                record.solr_processed = get_date() - timedelta(days=2)
+                record.status = 'solr-failed'
+                session.add(record)
+                session.flush()
+                
+                sitemap_record = SitemapInfo()
+                sitemap_record.bibcode = bibcode
+                sitemap_record.record_id = record.id
+                # First invalid goes to file1 (mixed), second to file2 (will be deleted)
+                sitemap_record.sitemap_filename = 'sitemap_bib_mixed.xml' if i == 0 else 'sitemap_bib_invalid_only.xml'
+                sitemap_record.update_flag = False
+                session.add(sitemap_record)
+            
+            session.commit()
+            
+            # Verify initial state: 4 records, all in same file, none flagged
+            total_records = session.query(SitemapInfo).filter(
+                SitemapInfo.bibcode.like('2023FlagTest%')
+            ).count()
+            self.assertEqual(total_records, 4, "Should have 4 records initially")
+            
+            flagged_count = session.query(SitemapInfo).filter(
+                SitemapInfo.bibcode.like('2023FlagTest%'),
+                SitemapInfo.update_flag == True
+            ).count()
+            self.assertEqual(flagged_count, 0, "Should have 0 flagged records initially")
+        
+        # Execute cleanup
+        original_batch_size = self.app.conf.get('SITEMAP_BOOTSTRAP_BATCH_SIZE', 50000)
+        self.app.conf['SITEMAP_BOOTSTRAP_BATCH_SIZE'] = 10  # Small batch
+        
+        try:
+            with patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
+                result = tasks.task_cleanup_invalid_sitemaps()
+        finally:
+            self.app.conf['SITEMAP_BOOTSTRAP_BATCH_SIZE'] = original_batch_size
+        
+        # Verify cleanup results
+        self.assertEqual(result['total_processed'], 4, "Should have processed 4 records")
+        self.assertEqual(result['invalid_removed'], 2, "Should have removed 2 invalid records")
+        self.assertTrue(result['files_regenerated'], "Should indicate files need regeneration")
+        self.assertEqual(result['files_flagged'], 1, "Should have flagged exactly 1 file (mixed file)")
+        
+        # Verify delete_sitemap_files was called for the file that became empty
+        self.assertTrue(mock_delete_files.called, "Should have deleted the empty file")
+        # Check that the empty file was deleted
+        call_args = mock_delete_files.call_args[0]
+        files_to_delete = call_args[0]
+        self.assertIn('sitemap_bib_invalid_only.xml', files_to_delete, "Should delete the file with only invalid records")
+        
+        # Verify database state after cleanup
+        with self.app.session_scope() as session:
+            # Should have 2 valid records remaining
+            remaining_records = session.query(SitemapInfo).filter(
+                SitemapInfo.bibcode.like('2023FlagTest%')
+            ).all()
+            self.assertEqual(len(remaining_records), 2, "Should have 2 remaining records")
+            
+            # At least one record should be flagged for update
+            flagged_records = [r for r in remaining_records if r.update_flag]
+            self.assertGreaterEqual(len(flagged_records), 1, "At least one record should be flagged")
+            
+            # All remaining records should be valid bibcodes
+            remaining_bibcodes = [r.bibcode for r in remaining_records]
+            self.assertEqual(set(remaining_bibcodes), set(valid_bibcodes), "Only valid bibcodes should remain")
+            
+            # All remaining records should be in the mixed file (not the deleted one)
+            filenames = set(r.sitemap_filename for r in remaining_records)
+            self.assertEqual(filenames, {'sitemap_bib_mixed.xml'}, "All remaining records should be in mixed file")
+            
+            # Clean up test data
+            session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023FlagTest%')).delete(synchronize_session=False)
+            session.query(Records).filter(Records.bibcode.like('2023FlagTest%')).delete(synchronize_session=False)
+            session.commit()
+
     def test_task_cleanup_invalid_sitemaps_orphaned_entries_cleanup(self):
         """Test cleanup of orphaned sitemap entries (part 2)"""
         
@@ -1028,9 +1146,8 @@ class TestSitemapWorkflow(unittest.TestCase):
         self.app.conf['SITEMAP_BOOTSTRAP_BATCH_SIZE'] = 2  # Small batch for testing
         
         try:
-            # Mock the Celery task that gets called at the end
-            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_apply_async, \
-                 patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
+            # Mock delete_sitemap_files
+            with patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
                 result = tasks.task_cleanup_invalid_sitemaps()
         finally:
             # Restore original batch size
@@ -1041,9 +1158,6 @@ class TestSitemapWorkflow(unittest.TestCase):
         self.assertEqual(result['invalid_removed'], 2, "Should have removed exactly 2 orphaned records")
         self.assertGreaterEqual(result['batches_processed'], 1, "Should have processed at least 1 batch")
         self.assertTrue(result['files_regenerated'], "Should indicate files need regeneration")
-        
-        # Verify the Celery task was called since files need regeneration
-        mock_apply_async.assert_called_once_with()
         
         # Verify database state after cleanup
         with self.app.session_scope() as session:

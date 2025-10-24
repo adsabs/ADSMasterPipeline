@@ -491,13 +491,6 @@ def task_cleanup_invalid_sitemaps():
             for filename in sorted(all_files_to_update):
                 flagged += app.flag_one_row_for_filename(flag_session, filename)
                 flag_session.commit()
-
-    pending_updates = session.query(SitemapInfo).filter(SitemapInfo.update_flag == True).count()
-    
-    # Schedule sitemap file regeneration if any records were removed
-    if total_removed > 0 or pending_updates > 0:
-        logger.info('Scheduling sitemap file regeneration after cleanup')
-        task_update_sitemap_files.apply_async()
     
     cleanup_result = {
         'total_processed': total_processed,
