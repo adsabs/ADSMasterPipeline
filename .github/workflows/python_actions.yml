@@ -44,7 +44,7 @@ jobs:
         pip install -U -r dev-requirements.txt
     - name: Test with pytest
       run: |
-        py.test -vv -s
+        py.test
     - uses: actions/upload-artifact@v4
       with:
         name: my-artifact
