@@ -1234,6 +1234,8 @@ class TestSitemapWorkflow(unittest.TestCase):
         ]
         
         valid_bibcode = '2023ValidRecord..1..1F'
+        # Add another valid bibcode in the same file as invalid ones to ensure file gets flagged not deleted
+        valid_bibcode_in_mixed_file = '2023ValidMixed..1..1G'
         
         with self.app.session_scope() as session:
             # Clean up all test data
@@ -1241,7 +1243,7 @@ class TestSitemapWorkflow(unittest.TestCase):
             session.query(Records).delete(synchronize_session=False)
             session.commit()
             
-            # Create invalid records
+            # Create invalid records - all in the same file
             for bibcode, bib_data, status, description in test_cases:
                 record = Records()
                 record.bibcode = bibcode
@@ -1259,7 +1261,23 @@ class TestSitemapWorkflow(unittest.TestCase):
                 sitemap_record.update_flag = False
                 session.add(sitemap_record)
             
-            # Create one valid record that should remain
+            # Create a valid record in the same file as invalid ones (mixed file)
+            mixed_record = Records()
+            mixed_record.bibcode = valid_bibcode_in_mixed_file
+            mixed_record.bib_data = '{"title": "Valid Mixed Record"}'
+            mixed_record.bib_data_updated = get_date() - timedelta(days=1)
+            mixed_record.status = 'success'
+            session.add(mixed_record)
+            session.flush()
+            
+            mixed_sitemap_record = SitemapInfo()
+            mixed_sitemap_record.bibcode = valid_bibcode_in_mixed_file
+            mixed_sitemap_record.record_id = mixed_record.id
+            mixed_sitemap_record.sitemap_filename = 'sitemap_bib_invalid_comprehensive.xml'  # Same file!
+            mixed_sitemap_record.update_flag = False
+            session.add(mixed_sitemap_record)
+            
+            # Create another valid record in a different file
             valid_record = Records()
             valid_record.bibcode = valid_bibcode
             valid_record.bib_data = '{"title": "Valid Record"}'
@@ -1279,7 +1297,7 @@ class TestSitemapWorkflow(unittest.TestCase):
             
             # Verify setup
             total_records = session.query(SitemapInfo).count()
-            self.assertEqual(total_records, 6, "Should have 6 records (5 invalid + 1 valid)")
+            self.assertEqual(total_records, 7, "Should have 7 records (5 invalid + 2 valid)")
         
         # Execute cleanup
         with patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
@@ -1287,18 +1305,19 @@ class TestSitemapWorkflow(unittest.TestCase):
         
         # Verify all invalid records were removed
         self.assertEqual(result['invalid_removed'], 5, "Should remove all 5 invalid records")
-        self.assertEqual(result['total_processed'], 6, "Should process all 6 records")
+        self.assertEqual(result['total_processed'], 7, "Should process all 7 records")
         self.assertTrue(result['files_regenerated'], "Should indicate files need regeneration")
         
-        # Verify files were flagged for regeneration (1 file with invalid records)
+        # Verify files were flagged for regeneration (1 file with mixed valid/invalid records)
         self.assertGreaterEqual(result['files_flagged'], 1, "Should have flagged at least 1 file")
         
         # Verify database state
         with self.app.session_scope() as session:
-            # Only valid record should remain
+            # Two valid records should remain
             remaining_records = session.query(SitemapInfo).all()
-            self.assertEqual(len(remaining_records), 1, "Only valid record should remain")
-            self.assertEqual(remaining_records[0].bibcode, valid_bibcode, "Valid record should remain")
+            self.assertEqual(len(remaining_records), 2, "Should have 2 remaining valid records")
+            remaining_bibcodes = {r.bibcode for r in remaining_records}
+            self.assertEqual(remaining_bibcodes, {valid_bibcode, valid_bibcode_in_mixed_file}, "Both valid records should remain")
             
             # All invalid records should be gone
             for bibcode, _, _, description in test_cases:
