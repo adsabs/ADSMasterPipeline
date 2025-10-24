@@ -466,13 +466,20 @@ class TestSitemapCommandLine(unittest.TestCase):
                     mock_session = Mock()
                     mock_session_scope.return_value.__enter__.return_value = mock_session
                     
+                    # Mock the already_flagged subquery (first query call)
+                    mock_flagged_subquery = Mock()
+                    
                     # Mock the UNION query structure
                     mock_bib_data_query = Mock()
                     mock_solr_query = Mock()
                     mock_union_result = [mock_recent_record1, mock_recent_record2]
                     
-                    # Mock the query chain
-                    mock_session.query.return_value.filter.side_effect = [mock_bib_data_query, mock_solr_query]
+                    # Mock the query chain - now with 3 filter calls (flagged subquery, bib_data, solr)
+                    mock_session.query.return_value.filter.side_effect = [
+                        mock_flagged_subquery,  # For already_flagged_subquery
+                        mock_bib_data_query,     # For bib_data_query
+                        mock_solr_query          # For solr_processed_query
+                    ]
                     mock_bib_data_query.union.return_value = mock_union_result
                     
                     # Set up mock results
@@ -524,13 +531,20 @@ class TestSitemapCommandLine(unittest.TestCase):
                 mock_session = Mock()
                 mock_session_scope.return_value.__enter__.return_value = mock_session
                 
+                # Mock the already_flagged subquery (first query call)
+                mock_flagged_subquery = Mock()
+                
                 # Mock the UNION query structure
                 mock_bib_data_query = Mock()
                 mock_solr_query = Mock()
                 mock_union_result = [mock_record]
                 
-                # Mock the query chain
-                mock_session.query.return_value.filter.side_effect = [mock_bib_data_query, mock_solr_query]
+                # Mock the query chain - now with 3 filter calls
+                mock_session.query.return_value.filter.side_effect = [
+                    mock_flagged_subquery,  # For already_flagged_subquery
+                    mock_bib_data_query,     # For bib_data_query
+                    mock_solr_query          # For solr_processed_query
+                ]
                 mock_bib_data_query.union.return_value = mock_union_result
                 
                 mock_manage.side_effect = Exception("Task submission failed")
@@ -542,36 +556,43 @@ class TestSitemapCommandLine(unittest.TestCase):
 
     def test_update_sitemaps_auto_with_solr_processed_updates(self):
         """Test update_sitemaps_auto catches records with recent solr_processed updates"""
-
+        
         # Mock records with recent solr_processed (successful reindexes)
         mock_reindexed_record1 = Mock()
         mock_reindexed_record1.bibcode = '2023ApJ...123..789C'
-
+        
         mock_reindexed_record2 = Mock()
         mock_reindexed_record2.bibcode = '2023ApJ...123..790D'
-
+        
         # Mock records with recent bib_data_updated
         mock_new_record = Mock()
         mock_new_record.bibcode = '2023ApJ...123..791E'
-
+        
         with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
             with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_files:
                 with patch('run.app.session_scope') as mock_session_scope:
                     # Mock the session
                     mock_session = Mock()
                     mock_session_scope.return_value.__enter__.return_value = mock_session
-
+                    
+                    # Mock the already_flagged subquery (first query call)
+                    mock_flagged_subquery = Mock()
+                    
                     # Mock the two separate queries
                     # First query: bib_data_updated records
                     mock_bib_data_query = Mock()
                     mock_bib_data_query.union.return_value = [
                         mock_new_record,           # From bib_data_updated query
-                        mock_reindexed_record1,    # From solr_processed query  
+                        mock_reindexed_record1,    # From solr_processed query
                         mock_reindexed_record2     # From solr_processed query
                     ]
-
-                    # Set up the query chain for the new union structure
-                    mock_session.query.return_value.filter.return_value = mock_bib_data_query
+                    
+                    # Set up the query chain for the new union structure - now with 3 filter calls
+                    mock_session.query.return_value.filter.side_effect = [
+                        mock_flagged_subquery,   # For already_flagged_subquery
+                        mock_bib_data_query,     # For bib_data_query
+                        mock_bib_data_query      # For solr_processed_query (reuse same mock)
+                    ]
 
                     # Set up mock task results
                     mock_manage_result = Mock()
