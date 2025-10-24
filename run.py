@@ -566,6 +566,9 @@ def update_sitemaps_auto(days_back=1):
     Uses UNION to combine both criteria, ensuring records that are either
     newly ingested OR recently processed by SOLR are included in sitemaps.
     
+    Excludes records that already have update_flag=True to avoid duplicate work,
+    as those records are already scheduled for sitemap regeneration.
+    
     Args:
         days_back: Number of days to look back for changes
     
@@ -583,14 +586,22 @@ def update_sitemaps_auto(days_back=1):
     bibcodes_to_update = []
     
     with app.session_scope() as session:
-        # Find all records that were updated recently OR had SOLR processing recently 
-        # TODO: Should we add a check for the sitemap files to be updated?
+        # Find all records that were updated recently OR had SOLR processing recently
+        # Exclude records that already have update_flag=True to avoid duplicate work
+        
+        # Subquery to get bibcodes that already have update_flag=True
+        already_flagged_subquery = session.query(SitemapInfo.bibcode).filter(
+            SitemapInfo.update_flag.is_(True)
+        )
+        
         bib_data_query = session.query(Records.bibcode).filter(
-            Records.bib_data_updated >= cutoff_date
+            Records.bib_data_updated >= cutoff_date,
+            ~Records.bibcode.in_(already_flagged_subquery)
         )
         
         solr_processed_query = session.query(Records.bibcode).filter(
-            Records.solr_processed >= cutoff_date
+            Records.solr_processed >= cutoff_date,
+            ~Records.bibcode.in_(already_flagged_subquery)
         )
         
         # UNION automatically eliminates duplicates
@@ -598,7 +609,7 @@ def update_sitemaps_auto(days_back=1):
         
         bibcodes_to_update = [record.bibcode for record in combined_query]
         
-        logger.info('Found %d records updated since %s', len(bibcodes_to_update), cutoff_date.isoformat())
+        logger.info('Found %d records updated since %s (excluding already flagged)', len(bibcodes_to_update), cutoff_date.isoformat())
     
     if not bibcodes_to_update:
         logger.info('No records need sitemap updates')
