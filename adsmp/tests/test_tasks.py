@@ -1282,8 +1282,7 @@ class TestSitemapWorkflow(unittest.TestCase):
             self.assertEqual(total_records, 6, "Should have 6 records (5 invalid + 1 valid)")
         
         # Execute cleanup
-        with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_apply_async, \
-             patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
+        with patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
             result = tasks.task_cleanup_invalid_sitemaps()
         
         # Verify all invalid records were removed
@@ -1291,8 +1290,8 @@ class TestSitemapWorkflow(unittest.TestCase):
         self.assertEqual(result['total_processed'], 6, "Should process all 6 records")
         self.assertTrue(result['files_regenerated'], "Should indicate files need regeneration")
         
-        # Verify regeneration was triggered
-        mock_apply_async.assert_called_once_with()
+        # Verify files were flagged for regeneration (1 file with invalid records)
+        self.assertGreaterEqual(result['files_flagged'], 1, "Should have flagged at least 1 file")
         
         # Verify database state
         with self.app.session_scope() as session:
@@ -1480,16 +1479,13 @@ class TestSitemapWorkflow(unittest.TestCase):
                 session.add(invalid_sitemap_record)
                 session.commit()
             
-            # STEP 5: Run cleanup with mocked regeneration trigger
-            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_regen:
-                cleanup_result = tasks.task_cleanup_invalid_sitemaps()
-                
-                # Verify cleanup identified and removed the invalid record
-                self.assertEqual(cleanup_result['invalid_removed'], 1, "Should remove 1 invalid record")
-                self.assertTrue(cleanup_result['files_regenerated'], "Should indicate files need regeneration")
-                
-                # Verify regeneration was triggered (this proves the integration works)
-                mock_regen.assert_called_once_with()
+            # STEP 5: Run cleanup
+            cleanup_result = tasks.task_cleanup_invalid_sitemaps()
+            
+            # Verify cleanup identified and removed the invalid record
+            self.assertEqual(cleanup_result['invalid_removed'], 1, "Should remove 1 invalid record")
+            self.assertTrue(cleanup_result['files_regenerated'], "Should indicate files need regeneration")
+            self.assertEqual(cleanup_result['files_flagged'], 1, "Should have flagged 1 file for regeneration")
             
             # STEP 6: Verify database state after cleanup
             with self.app.session_scope() as session:
