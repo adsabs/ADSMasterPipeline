@@ -10,6 +10,7 @@ from adsmp import app
 from adsmp.models import Base, Records, SitemapInfo
 from run import reindex_failed_bibcodes, manage_sitemap, update_sitemap_files, update_sitemaps_auto, cleanup_invalid_sitemaps
 from datetime import datetime, timedelta, timezone
+from adsputils import get_date
 
 class TestFixDbDuplicates(unittest.TestCase):
 
@@ -451,37 +452,44 @@ class TestSitemapCommandLine(unittest.TestCase):
     def test_update_sitemaps_auto_with_records(self):
         """Test update_sitemaps_auto function with records needing updates"""
         
-        # Mock the database query to return test records
-        mock_recent_record1 = Mock()
-        mock_recent_record1.bibcode = '2023ApJ...123..456A'
-        
-        mock_recent_record2 = Mock()
-        mock_recent_record2.bibcode = '2023ApJ...123..457B'
+        # Create real database records with recent updates
+        with self.app.session_scope() as session:
+            # Record 1: Recent bib_data_updated
+            record1 = Records(
+                bibcode='2023ApJ...123..456A',
+                bib_data='{"title": "Test Article 1"}',
+                bib_data_updated=get_date() - timedelta(hours=12),  # Recent
+                solr_processed=get_date() - timedelta(days=5),  # Old
+                status='success'
+            )
+            session.add(record1)
+            
+            # Record 2: Recent solr_processed
+            record2 = Records(
+                bibcode='2023ApJ...123..457B',
+                bib_data='{"title": "Test Article 2"}',
+                bib_data_updated=get_date() - timedelta(days=5),  # Old
+                solr_processed=get_date() - timedelta(hours=6),  # Recent
+                status='success'
+            )
+            session.add(record2)
+            
+            # Record 3: Old updates, should not be picked up
+            record3 = Records(
+                bibcode='2023ApJ...123..458C',
+                bib_data='{"title": "Old Article"}',
+                bib_data_updated=get_date() - timedelta(days=5),
+                solr_processed=get_date() - timedelta(days=10),
+                status='success'
+            )
+            session.add(record3)
+            
+            session.commit()
         
         # Test with default 1 day lookback
         with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
             with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_files:
-                with patch('run.app.session_scope') as mock_session_scope:
-                    # Mock the session and query
-                    mock_session = Mock()
-                    mock_session_scope.return_value.__enter__.return_value = mock_session
-                    
-                    # Mock the already_flagged subquery (first query call)
-                    mock_flagged_subquery = Mock()
-                    
-                    # Mock the UNION query structure
-                    mock_bib_data_query = Mock()
-                    mock_solr_query = Mock()
-                    mock_union_result = [mock_recent_record1, mock_recent_record2]
-                    
-                    # Mock the query chain - now with 3 filter calls (flagged subquery, bib_data, solr)
-                    mock_session.query.return_value.filter.side_effect = [
-                        mock_flagged_subquery,  # For already_flagged_subquery
-                        mock_bib_data_query,     # For bib_data_query
-                        mock_solr_query          # For solr_processed_query
-                    ]
-                    mock_bib_data_query.union.return_value = mock_union_result
-                    
+                with patch('run.app', self.app):  # Use test's app instance
                     # Set up mock results
                     mock_manage_result = Mock()
                     mock_manage_result.id = 'test-auto-manage-123'
@@ -520,33 +528,21 @@ class TestSitemapCommandLine(unittest.TestCase):
     def test_update_sitemaps_auto_with_exception(self):
         """Test update_sitemaps_auto handles task submission exceptions"""
         
-        # Mock a test record
-        mock_record = Mock()
-        mock_record.bibcode = '2023ApJ...123..456A'
+        # Create a real database record
+        with self.app.session_scope() as session:
+            record = Records(
+                bibcode='2023ApJ...123..456A',
+                bib_data='{"title": "Test Article"}',
+                bib_data_updated=get_date() - timedelta(hours=12),  # Recent
+                solr_processed=get_date() - timedelta(days=5),
+                status='success'
+            )
+            session.add(record)
+            session.commit()
         
         # Test with manage task failing
         with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
-            with patch('run.app.session_scope') as mock_session_scope:
-                # Mock the session and query to return a record
-                mock_session = Mock()
-                mock_session_scope.return_value.__enter__.return_value = mock_session
-                
-                # Mock the already_flagged subquery (first query call)
-                mock_flagged_subquery = Mock()
-                
-                # Mock the UNION query structure
-                mock_bib_data_query = Mock()
-                mock_solr_query = Mock()
-                mock_union_result = [mock_record]
-                
-                # Mock the query chain - now with 3 filter calls
-                mock_session.query.return_value.filter.side_effect = [
-                    mock_flagged_subquery,  # For already_flagged_subquery
-                    mock_bib_data_query,     # For bib_data_query
-                    mock_solr_query          # For solr_processed_query
-                ]
-                mock_bib_data_query.union.return_value = mock_union_result
-                
+            with patch('run.app', self.app):  # Use test's app instance
                 mock_manage.side_effect = Exception("Task submission failed")
                 
                 with self.assertRaises(Exception) as context:
@@ -557,43 +553,43 @@ class TestSitemapCommandLine(unittest.TestCase):
     def test_update_sitemaps_auto_with_solr_processed_updates(self):
         """Test update_sitemaps_auto catches records with recent solr_processed updates"""
         
-        # Mock records with recent solr_processed (successful reindexes)
-        mock_reindexed_record1 = Mock()
-        mock_reindexed_record1.bibcode = '2023ApJ...123..789C'
-        
-        mock_reindexed_record2 = Mock()
-        mock_reindexed_record2.bibcode = '2023ApJ...123..790D'
-        
-        # Mock records with recent bib_data_updated
-        mock_new_record = Mock()
-        mock_new_record.bibcode = '2023ApJ...123..791E'
+        # Create real database records
+        with self.app.session_scope() as session:
+            # Record 1: Recent solr_processed (reindexed)
+            record1 = Records(
+                bibcode='2023ApJ...123..789C',
+                bib_data='{"title": "Reindexed Article 1"}',
+                bib_data_updated=get_date() - timedelta(days=10),  # Old
+                solr_processed=get_date() - timedelta(hours=8),  # Recent
+                status='success'
+            )
+            session.add(record1)
+            
+            # Record 2: Recent solr_processed (reindexed)
+            record2 = Records(
+                bibcode='2023ApJ...123..790D',
+                bib_data='{"title": "Reindexed Article 2"}',
+                bib_data_updated=get_date() - timedelta(days=10),  # Old
+                solr_processed=get_date() - timedelta(hours=4),  # Recent
+                status='success'
+            )
+            session.add(record2)
+            
+            # Record 3: Recent bib_data_updated
+            record3 = Records(
+                bibcode='2023ApJ...123..791E',
+                bib_data='{"title": "New Article"}',
+                bib_data_updated=get_date() - timedelta(hours=6),  # Recent
+                solr_processed=get_date() - timedelta(days=10),  # Old
+                status='success'
+            )
+            session.add(record3)
+            
+            session.commit()
         
         with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
             with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_files:
-                with patch('run.app.session_scope') as mock_session_scope:
-                    # Mock the session
-                    mock_session = Mock()
-                    mock_session_scope.return_value.__enter__.return_value = mock_session
-                    
-                    # Mock the already_flagged subquery (first query call)
-                    mock_flagged_subquery = Mock()
-                    
-                    # Mock the two separate queries
-                    # First query: bib_data_updated records
-                    mock_bib_data_query = Mock()
-                    mock_bib_data_query.union.return_value = [
-                        mock_new_record,           # From bib_data_updated query
-                        mock_reindexed_record1,    # From solr_processed query
-                        mock_reindexed_record2     # From solr_processed query
-                    ]
-                    
-                    # Set up the query chain for the new union structure - now with 3 filter calls
-                    mock_session.query.return_value.filter.side_effect = [
-                        mock_flagged_subquery,   # For already_flagged_subquery
-                        mock_bib_data_query,     # For bib_data_query
-                        mock_bib_data_query      # For solr_processed_query (reuse same mock)
-                    ]
-
+                with patch('run.app', self.app):  # Use test's app instance
                     # Set up mock task results
                     mock_manage_result = Mock()
                     mock_manage_result.id = 'test-solr-manage-123'
