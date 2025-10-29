@@ -573,7 +573,7 @@ def update_sitemaps_auto(days_back=1):
         days_back: Number of days to look back for changes
     
     Returns:
-        tuple: (manage_task_id, file_task_id) or (None, None) if no updates needed
+        str: Workflow task ID (chains manage + file generation), or None if no updates needed
     """
     
     
@@ -613,24 +613,19 @@ def update_sitemaps_auto(days_back=1):
     
     if not bibcodes_to_update:
         logger.info('No records need sitemap updates')
-        return None, None
+        return None
     
     logger.info('Submitting %d records for sitemap processing', len(bibcodes_to_update))
     
-    # Submit sitemap management task
-    manage_result = tasks.task_manage_sitemap.apply_async(
-        args=(bibcodes_to_update, 'add'),
-        priority=0
+    # Chain tasks: manage sitemap → update files
+    workflow = chain(
+        tasks.task_manage_sitemap.s(bibcodes_to_update, 'add'),
+        tasks.task_update_sitemap_files.s()
     )
-    logger.info('Submitted sitemap management task: %s', manage_result.id)
+    result = workflow.apply_async(priority=0)
+    logger.info('Submitted sitemap workflow: %s', result.id)
     
-    # Submit file generation task after the manage task is completed
-    file_result = tasks.task_update_sitemap_files.apply_async(
-        link=manage_result.id 
-    )
-    logger.info('Scheduled sitemap file generation task: %s', file_result.id)
-    
-    return manage_result.id, file_result.id
+    return result.id
 
 
 if __name__ == '__main__':
@@ -1016,11 +1011,10 @@ if __name__ == '__main__':
     elif args.update_sitemap_files:
         update_sitemap_files()
     elif args.update_sitemaps_auto:
-        manage_task_id, file_task_id = update_sitemaps_auto(args.days_back)
-        if manage_task_id:
+        workflow_id = update_sitemaps_auto(args.days_back)
+        if workflow_id:
             print(f"Automatic sitemap update initiated:")
-            print(f"  Management task: {manage_task_id}")
-            print(f"  File generation task: {file_task_id} (scheduled with 5-minute delay)")
+            print(f"  Workflow ID: {workflow_id} (chains: manage sitemap → generate files)")
           
         else:
             print("No records needed sitemap updates")

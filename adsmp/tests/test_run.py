@@ -6,7 +6,7 @@ import sys
 import io
 import testing.postgresql
 
-from adsmp import app
+from adsmp import app, tasks
 from adsmp.models import Base, Records, SitemapInfo
 from run import reindex_failed_bibcodes, manage_sitemap, update_sitemap_files, update_sitemaps_auto, cleanup_invalid_sitemaps
 from datetime import datetime, timedelta, timezone
@@ -487,43 +487,34 @@ class TestSitemapCommandLine(unittest.TestCase):
             session.commit()
         
         # Test with default 1 day lookback
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
-            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_files:
-                with patch('run.app', self.app):  # Use test's app instance
-                    # Set up mock results
-                    mock_manage_result = Mock()
-                    mock_manage_result.id = 'test-auto-manage-123'
-                    mock_manage.return_value = mock_manage_result
-                    
-                    mock_files_result = Mock()
-                    mock_files_result.id = 'test-auto-files-456'
-                    mock_files.return_value = mock_files_result
-                    
-                    # Call the function
-                    manage_task_id, file_task_id = update_sitemaps_auto(days_back=1)
-                    
-                    # Verify tasks were called correctly
-                    self.assertTrue(mock_manage.called)
-                    self.assertTrue(mock_files.called)
-                    
-                    # Check manage task arguments
-                    manage_call_args = mock_manage.call_args
-                    self.assertEqual(manage_call_args[1]['args'][1], 'add')  # Action should be 'add'
-                    self.assertEqual(manage_call_args[1]['priority'], 0)  # Priority should be 0
-                    
-                    # Check bibcodes (should only include recent ones)
-                    submitted_bibcodes = manage_call_args[1]['args'][0]
-                    self.assertEqual(len(submitted_bibcodes), 2)
-                    self.assertIn('2023ApJ...123..456A', submitted_bibcodes)
-                    self.assertIn('2023ApJ...123..457B', submitted_bibcodes)
-                    
-                    # Check files task arguments (should have link to manage task)
-                    files_call_args = mock_files.call_args
-                    self.assertEqual(files_call_args[1]['link'], 'test-auto-manage-123')  # Linked to manage task
-                    
-                    # Verify return values
-                    self.assertEqual(manage_task_id, 'test-auto-manage-123')
-                    self.assertEqual(file_task_id, 'test-auto-files-456')
+        with patch('run.chain') as mock_chain:
+            with patch('run.app', self.app):  # Use test's app instance
+                # Mock the chain workflow
+                mock_workflow = Mock()
+                mock_result = Mock()
+                mock_result.id = 'test-auto-workflow-123'
+                mock_workflow.apply_async.return_value = mock_result
+                mock_chain.return_value = mock_workflow
+                
+                # Mock the task signatures
+                mock_manage_sig = Mock()
+                mock_files_sig = Mock()
+                
+                with patch.object(tasks.task_manage_sitemap, 's', return_value=mock_manage_sig):
+                    with patch.object(tasks.task_update_sitemap_files, 's', return_value=mock_files_sig):
+                        # Call the function
+                        workflow_id = update_sitemaps_auto(days_back=1)
+                        
+                        # Verify chain was called with both task signatures
+                        self.assertTrue(mock_chain.called)
+                        chain_args = mock_chain.call_args[0]
+                        self.assertEqual(len(chain_args), 2)
+                        
+                        # Verify apply_async was called with correct priority
+                        mock_workflow.apply_async.assert_called_once_with(priority=0)
+                        
+                        # Verify return value
+                        self.assertEqual(workflow_id, 'test-auto-workflow-123')
 
     def test_update_sitemaps_auto_with_exception(self):
         """Test update_sitemaps_auto handles task submission exceptions"""
@@ -540,10 +531,12 @@ class TestSitemapCommandLine(unittest.TestCase):
             session.add(record)
             session.commit()
         
-        # Test with manage task failing
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
+        # Test with chain workflow failing
+        with patch('run.chain') as mock_chain:
             with patch('run.app', self.app):  # Use test's app instance
-                mock_manage.side_effect = Exception("Task submission failed")
+                mock_workflow = Mock()
+                mock_workflow.apply_async.side_effect = Exception("Task submission failed")
+                mock_chain.return_value = mock_workflow
                 
                 with self.assertRaises(Exception) as context:
                     update_sitemaps_auto(days_back=1)
@@ -587,33 +580,35 @@ class TestSitemapCommandLine(unittest.TestCase):
             
             session.commit()
         
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
-            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_files:
-                with patch('run.app', self.app):  # Use test's app instance
-                    # Set up mock task results
-                    mock_manage_result = Mock()
-                    mock_manage_result.id = 'test-solr-manage-123'
-                    mock_manage.return_value = mock_manage_result
+        with patch('run.chain') as mock_chain:
+            with patch('run.app', self.app):  # Use test's app instance
+                # Mock the chain workflow
+                mock_workflow = Mock()
+                mock_result = Mock()
+                mock_result.id = 'test-solr-workflow-123'
+                mock_workflow.apply_async.return_value = mock_result
+                mock_chain.return_value = mock_workflow
+                
+                # Mock the task signatures to capture bibcodes
+                captured_bibcodes = []
+                def capture_manage_sig(bibcodes, action):
+                    captured_bibcodes.extend(bibcodes)
+                    return Mock()
+                
+                with patch.object(tasks.task_manage_sitemap, 's', side_effect=capture_manage_sig):
+                    with patch.object(tasks.task_update_sitemap_files, 's', return_value=Mock()):
+                        # Call the function
+                        workflow_id = update_sitemaps_auto(days_back=1)
 
-                    mock_files_result = Mock()
-                    mock_files_result.id = 'test-solr-files-456'
-                    mock_files.return_value = mock_files_result
+                        # Verify result
+                        self.assertEqual(workflow_id, 'test-solr-workflow-123')
 
-                    # Call the function
-                    manage_task_id, file_task_id = update_sitemaps_auto(days_back=1)
-
-                    # Verify results
-                    self.assertEqual(manage_task_id, 'test-solr-manage-123')
-                    self.assertEqual(file_task_id, 'test-solr-files-456')
-
-                    # Verify manage task was called with all bibcodes
-                    self.assertTrue(mock_manage.called)
-                    manage_call_args = mock_manage.call_args
-                    bibcodes_passed = manage_call_args[1]['args'][0]  # args=(bibcodes, 'add')
-
-                    # Should include bibcodes from both bib_data_updated and solr_processed queries
-                    expected_bibcodes = ['2023ApJ...123..791E', '2023ApJ...123..789C', '2023ApJ...123..790D']
-                    self.assertEqual(set(bibcodes_passed), set(expected_bibcodes))
+                        # Verify chain was called
+                        self.assertTrue(mock_chain.called)
+                        
+                        # Should include bibcodes from both bib_data_updated and solr_processed queries
+                        expected_bibcodes = ['2023ApJ...123..791E', '2023ApJ...123..789C', '2023ApJ...123..790D']
+                        self.assertEqual(set(captured_bibcodes), set(expected_bibcodes))
 
     def test_cleanup_invalid_sitemaps(self):
         """Test cleanup_invalid_sitemaps function"""
