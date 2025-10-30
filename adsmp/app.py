@@ -81,6 +81,42 @@ class ADSMasterPipelineCelery(ADSCelery):
         """Get the sitemap directory from configuration"""
         return self.conf.get('SITEMAP_DIR', '/app/logs/sitemap/')
 
+    def flag_one_row_for_filename(self, session, filename):
+        """Flag exactly one sitemap row for the given filename if none already flagged.
+        Returns number of rows flagged (0 or 1)."""
+        if not filename:
+            return 0
+
+        already = (
+            session.query(SitemapInfo.id)
+            .filter(
+                SitemapInfo.sitemap_filename == filename,
+                SitemapInfo.update_flag.is_(True),
+            )
+            .limit(1)
+            .scalar()
+        )
+        if already:
+            return 0
+
+        row_id = (
+            session.query(SitemapInfo.id)
+            .filter(
+                SitemapInfo.sitemap_filename == filename,
+                SitemapInfo.update_flag.is_(False),
+            )
+            .order_by(SitemapInfo.id.asc())
+            .limit(1)
+            .scalar()
+        )
+        if row_id is None:
+            return 0
+
+        return session.query(SitemapInfo).filter(
+            SitemapInfo.id == row_id,
+            SitemapInfo.update_flag.is_(False),
+        ).update({ 'update_flag': True }, synchronize_session=False)
+
     def update_storage(self, bibcode, type, payload):
         """Update the document in the database, every time
         empty the solr/metrics processed timestamps.
@@ -173,13 +209,10 @@ class ADSMasterPipelineCelery(ADSCelery):
                 session.add(ChangeLog(key='bibcode:%s' % bibcode, type='deleted', oldvalue=serializer.dumps(r.toJSON())))
                 session.delete(r)
                 
-                # Mark affected sitemap files for regeneration
-                # This ensures deleted bibcodes are removed from XML files
-                for (filename,) in affected_files:
-                    if filename:  # Skip None filenames
-                        session.query(SitemapInfo)\
-                               .filter_by(sitemap_filename=filename)\
-                               .update({'update_flag': True}, synchronize_session=False)
+                # Mark affected sitemap files for regeneration synchronously (one row per file)
+                for (filename,) in sorted({f for f in affected_files if f}):
+                    if self.flag_one_row_for_filename(session, filename):
+                        session.commit()
                 
                 session.commit()
                 return True
@@ -191,11 +224,10 @@ class ADSMasterPipelineCelery(ADSCelery):
                 orphaned_filename = s.sitemap_filename
                 session.delete(s)
                 
-                # Mark the file for regeneration if it has a filename
+                # Mark the file for regeneration if it has a filename (synchronously)
                 if orphaned_filename:
-                    session.query(SitemapInfo)\
-                           .filter_by(sitemap_filename=orphaned_filename)\
-                           .update({'update_flag': True}, synchronize_session=False)
+                    if self.flag_one_row_for_filename(session, orphaned_filename):
+                        session.commit()
                 
                 session.commit()
                 return True
@@ -770,7 +802,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         if bib_data_updated and solr_processed:
             processing_lag = bib_data_updated - solr_processed
             if processing_lag > timedelta(days=5):
-                self.logger.warning('SOLR processing might be stale for %s by %s (bib_data_updated: %s, solr_processed: %s) - keeping in sitemap',
+                self.logger.debug('SOLR processing might be stale for %s by %s (bib_data_updated: %s, solr_processed: %s) - keeping in sitemap',
                             bibcode, processing_lag, bib_data_updated, solr_processed)
                 return True
         
@@ -823,30 +855,52 @@ class ADSMasterPipelineCelery(ADSCelery):
     def get_current_sitemap_state(self, session):
         """Get current sitemap state using provided session.
         
+        Finds the last file being filled (highest index number).
+        If that file is full (>= MAX_RECORDS_PER_SITEMAP), returns state for next file.
+        
         :param session: Database session to use
         :return: dict with current filename, count, and index
         """
-        result = session.query(
+        max_records = self.conf.get('MAX_RECORDS_PER_SITEMAP', 50000)
+        
+        # Get all files with their counts
+        results = session.query(
             SitemapInfo.sitemap_filename,
             func.count(SitemapInfo.id).label('record_count')
         ).filter(
             SitemapInfo.sitemap_filename.isnot(None)
         ).group_by(
             SitemapInfo.sitemap_filename
-        ).order_by(
-            SitemapInfo.sitemap_filename.desc()
-        ).first()
+        ).all()
         
-        if result:
-            filename = result.sitemap_filename
-            count = result.record_count
-            index = int(filename.split('_bib_')[1].split('.')[0])
+        if results:
+            # Sort by numeric index (not alphabetically)
+            def get_file_index(result):
+                return int(result.sitemap_filename.split('_bib_')[1].split('.')[0])
+            
+            sorted_results = sorted(results, key=get_file_index)
+            last_result = sorted_results[-1]
+            
+            filename = last_result.sitemap_filename
+            count = last_result.record_count
+            index = get_file_index(last_result)
+            
+            # If last file is full, prepare for next file
+            if count >= max_records:
+                return {
+                    'filename': f'sitemap_bib_{index + 1}.xml',
+                    'count': 0,
+                    'index': index + 1
+                }
+            
+            # Last file has room, use it
             return {
                 'filename': filename,
                 'count': count,
                 'index': index
             }
         
+        # No files exist yet, start with file 1
         return {
             'filename': 'sitemap_bib_1.xml',
             'count': 0,
@@ -943,6 +997,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                             sitemap_record['filename_lastmoddate'] = bib_data_updated
                     
                     update_records.append((sitemap_record, sitemap_info))
+                    sitemap_records.append((sitemap_record['record_id'], sitemap_record['bibcode']))
                 
                 successful_count += 1
                 self.logger.debug('Successfully processed sitemap for bibcode: %s', bibcode)
@@ -969,7 +1024,16 @@ class ADSMasterPipelineCelery(ADSCelery):
             'index': current_index
         }
         
-        return successful_count, failed_count, sitemap_records, updated_state
+        # Return counts of new vs updated records
+        batch_stats = {
+            'successful': successful_count,
+            'failed': failed_count,
+            'new_records': len(new_records),
+            'updated_records': len(update_records),
+            'sitemap_records': sitemap_records
+        }
+        
+        return batch_stats, updated_state
     
     
     def bulk_insert_sitemap_records(self, sitemap_records, session):
@@ -1041,10 +1105,10 @@ class ADSMasterPipelineCelery(ADSCelery):
             bibcodes_to_remove: List of bibcodes to remove from sitemaps
             
         Returns:
-            tuple: (removed_count: int, files_to_delete: set)
+            tuple: (removed_count: int, files_to_delete: set, files_to_update: set)
         """
         if not bibcodes_to_remove:
-            return 0, set()
+            return 0, set(), set()
 
         # Get affected files before deletion
         file_counts_before = dict(
@@ -1058,7 +1122,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         )
         
         if not file_counts_before:
-            return 0, set()
+            return 0, set(), set()
         
         affected_files = set(file_counts_before.keys())
         
@@ -1078,18 +1142,11 @@ class ADSMasterPipelineCelery(ADSCelery):
         # Identify empty files and files that still have records
         files_to_delete = set(file for file in affected_files if file not in file_counts_after)
         files_to_update = affected_files - files_to_delete
-        
-        # Only update records in files that still exist and were affected (targeted update)
-        updated_count = 0
-        if files_to_update:
-            updated_count = session.query(SitemapInfo).filter(
-                SitemapInfo.sitemap_filename.in_(files_to_update)
-            ).update({'update_flag': True}, synchronize_session=False)
-        
-        self.logger.info('Removed %d bibcodes from %d files, %d files now empty, %d records marked for regeneration', 
-                    removed_count, len(affected_files), len(files_to_delete), updated_count)
-        
-        return removed_count, files_to_delete
+
+        self.logger.info('Removed %d bibcodes from %d files, %d files now empty, %d files pending regeneration flag', 
+                         removed_count, len(affected_files), len(files_to_delete), len(files_to_update))
+
+        return removed_count, files_to_delete, files_to_update
 
 
     def delete_sitemap_files(self, files_to_delete, sitemap_dir):

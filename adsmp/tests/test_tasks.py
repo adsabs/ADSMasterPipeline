@@ -912,9 +912,8 @@ class TestSitemapWorkflow(unittest.TestCase):
         self.app.conf['SITEMAP_BOOTSTRAP_BATCH_SIZE'] = 2  # Small batch for testing
         
         try:
-            # Mock the Celery task that gets called at the end
-            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_apply_async, \
-                 patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
+            # Mock delete_sitemap_files  
+            with patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
                 result = tasks.task_cleanup_invalid_sitemaps()
         finally:
             # Restore original batch size
@@ -926,15 +925,14 @@ class TestSitemapWorkflow(unittest.TestCase):
         self.assertIn('invalid_removed', result, "Should include invalid_removed count")
         self.assertIn('batches_processed', result, "Should include batches_processed count")
         self.assertIn('files_regenerated', result, "Should include files_regenerated flag")
+        self.assertIn('files_flagged', result, "Should include files_flagged count")
         
         # Verify cleanup results - should have processed exactly our 5 records
         self.assertEqual(result['total_processed'], 5, "Should have processed exactly 5 records")
         self.assertEqual(result['invalid_removed'], 3, "Should have removed exactly 3 invalid records")
         self.assertGreaterEqual(result['batches_processed'], 1, "Should have processed at least 1 batch")
         self.assertTrue(result['files_regenerated'], "Should indicate files need regeneration")
-        
-        # Verify the Celery task was called since files need regeneration
-        mock_apply_async.assert_called_once_with()
+        # files_flagged may be 0 if all invalid records were in files that became completely empty
         
         # Verify delete_sitemap_files was called to clean up empty files
         self.assertTrue(mock_delete_files.called, "delete_sitemap_files should have been called")
@@ -984,6 +982,126 @@ class TestSitemapWorkflow(unittest.TestCase):
             for record in invalid_records:
                 self.assertIn(record.status, ['solr-failed', 'retrying'])
 
+    def test_task_cleanup_invalid_sitemaps_with_file_flagging(self):
+        """Test that cleanup correctly flags files for regeneration when some records remain"""
+        
+        # Setup: Create TWO files:
+        # File 1 (mixed): Has both valid and invalid records - should be flagged when invalid ones removed
+        # File 2 (invalid only): Has only invalid records - should be deleted entirely
+        test_bibcodes = [
+            '2023FlagTest1A',  # Valid - will remain in file1
+            '2023FlagTest2B',  # Valid - will remain in file1
+            '2023FlagTest3C',  # Invalid - will be removed from file1
+            '2023FlagTest4D',  # Invalid - will be removed from file2
+        ]
+        valid_bibcodes = test_bibcodes[:2]
+        invalid_bibcodes = test_bibcodes[2:]
+        
+        with self.app.session_scope() as session:
+            # Clean up any existing test data
+            session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023FlagTest%')).delete(synchronize_session=False)
+            session.query(Records).filter(Records.bibcode.like('2023FlagTest%')).delete(synchronize_session=False)
+            session.commit()
+            
+            # Create valid records (should remain in sitemap)
+            for bibcode in valid_bibcodes:
+                record = Records()
+                record.bibcode = bibcode
+                record.bib_data = '{"title": "Valid Test Record"}'
+                record.bib_data_updated = get_date() - timedelta(days=1)
+                record.solr_processed = get_date() - timedelta(hours=12)
+                record.status = 'success'
+                session.add(record)
+                session.flush()
+                
+                sitemap_record = SitemapInfo()
+                sitemap_record.bibcode = bibcode
+                sitemap_record.record_id = record.id
+                sitemap_record.sitemap_filename = 'sitemap_bib_mixed.xml'  # File 1
+                sitemap_record.update_flag = False
+                session.add(sitemap_record)
+            
+            # Create invalid records (should be removed from sitemap)
+            for i, bibcode in enumerate(invalid_bibcodes):
+                record = Records()
+                record.bibcode = bibcode
+                record.bib_data = '{"title": "Invalid Test Record"}'
+                record.bib_data_updated = get_date() - timedelta(days=1)
+                record.solr_processed = get_date() - timedelta(days=2)
+                record.status = 'solr-failed'
+                session.add(record)
+                session.flush()
+                
+                sitemap_record = SitemapInfo()
+                sitemap_record.bibcode = bibcode
+                sitemap_record.record_id = record.id
+                # First invalid goes to file1 (mixed), second to file2 (will be deleted)
+                sitemap_record.sitemap_filename = 'sitemap_bib_mixed.xml' if i == 0 else 'sitemap_bib_invalid_only.xml'
+                sitemap_record.update_flag = False
+                session.add(sitemap_record)
+            
+            session.commit()
+            
+            # Verify initial state: 4 records, all in same file, none flagged
+            total_records = session.query(SitemapInfo).filter(
+                SitemapInfo.bibcode.like('2023FlagTest%')
+            ).count()
+            self.assertEqual(total_records, 4, "Should have 4 records initially")
+            
+            flagged_count = session.query(SitemapInfo).filter(
+                SitemapInfo.bibcode.like('2023FlagTest%'),
+                SitemapInfo.update_flag == True
+            ).count()
+            self.assertEqual(flagged_count, 0, "Should have 0 flagged records initially")
+        
+        # Execute cleanup
+        original_batch_size = self.app.conf.get('SITEMAP_BOOTSTRAP_BATCH_SIZE', 50000)
+        self.app.conf['SITEMAP_BOOTSTRAP_BATCH_SIZE'] = 10  # Small batch
+        
+        try:
+            with patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
+                result = tasks.task_cleanup_invalid_sitemaps()
+        finally:
+            self.app.conf['SITEMAP_BOOTSTRAP_BATCH_SIZE'] = original_batch_size
+        
+        # Verify cleanup results
+        self.assertEqual(result['total_processed'], 4, "Should have processed 4 records")
+        self.assertEqual(result['invalid_removed'], 2, "Should have removed 2 invalid records")
+        self.assertTrue(result['files_regenerated'], "Should indicate files need regeneration")
+        self.assertEqual(result['files_flagged'], 1, "Should have flagged exactly 1 file (mixed file)")
+        
+        # Verify delete_sitemap_files was called for the file that became empty
+        self.assertTrue(mock_delete_files.called, "Should have deleted the empty file")
+        # Check that the empty file was deleted
+        call_args = mock_delete_files.call_args[0]
+        files_to_delete = call_args[0]
+        self.assertIn('sitemap_bib_invalid_only.xml', files_to_delete, "Should delete the file with only invalid records")
+        
+        # Verify database state after cleanup
+        with self.app.session_scope() as session:
+            # Should have 2 valid records remaining
+            remaining_records = session.query(SitemapInfo).filter(
+                SitemapInfo.bibcode.like('2023FlagTest%')
+            ).all()
+            self.assertEqual(len(remaining_records), 2, "Should have 2 remaining records")
+            
+            # At least one record should be flagged for update
+            flagged_records = [r for r in remaining_records if r.update_flag]
+            self.assertGreaterEqual(len(flagged_records), 1, "At least one record should be flagged")
+            
+            # All remaining records should be valid bibcodes
+            remaining_bibcodes = [r.bibcode for r in remaining_records]
+            self.assertEqual(set(remaining_bibcodes), set(valid_bibcodes), "Only valid bibcodes should remain")
+            
+            # All remaining records should be in the mixed file (not the deleted one)
+            filenames = set(r.sitemap_filename for r in remaining_records)
+            self.assertEqual(filenames, {'sitemap_bib_mixed.xml'}, "All remaining records should be in mixed file")
+            
+            # Clean up test data
+            session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023FlagTest%')).delete(synchronize_session=False)
+            session.query(Records).filter(Records.bibcode.like('2023FlagTest%')).delete(synchronize_session=False)
+            session.commit()
+
     def test_task_cleanup_invalid_sitemaps_orphaned_entries_cleanup(self):
         """Test cleanup of orphaned sitemap entries (part 2)"""
         
@@ -1028,9 +1146,8 @@ class TestSitemapWorkflow(unittest.TestCase):
         self.app.conf['SITEMAP_BOOTSTRAP_BATCH_SIZE'] = 2  # Small batch for testing
         
         try:
-            # Mock the Celery task that gets called at the end
-            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_apply_async, \
-                 patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
+            # Mock delete_sitemap_files
+            with patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
                 result = tasks.task_cleanup_invalid_sitemaps()
         finally:
             # Restore original batch size
@@ -1041,9 +1158,6 @@ class TestSitemapWorkflow(unittest.TestCase):
         self.assertEqual(result['invalid_removed'], 2, "Should have removed exactly 2 orphaned records")
         self.assertGreaterEqual(result['batches_processed'], 1, "Should have processed at least 1 batch")
         self.assertTrue(result['files_regenerated'], "Should indicate files need regeneration")
-        
-        # Verify the Celery task was called since files need regeneration
-        mock_apply_async.assert_called_once_with()
         
         # Verify database state after cleanup
         with self.app.session_scope() as session:
@@ -1120,6 +1234,8 @@ class TestSitemapWorkflow(unittest.TestCase):
         ]
         
         valid_bibcode = '2023ValidRecord..1..1F'
+        # Add another valid bibcode in the same file as invalid ones to ensure file gets flagged not deleted
+        valid_bibcode_in_mixed_file = '2023ValidMixed..1..1G'
         
         with self.app.session_scope() as session:
             # Clean up all test data
@@ -1127,7 +1243,7 @@ class TestSitemapWorkflow(unittest.TestCase):
             session.query(Records).delete(synchronize_session=False)
             session.commit()
             
-            # Create invalid records
+            # Create invalid records - all in the same file
             for bibcode, bib_data, status, description in test_cases:
                 record = Records()
                 record.bibcode = bibcode
@@ -1145,7 +1261,23 @@ class TestSitemapWorkflow(unittest.TestCase):
                 sitemap_record.update_flag = False
                 session.add(sitemap_record)
             
-            # Create one valid record that should remain
+            # Create a valid record in the same file as invalid ones (mixed file)
+            mixed_record = Records()
+            mixed_record.bibcode = valid_bibcode_in_mixed_file
+            mixed_record.bib_data = '{"title": "Valid Mixed Record"}'
+            mixed_record.bib_data_updated = get_date() - timedelta(days=1)
+            mixed_record.status = 'success'
+            session.add(mixed_record)
+            session.flush()
+            
+            mixed_sitemap_record = SitemapInfo()
+            mixed_sitemap_record.bibcode = valid_bibcode_in_mixed_file
+            mixed_sitemap_record.record_id = mixed_record.id
+            mixed_sitemap_record.sitemap_filename = 'sitemap_bib_invalid_comprehensive.xml'  # Same file!
+            mixed_sitemap_record.update_flag = False
+            session.add(mixed_sitemap_record)
+            
+            # Create another valid record in a different file
             valid_record = Records()
             valid_record.bibcode = valid_bibcode
             valid_record.bib_data = '{"title": "Valid Record"}'
@@ -1165,27 +1297,27 @@ class TestSitemapWorkflow(unittest.TestCase):
             
             # Verify setup
             total_records = session.query(SitemapInfo).count()
-            self.assertEqual(total_records, 6, "Should have 6 records (5 invalid + 1 valid)")
+            self.assertEqual(total_records, 7, "Should have 7 records (5 invalid + 2 valid)")
         
         # Execute cleanup
-        with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_apply_async, \
-             patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
+        with patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
             result = tasks.task_cleanup_invalid_sitemaps()
         
         # Verify all invalid records were removed
         self.assertEqual(result['invalid_removed'], 5, "Should remove all 5 invalid records")
-        self.assertEqual(result['total_processed'], 6, "Should process all 6 records")
+        self.assertEqual(result['total_processed'], 7, "Should process all 7 records")
         self.assertTrue(result['files_regenerated'], "Should indicate files need regeneration")
         
-        # Verify regeneration was triggered
-        mock_apply_async.assert_called_once_with()
+        # Verify files were flagged for regeneration (1 file with mixed valid/invalid records)
+        self.assertGreaterEqual(result['files_flagged'], 1, "Should have flagged at least 1 file")
         
         # Verify database state
         with self.app.session_scope() as session:
-            # Only valid record should remain
+            # Two valid records should remain
             remaining_records = session.query(SitemapInfo).all()
-            self.assertEqual(len(remaining_records), 1, "Only valid record should remain")
-            self.assertEqual(remaining_records[0].bibcode, valid_bibcode, "Valid record should remain")
+            self.assertEqual(len(remaining_records), 2, "Should have 2 remaining valid records")
+            remaining_bibcodes = {r.bibcode for r in remaining_records}
+            self.assertEqual(remaining_bibcodes, {valid_bibcode, valid_bibcode_in_mixed_file}, "Both valid records should remain")
             
             # All invalid records should be gone
             for bibcode, _, _, description in test_cases:
@@ -1246,14 +1378,15 @@ class TestSitemapWorkflow(unittest.TestCase):
             deleted_sitemap = session.query(SitemapInfo).filter_by(bibcode=bibcode_to_delete).first()
             self.assertIsNone(deleted_sitemap, "Deleted SitemapInfo entry should be gone")
             
-            # Remaining records should exist and be marked for update
+            # Remaining records should exist and exactly one should be marked for update (one-row-per-file flagging)
             remaining_sitemap_records = session.query(SitemapInfo).filter(
                 SitemapInfo.bibcode.in_(remaining_bibcodes)
             ).all()
             self.assertEqual(len(remaining_sitemap_records), 2, "Should have 2 remaining sitemap records")
             
+            flagged_count = sum(1 for r in remaining_sitemap_records if r.update_flag)
+            self.assertEqual(flagged_count, 1, "At least one remaining record should be marked for update")
             for record in remaining_sitemap_records:
-                self.assertTrue(record.update_flag, f"Update flag should be True for remaining record {record.bibcode}")
                 self.assertEqual(record.sitemap_filename, 'sitemap_bib_delete_test.xml', "Should be in same sitemap file")
             
             # Verify ChangeLog entry was created
@@ -1313,15 +1446,15 @@ class TestSitemapWorkflow(unittest.TestCase):
             result = self.app.delete_by_bibcode(bibcode_to_delete)
             self.assertTrue(result, f"Should successfully delete {bibcode_to_delete}")
             
-            # Verify remaining records are marked for update
+            # Verify exactly one remaining record is marked for update (one-row-per-file flagging)
             with self.app.session_scope() as session:
                 remaining_records = session.query(SitemapInfo).filter(
                     SitemapInfo.bibcode.in_(remaining_bibcodes)
                 ).all()
                 
                 self.assertEqual(len(remaining_records), 2, "Should have 2 remaining records")
-                for record in remaining_records:
-                    self.assertTrue(record.update_flag, f"Record {record.bibcode} should be marked for update")
+                flagged_count = sum(1 for r in remaining_records if r.update_flag)
+                self.assertEqual(flagged_count, 1, "At least one record should be marked for update")
                 
                 # Get record IDs while still in session
                 record_ids = [r.id for r in remaining_records]
@@ -1365,16 +1498,13 @@ class TestSitemapWorkflow(unittest.TestCase):
                 session.add(invalid_sitemap_record)
                 session.commit()
             
-            # STEP 5: Run cleanup with mocked regeneration trigger
-            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_regen:
-                cleanup_result = tasks.task_cleanup_invalid_sitemaps()
-                
-                # Verify cleanup identified and removed the invalid record
-                self.assertEqual(cleanup_result['invalid_removed'], 1, "Should remove 1 invalid record")
-                self.assertTrue(cleanup_result['files_regenerated'], "Should indicate files need regeneration")
-                
-                # Verify regeneration was triggered (this proves the integration works)
-                mock_regen.assert_called_once_with()
+            # STEP 5: Run cleanup
+            cleanup_result = tasks.task_cleanup_invalid_sitemaps()
+            
+            # Verify cleanup identified and removed the invalid record
+            self.assertEqual(cleanup_result['invalid_removed'], 1, "Should remove 1 invalid record")
+            self.assertTrue(cleanup_result['files_regenerated'], "Should indicate files need regeneration")
+            self.assertEqual(cleanup_result['files_flagged'], 1, "Should have flagged 1 file for regeneration")
             
             # STEP 6: Verify database state after cleanup
             with self.app.session_scope() as session:
@@ -1726,9 +1856,8 @@ class TestSitemapWorkflow(unittest.TestCase):
 
     def test_task_update_sitemap_files_orchestration(self):
         """
-     
         Test the complete task_update_sitemap_files workflow orchestration
-        Tests: task_update_sitemap_files() orchestration and async task scheduling
+        Tests: task_update_sitemap_files() orchestration and task spawning
         """
         
         # Add test records first
@@ -1750,32 +1879,18 @@ class TestSitemapWorkflow(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             self.app.conf['SITEMAP_DIR'] = temp_dir
             
-            # Mock the chord pattern to avoid requiring result backend
-            with mock.patch('adsmp.tasks.chord') as mock_chord:
-                # Create a mock chord instance that we can verify was called
-                mock_chord_instance = mock.Mock()
-                mock_chord.return_value = mock_chord_instance
-                
-                # Run the orchestrator
-                tasks.task_update_sitemap_files()
-                
-                # Verify chord was called with the correct tasks
-                self.assertTrue(mock_chord.called, "Should have called chord to coordinate tasks")
-                
-                # Get the tasks passed to chord
-                chord_call_args = mock_chord.call_args[0][0]  # First argument is the list of tasks
-                self.assertGreater(len(chord_call_args), 0, "Should have at least one sitemap generation task")
-                
-                # Verify each task in the chord is a task_generate_single_sitemap signature
-                for task_sig in chord_call_args:
-                    self.assertEqual(task_sig.task, 'adsmp.tasks.task_generate_single_sitemap', 
-                                   "Each chord task should be task_generate_single_sitemap")
-                
-                # Verify the chord callback is task_generate_sitemap_index
-                self.assertTrue(mock_chord_instance.called, "Should have called the chord instance (callback)")
-                callback_call_args = mock_chord_instance.call_args[0][0]  # First argument is the callback signature
-                self.assertEqual(callback_call_args.task, 'adsmp.tasks.task_generate_sitemap_index',
-                               "Chord callback should be task_generate_sitemap_index")
+            # Mock task spawning to test orchestration without async execution
+            with patch('adsmp.tasks.task_generate_single_sitemap.apply_async') as mock_generate:
+                with patch('adsmp.tasks.task_generate_sitemap_index.apply_async') as mock_index:
+                    # Run the orchestrator
+                    tasks.task_update_sitemap_files()
+                    
+                    # Verify task_generate_single_sitemap was called for each file
+                    self.assertTrue(mock_generate.called, "Should have spawned sitemap generation tasks")
+                    self.assertGreater(mock_generate.call_count, 0, "Should have at least one sitemap file to generate")
+                    
+                    # Verify task_generate_sitemap_index was called
+                    self.assertTrue(mock_index.called, "Should have spawned index generation task")
 
     def test_task_update_sitemap_files_full_workflow(self):
         """Test the complete task_update_sitemap_files workflow with actual file generation"""
@@ -1827,32 +1942,26 @@ class TestSitemapWorkflow(unittest.TestCase):
                 site_dir = os.path.join(temp_dir, site_key)
                 os.makedirs(site_dir, exist_ok=True)
             
-            # Execute the full workflow - mock the chord to prevent hanging but allow actual execution
-            with patch('adsmp.tasks.chord') as mock_chord:
+            # Execute the full workflow
+            # Call the orchestrator which will identify files to generate
+            with self.app.session_scope() as session:
+                files_to_generate = session.query(SitemapInfo.sitemap_filename).filter(
+                    SitemapInfo.update_flag == True
+                ).distinct().all()
                 
-                # Create a mock chord that executes tasks synchronously
-                def mock_chord_side_effect(task_signatures):
-                    # Execute each task synchronously
-                    for task_sig in task_signatures:
-                        # Extract the task arguments and call the real function
-                        sitemap_filename, record_ids = task_sig.args
-                        tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
+            # Generate each sitemap file synchronously
+            for (filename,) in files_to_generate:
+                with self.app.session_scope() as session:
+                    record_ids = session.query(SitemapInfo.id).filter(
+                        SitemapInfo.sitemap_filename == filename,
+                        SitemapInfo.update_flag == True
+                    ).all()
+                    record_ids = [r[0] for r in record_ids]
                     
-                    # Return a mock chord instance
-                    mock_chord_instance = MagicMock()
-                    
-                    # When the chord instance is called with the callback, execute it too
-                    def mock_callback_execution(callback_sig):
-                        # Execute the index generation task synchronously
-                        tasks.task_generate_sitemap_index()
-                        return MagicMock()
-                    
-                    mock_chord_instance.side_effect = mock_callback_execution
-                    return mock_chord_instance
-                
-                mock_chord.side_effect = mock_chord_side_effect
-                
-                tasks.task_update_sitemap_files()
+                tasks.task_generate_single_sitemap(filename, record_ids)
+            
+            # Generate the index
+            tasks.task_generate_sitemap_index()
             
             # Verify sitemap files were created for each site
             expected_files = []
@@ -1936,32 +2045,25 @@ class TestSitemapWorkflow(unittest.TestCase):
             site_dir = os.path.join(temp_dir, 'ads')
             os.makedirs(site_dir, exist_ok=True)
             
-            # Execute the workflow - mock the chord to prevent hanging but allow actual execution
-            with patch('adsmp.tasks.chord') as mock_chord:
+            # Execute the workflow synchronously
+            with self.app.session_scope() as session:
+                files_to_generate = session.query(SitemapInfo.sitemap_filename).filter(
+                    SitemapInfo.update_flag == True
+                ).distinct().all()
                 
-                # Create a mock chord that executes tasks synchronously
-                def mock_chord_side_effect(task_signatures):
-                    # Execute each task synchronously
-                    for task_sig in task_signatures:
-                        # Extract the task arguments and call the real function
-                        sitemap_filename, record_ids = task_sig.args
-                        tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
+            # Generate each sitemap file 
+            for (filename,) in files_to_generate:
+                with self.app.session_scope() as session:
+                    record_ids = session.query(SitemapInfo.id).filter(
+                        SitemapInfo.sitemap_filename == filename,
+                        SitemapInfo.update_flag == True
+                    ).all()
+                    record_ids = [r[0] for r in record_ids]
                     
-                    # Return a mock chord instance
-                    mock_chord_instance = MagicMock()
-                    
-                    # When the chord instance is called with the callback, execute it too
-                    def mock_callback_execution(callback_sig):
-                        # Execute the index generation task synchronously
-                        tasks.task_generate_sitemap_index()
-                        return MagicMock()
-                    
-                    mock_chord_instance.side_effect = mock_callback_execution
-                    return mock_chord_instance
-                
-                mock_chord.side_effect = mock_chord_side_effect
-                
-                tasks.task_update_sitemap_files()
+                tasks.task_generate_single_sitemap(filename, record_ids)
+            
+            # Generate the index
+            tasks.task_generate_sitemap_index()
             
             # Verify sitemap file contains only remaining records
             sitemap_file = os.path.join(temp_dir, 'ads', 'sitemap_bib_after_delete.xml')
@@ -2129,32 +2231,25 @@ class TestSitemapWorkflow(unittest.TestCase):
             site_dir = os.path.join(temp_dir, 'ads')
             os.makedirs(site_dir, exist_ok=True)
             
-            # Execute the workflow - mock the chord to prevent hanging but allow actual execution
-            with patch('adsmp.tasks.chord') as mock_chord:
+            # Execute the workflow synchronously
+            with self.app.session_scope() as session:
+                files_to_generate = session.query(SitemapInfo.sitemap_filename).filter(
+                    SitemapInfo.update_flag == True
+                ).distinct().all()
                 
-                # Create a mock chord that executes tasks synchronously
-                def mock_chord_side_effect(task_signatures):
-                    # Execute each task synchronously
-                    for task_sig in task_signatures:
-                        # Extract the task arguments and call the real function
-                        sitemap_filename, record_ids = task_sig.args
-                        tasks.task_generate_single_sitemap(sitemap_filename, record_ids)
+            # Generate each sitemap file synchronously
+            for (filename,) in files_to_generate:
+                with self.app.session_scope() as session:
+                    record_ids = session.query(SitemapInfo.id).filter(
+                        SitemapInfo.sitemap_filename == filename,
+                        SitemapInfo.update_flag == True
+                    ).all()
+                    record_ids = [r[0] for r in record_ids]
                     
-                    # Return a mock chord instance
-                    mock_chord_instance = MagicMock()
-                    
-                    # When the chord instance is called with the callback, execute it too
-                    def mock_callback_execution(callback_sig):
-                        # Execute the index generation task synchronously
-                        tasks.task_generate_sitemap_index()
-                        return MagicMock()
-                    
-                    mock_chord_instance.side_effect = mock_callback_execution
-                    return mock_chord_instance
-                
-                mock_chord.side_effect = mock_chord_side_effect
-                
-                tasks.task_update_sitemap_files()
+                tasks.task_generate_single_sitemap(filename, record_ids)
+            
+            # Generate the index
+            tasks.task_generate_sitemap_index()
             
             # Verify both sitemap files were created
             file1_path = os.path.join(temp_dir, 'ads', 'sitemap_bib_multi_1.xml')
@@ -2500,10 +2595,10 @@ class TestSitemapWorkflow(unittest.TestCase):
                     self.assertIn('<lastmod>', index_content,
                                  "Index should contain lastmod elements")
                 
-                # Verify we have the expected number of sitemap entries (2 files)
+                # Verify we have the expected number of sitemap entries (2 bib files + 1 static)
                 sitemap_count = index_content.count('<sitemap>')
-                self.assertEqual(sitemap_count, 2,
-                               f"Index should contain exactly 2 sitemap entries, found {sitemap_count}")
+                self.assertEqual(sitemap_count, 3,
+                               f"Index should contain exactly 3 sitemap entries (2 bib + 1 static), found {sitemap_count}")
             
             # Test cleanup
             with self.app.session_scope() as session:
@@ -2549,10 +2644,10 @@ class TestSitemapWorkflow(unittest.TestCase):
                 self.assertIn('</sitemapindex>', index_content,
                              "Empty index should close sitemapindex element")
                 
-                # Should NOT contain any sitemap entries
+                # Should contain only static sitemap entry (1 entry)
                 sitemap_count = index_content.count('<sitemap>')
-                self.assertEqual(sitemap_count, 0,
-                               f"Empty index should contain no sitemap entries, found {sitemap_count}")
+                self.assertEqual(sitemap_count, 1,
+                               f"Empty index should contain only static sitemap entry, found {sitemap_count}")
     
     def test_task_update_sitemap_index_missing_files(self):
         """Test sitemap index generation when database has entries but physical files don't exist"""
@@ -2616,8 +2711,8 @@ class TestSitemapWorkflow(unittest.TestCase):
                     index_content = f.read()
                 
                 sitemap_count = index_content.count('<sitemap>')
-                self.assertEqual(sitemap_count, 0,
-                               f"Index should contain no entries when physical files missing, found {sitemap_count}")
+                self.assertEqual(sitemap_count, 1,
+                               f"Index should contain only static sitemap when physical files missing, found {sitemap_count}")
             
             # Test cleanup
             with self.app.session_scope() as session:
@@ -2736,11 +2831,11 @@ class TestSitemapWorkflow(unittest.TestCase):
                 self.assertIn(f'<loc>{html.escape(sitemap_url)}</loc>', scix_index_content, f"SciX index should reference {filename}")
                 self.assertIn('<lastmod>', scix_index_content, "SciX index should contain lastmod elements")
             
-            # Verify sitemap count matches expected
+            # Verify sitemap count matches expected (3 bib files + 1 static file)
             ads_sitemap_count = ads_index_content.count('<sitemap>')
             scix_sitemap_count = scix_index_content.count('<sitemap>')
-            self.assertEqual(ads_sitemap_count, 3, "ADS index should contain exactly 3 sitemap entries")
-            self.assertEqual(scix_sitemap_count, 3, "SciX index should contain exactly 3 sitemap entries")
+            self.assertEqual(ads_sitemap_count, 4, "ADS index should contain exactly 4 sitemap entries (3 bib + 1 static)")
+            self.assertEqual(scix_sitemap_count, 4, "SciX index should contain exactly 4 sitemap entries (3 bib + 1 static)")
             
             # Verify proper URL structure and no broken links (production structure)
             self.assertIn('https://ui.adsabs.harvard.edu/sitemap/', ads_index_content, "ADS index should contain ADS sitemap base URL")

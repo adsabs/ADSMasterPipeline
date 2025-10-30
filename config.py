@@ -52,6 +52,11 @@ SITEMAP_BOOTSTRAP_BATCH_SIZE = 50000
 SITEMAP_DIR = '/app/logs/sitemap/'
 SITEMAP_INDEX_GENERATION_DELAY = 15 # This is the delay between the generation of the sitemap and the indexing of the sitemap
 
+# Sitemap index generation retry configuration
+# Default 100 retries = ~90 minutes. Increase for larger databases (e.g., 300 for ~5.5 hours)
+SITEMAP_INDEX_MAX_RETRIES = 100
+
+
 # Site configurations for multi-site sitemap generation
 SITES = {
     'ads': {
