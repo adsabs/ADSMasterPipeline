@@ -6,10 +6,11 @@ import sys
 import io
 import testing.postgresql
 
-from adsmp import app
+from adsmp import app, tasks
 from adsmp.models import Base, Records, SitemapInfo
 from run import reindex_failed_bibcodes, manage_sitemap, update_sitemap_files, update_sitemaps_auto, cleanup_invalid_sitemaps
 from datetime import datetime, timedelta, timezone
+from adsputils import get_date
 
 class TestFixDbDuplicates(unittest.TestCase):
 
@@ -132,15 +133,18 @@ class TestSitemapCommandLine(unittest.TestCase):
         
         bibcodes = ['2023ApJ...123..456A', '2023ApJ...123..457B']
         
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+        # Mock the chain workflow since 'add' action uses chain for auto-updating files
+        with patch('run.chain') as mock_chain:
             mock_result = Mock()
             mock_result.id = 'test-task-123'
-            mock_task.return_value = mock_result
+            mock_workflow = Mock()
+            mock_workflow.apply_async.return_value = mock_result
+            mock_chain.return_value = mock_workflow
             
             result = manage_sitemap(bibcodes, 'add')
             
-            # Verify the task was called with correct parameters
-            mock_task.assert_called_once_with(args=(bibcodes, 'add'))
+            # Verify chain was called to create the workflow
+            self.assertTrue(mock_chain.called)
             self.assertEqual(result, 'test-task-123')
 
     def test_populate_sitemap_table_force_update_action(self):
@@ -148,14 +152,17 @@ class TestSitemapCommandLine(unittest.TestCase):
         
         bibcodes = ['2023ApJ...123..456A']
         
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+        # Mock the chain workflow since 'force-update' action uses chain
+        with patch('run.chain') as mock_chain:
             mock_result = Mock()
             mock_result.id = 'test-task-456'
-            mock_task.return_value = mock_result
+            mock_workflow = Mock()
+            mock_workflow.apply_async.return_value = mock_result
+            mock_chain.return_value = mock_workflow
             
             result = manage_sitemap(bibcodes, 'force-update')
             
-            mock_task.assert_called_once_with(args=(bibcodes, 'force-update'))
+            self.assertTrue(mock_chain.called)
             self.assertEqual(result, 'test-task-456')
 
     def test_populate_sitemap_table_delete_table_action(self):
@@ -187,18 +194,21 @@ class TestSitemapCommandLine(unittest.TestCase):
             self.assertEqual(result, 'test-task-robots')
 
     def test_populate_sitemap_table_remove_action(self):
-        """Test populate_sitemap_table function with 'remove' action (TODO implementation)"""
+        """Test populate_sitemap_table function with 'remove' action"""
         
         bibcodes = ['2023ApJ...123..456A']
         
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+        # Mock the chain workflow since 'remove' action uses chain
+        with patch('run.chain') as mock_chain:
             mock_result = Mock()
             mock_result.id = 'test-task-remove'
-            mock_task.return_value = mock_result
+            mock_workflow = Mock()
+            mock_workflow.apply_async.return_value = mock_result
+            mock_chain.return_value = mock_workflow
             
             result = manage_sitemap(bibcodes, 'remove')
             
-            mock_task.assert_called_once_with(args=(bibcodes, 'remove'))
+            self.assertTrue(mock_chain.called)
             self.assertEqual(result, 'test-task-remove')
 
     def test_update_sitemap_files(self):
@@ -242,25 +252,43 @@ class TestSitemapCommandLine(unittest.TestCase):
     def test_populate_sitemap_table_all_actions(self):
         """Test all possible actions for populate_sitemap_table"""
         
+        chain_actions = ['add', 'force-update', 'remove', 'bootstrap']
+        non_chain_actions = ['delete-table', 'update-robots']
+        
         actions_and_bibcodes = [
             ('add', ['2023ApJ...123..456A', '2023ApJ...123..457B']),
             ('force-update', ['2023ApJ...123..456A']),
             ('remove', ['2023ApJ...123..456A']),
+            ('bootstrap', []),
             ('delete-table', []),
             ('update-robots', [])
         ]
         
         for action, bibcodes in actions_and_bibcodes:
             with self.subTest(action=action):
-                with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
-                    mock_result = Mock()
-                    mock_result.id = f'test-task-{action}'
-                    mock_task.return_value = mock_result
-                    
-                    result = manage_sitemap(bibcodes, action)
-                    
-                    mock_task.assert_called_once_with(args=(bibcodes, action))
-                    self.assertEqual(result, f'test-task-{action}')
+                mock_result = Mock()
+                mock_result.id = f'test-task-{action}'
+                
+                if action in chain_actions:
+                    # Actions that use chain for auto-updating files
+                    with patch('run.chain') as mock_chain:
+                        mock_workflow = Mock()
+                        mock_workflow.apply_async.return_value = mock_result
+                        mock_chain.return_value = mock_workflow
+                        
+                        result = manage_sitemap(bibcodes, action)
+                        
+                        self.assertTrue(mock_chain.called, f"Chain should be called for action '{action}'")
+                        self.assertEqual(result, f'test-task-{action}')
+                else:
+                    # Actions that call task directly
+                    with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_task:
+                        mock_task.return_value = mock_result
+                        
+                        result = manage_sitemap(bibcodes, action)
+                        
+                        self.assertTrue(mock_task.called, f"Task should be called for action '{action}'")
+                        self.assertEqual(result, f'test-task-{action}')
 
     def test_integration_with_task_calls(self):
         """Test integration to ensure tasks are called correctly"""
@@ -269,26 +297,28 @@ class TestSitemapCommandLine(unittest.TestCase):
         bibcodes = ['2023ApJ...123..456A']
         
         # Test both functions in sequence to simulate real usage
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_populate:
+        with patch('run.chain') as mock_chain:
             with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_update:
                 
                 # Set up mock results
                 mock_populate_result = Mock()
                 mock_populate_result.id = 'test-populate-123'
-                mock_populate.return_value = mock_populate_result
+                mock_workflow = Mock()
+                mock_workflow.apply_async.return_value = mock_populate_result
+                mock_chain.return_value = mock_workflow
                 
                 mock_update_result = Mock()
                 mock_update_result.id = 'test-update-456'  
                 mock_update.return_value = mock_update_result
                 
-                # First populate sitemap table
+                # First populate sitemap table (uses chain for 'add' action)
                 populate_result = manage_sitemap(bibcodes, 'add')
                 
-                # Then update sitemap files
+                # Then update sitemap files (standalone call)
                 update_result = update_sitemap_files()
                 
-                # Verify both tasks were called correctly
-                mock_populate.assert_called_once_with(args=(bibcodes, 'add'))
+                # Verify both were called correctly
+                self.assertTrue(mock_chain.called, "Chain should be called for 'add' action")
                 mock_update.assert_called_once_with()
                 
                 # Verify return values
@@ -376,119 +406,137 @@ class TestSitemapCommandLine(unittest.TestCase):
                 
                 with patch('sys.argv', test_args):
                     with patch('sys.exit') as mock_exit:
-                        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_populate:
-                            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_update:
-                                
-                                # Set up mock results
-                                mock_populate_result = Mock()
-                                mock_populate_result.id = 'test-final-populate'
-                                mock_populate.return_value = mock_populate_result
-                                
-                                mock_update_result = Mock()
-                                mock_update_result.id = 'test-final-update'
-                                mock_update.return_value = mock_update_result
-                                
-                                # Simulate successful validation and execution
-                                if '--populate-sitemap-table' in test_args:
-                                    # Has action parameter
-                                    if expected_action and expected_bibcodes is not None:
-                                        result = manage_sitemap(expected_bibcodes, expected_action)
-                                        mock_populate.assert_called_once_with(args=(expected_bibcodes, expected_action))
+                        with patch('run.chain') as mock_chain:
+                            with patch('adsmp.tasks.task_manage_sitemap') as mock_manage_task:
+                                with patch('adsmp.tasks.task_update_sitemap_files') as mock_update_task:
+                                    
+                                    # Set up mock results
+                                    mock_populate_result = Mock()
+                                    mock_populate_result.id = 'test-final-populate'
+                                    
+                                    # Mock the .s() signature method for chain
+                                    mock_manage_sig = Mock()
+                                    mock_update_sig = Mock()
+                                    mock_manage_task.s.return_value = mock_manage_sig
+                                    mock_manage_task.apply_async.return_value = mock_populate_result
+                                    mock_update_task.s.return_value = mock_update_sig
+                                    mock_update_task.apply_async.return_value = mock_populate_result
+                                    
+                                    # For chain actions
+                                    mock_workflow = Mock()
+                                    mock_workflow.apply_async.return_value = mock_populate_result
+                                    mock_chain.return_value = mock_workflow
+                                    
+                                    mock_update_result = Mock()
+                                    mock_update_result.id = 'test-final-update'
+                                    
+                                    # Simulate successful validation and execution
+                                    if '--populate-sitemap-table' in test_args:
+                                        # Has action parameter
+                                        if expected_action and expected_bibcodes is not None:
+                                            result = manage_sitemap(expected_bibcodes, expected_action)
+                                            # Verify the right mock was called based on action type
+                                            if expected_action in ('add', 'force-update', 'remove', 'bootstrap'):
+                                                self.assertTrue(mock_chain.called, f"Chain should be called for '{expected_action}'")
+                                            else:
+                                                self.assertTrue(mock_manage_task.apply_async.called, f"Task should be called for '{expected_action}'")
+                                            self.assertEqual(result, 'test-final-populate')
+                                    elif '--update-sitemap-files' in test_args:
+                                        result = update_sitemap_files()
+                                        mock_update_task.apply_async.assert_called_once_with()
                                         self.assertEqual(result, 'test-final-populate')
-                                elif '--update-sitemap-files' in test_args:
-                                    result = update_sitemap_files()
-                                    mock_update.assert_called_once_with()
-                                    self.assertEqual(result, 'test-final-update')
-                                
-                                # Verify sys.exit was NOT called for valid scenarios
-                                mock_exit.assert_not_called()
+                                    
+                                    # Verify sys.exit was NOT called for valid scenarios
+                                    mock_exit.assert_not_called()
 
     def test_update_sitemaps_auto_with_records(self):
         """Test update_sitemaps_auto function with records needing updates"""
         
-        # Mock the database query to return test records
-        mock_recent_record1 = Mock()
-        mock_recent_record1.bibcode = '2023ApJ...123..456A'
-        
-        mock_recent_record2 = Mock()
-        mock_recent_record2.bibcode = '2023ApJ...123..457B'
+        # Create real database records with recent updates
+        with self.app.session_scope() as session:
+            # Record 1: Recent bib_data_updated
+            record1 = Records(
+                bibcode='2023ApJ...123..456A',
+                bib_data='{"title": "Test Article 1"}',
+                bib_data_updated=get_date() - timedelta(hours=12),  # Recent
+                solr_processed=get_date() - timedelta(days=5),  # Old
+                status='success'
+            )
+            session.add(record1)
+            
+            # Record 2: Recent solr_processed
+            record2 = Records(
+                bibcode='2023ApJ...123..457B',
+                bib_data='{"title": "Test Article 2"}',
+                bib_data_updated=get_date() - timedelta(days=5),  # Old
+                solr_processed=get_date() - timedelta(hours=6),  # Recent
+                status='success'
+            )
+            session.add(record2)
+            
+            # Record 3: Old updates, should not be picked up
+            record3 = Records(
+                bibcode='2023ApJ...123..458C',
+                bib_data='{"title": "Old Article"}',
+                bib_data_updated=get_date() - timedelta(days=5),
+                solr_processed=get_date() - timedelta(days=10),
+                status='success'
+            )
+            session.add(record3)
+            
+            session.commit()
         
         # Test with default 1 day lookback
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
-            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_files:
-                with patch('run.app.session_scope') as mock_session_scope:
-                    # Mock the session and query
-                    mock_session = Mock()
-                    mock_session_scope.return_value.__enter__.return_value = mock_session
-                    
-                    # Mock the UNION query structure
-                    mock_bib_data_query = Mock()
-                    mock_solr_query = Mock()
-                    mock_union_result = [mock_recent_record1, mock_recent_record2]
-                    
-                    # Mock the query chain
-                    mock_session.query.return_value.filter.side_effect = [mock_bib_data_query, mock_solr_query]
-                    mock_bib_data_query.union.return_value = mock_union_result
-                    
-                    # Set up mock results
-                    mock_manage_result = Mock()
-                    mock_manage_result.id = 'test-auto-manage-123'
-                    mock_manage.return_value = mock_manage_result
-                    
-                    mock_files_result = Mock()
-                    mock_files_result.id = 'test-auto-files-456'
-                    mock_files.return_value = mock_files_result
-                    
-                    # Call the function
-                    manage_task_id, file_task_id = update_sitemaps_auto(days_back=1)
-                    
-                    # Verify tasks were called correctly
-                    self.assertTrue(mock_manage.called)
-                    self.assertTrue(mock_files.called)
-                    
-                    # Check manage task arguments
-                    manage_call_args = mock_manage.call_args
-                    self.assertEqual(manage_call_args[1]['args'][1], 'add')  # Action should be 'add'
-                    self.assertEqual(manage_call_args[1]['priority'], 0)  # Priority should be 0
-                    
-                    # Check bibcodes (should only include recent ones)
-                    submitted_bibcodes = manage_call_args[1]['args'][0]
-                    self.assertEqual(len(submitted_bibcodes), 2)
-                    self.assertIn('2023ApJ...123..456A', submitted_bibcodes)
-                    self.assertIn('2023ApJ...123..457B', submitted_bibcodes)
-                    
-                    # Check files task arguments (should have link to manage task)
-                    files_call_args = mock_files.call_args
-                    self.assertEqual(files_call_args[1]['link'], 'test-auto-manage-123')  # Linked to manage task
-                    
-                    # Verify return values
-                    self.assertEqual(manage_task_id, 'test-auto-manage-123')
-                    self.assertEqual(file_task_id, 'test-auto-files-456')
+        with patch('run.chain') as mock_chain:
+            with patch('run.app', self.app):  # Use test's app instance
+                # Mock the chain workflow
+                mock_workflow = Mock()
+                mock_result = Mock()
+                mock_result.id = 'test-auto-workflow-123'
+                mock_workflow.apply_async.return_value = mock_result
+                mock_chain.return_value = mock_workflow
+                
+                # Mock the task signatures
+                mock_manage_sig = Mock()
+                mock_files_sig = Mock()
+                
+                with patch.object(tasks.task_manage_sitemap, 's', return_value=mock_manage_sig):
+                    with patch.object(tasks.task_update_sitemap_files, 's', return_value=mock_files_sig):
+                        # Call the function
+                        workflow_id = update_sitemaps_auto(days_back=1)
+                        
+                        # Verify chain was called with both task signatures
+                        self.assertTrue(mock_chain.called)
+                        chain_args = mock_chain.call_args[0]
+                        self.assertEqual(len(chain_args), 2)
+                        
+                        # Verify apply_async was called with correct priority
+                        mock_workflow.apply_async.assert_called_once_with(priority=0)
+                        
+                        # Verify return value
+                        self.assertEqual(workflow_id, 'test-auto-workflow-123')
 
     def test_update_sitemaps_auto_with_exception(self):
         """Test update_sitemaps_auto handles task submission exceptions"""
         
-        # Mock a test record
-        mock_record = Mock()
-        mock_record.bibcode = '2023ApJ...123..456A'
+        # Create a real database record
+        with self.app.session_scope() as session:
+            record = Records(
+                bibcode='2023ApJ...123..456A',
+                bib_data='{"title": "Test Article"}',
+                bib_data_updated=get_date() - timedelta(hours=12),  # Recent
+                solr_processed=get_date() - timedelta(days=5),
+                status='success'
+            )
+            session.add(record)
+            session.commit()
         
-        # Test with manage task failing
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
-            with patch('run.app.session_scope') as mock_session_scope:
-                # Mock the session and query to return a record
-                mock_session = Mock()
-                mock_session_scope.return_value.__enter__.return_value = mock_session
-                
-                # Mock the UNION query structure
-                mock_bib_data_query = Mock()
-                mock_solr_query = Mock()
-                mock_union_result = [mock_record]
-                
-                # Mock the query chain
-                mock_session.query.return_value.filter.side_effect = [mock_bib_data_query, mock_solr_query]
-                mock_bib_data_query.union.return_value = mock_union_result
-                
-                mock_manage.side_effect = Exception("Task submission failed")
+        # Test with chain workflow failing
+        with patch('run.chain') as mock_chain:
+            with patch('run.app', self.app):  # Use test's app instance
+                mock_workflow = Mock()
+                mock_workflow.apply_async.side_effect = Exception("Task submission failed")
+                mock_chain.return_value = mock_workflow
                 
                 with self.assertRaises(Exception) as context:
                     update_sitemaps_auto(days_back=1)
@@ -497,77 +545,91 @@ class TestSitemapCommandLine(unittest.TestCase):
 
     def test_update_sitemaps_auto_with_solr_processed_updates(self):
         """Test update_sitemaps_auto catches records with recent solr_processed updates"""
+        
+        # Create real database records
+        with self.app.session_scope() as session:
+            # Record 1: Recent solr_processed (reindexed)
+            record1 = Records(
+                bibcode='2023ApJ...123..789C',
+                bib_data='{"title": "Reindexed Article 1"}',
+                bib_data_updated=get_date() - timedelta(days=10),  # Old
+                solr_processed=get_date() - timedelta(hours=8),  # Recent
+                status='success'
+            )
+            session.add(record1)
+            
+            # Record 2: Recent solr_processed (reindexed)
+            record2 = Records(
+                bibcode='2023ApJ...123..790D',
+                bib_data='{"title": "Reindexed Article 2"}',
+                bib_data_updated=get_date() - timedelta(days=10),  # Old
+                solr_processed=get_date() - timedelta(hours=4),  # Recent
+                status='success'
+            )
+            session.add(record2)
+            
+            # Record 3: Recent bib_data_updated
+            record3 = Records(
+                bibcode='2023ApJ...123..791E',
+                bib_data='{"title": "New Article"}',
+                bib_data_updated=get_date() - timedelta(hours=6),  # Recent
+                solr_processed=get_date() - timedelta(days=10),  # Old
+                status='success'
+            )
+            session.add(record3)
+            
+            session.commit()
+        
+        with patch('run.chain') as mock_chain:
+            with patch('run.app', self.app):  # Use test's app instance
+                # Mock the chain workflow
+                mock_workflow = Mock()
+                mock_result = Mock()
+                mock_result.id = 'test-solr-workflow-123'
+                mock_workflow.apply_async.return_value = mock_result
+                mock_chain.return_value = mock_workflow
+                
+                # Mock the task signatures to capture bibcodes
+                captured_bibcodes = []
+                def capture_manage_sig(bibcodes, action):
+                    captured_bibcodes.extend(bibcodes)
+                    return Mock()
+                
+                with patch.object(tasks.task_manage_sitemap, 's', side_effect=capture_manage_sig):
+                    with patch.object(tasks.task_update_sitemap_files, 's', return_value=Mock()):
+                        # Call the function
+                        workflow_id = update_sitemaps_auto(days_back=1)
 
-        # Mock records with recent solr_processed (successful reindexes)
-        mock_reindexed_record1 = Mock()
-        mock_reindexed_record1.bibcode = '2023ApJ...123..789C'
+                        # Verify result
+                        self.assertEqual(workflow_id, 'test-solr-workflow-123')
 
-        mock_reindexed_record2 = Mock()
-        mock_reindexed_record2.bibcode = '2023ApJ...123..790D'
-
-        # Mock records with recent bib_data_updated
-        mock_new_record = Mock()
-        mock_new_record.bibcode = '2023ApJ...123..791E'
-
-        with patch('adsmp.tasks.task_manage_sitemap.apply_async') as mock_manage:
-            with patch('adsmp.tasks.task_update_sitemap_files.apply_async') as mock_files:
-                with patch('run.app.session_scope') as mock_session_scope:
-                    # Mock the session
-                    mock_session = Mock()
-                    mock_session_scope.return_value.__enter__.return_value = mock_session
-
-                    # Mock the two separate queries
-                    # First query: bib_data_updated records
-                    mock_bib_data_query = Mock()
-                    mock_bib_data_query.union.return_value = [
-                        mock_new_record,           # From bib_data_updated query
-                        mock_reindexed_record1,    # From solr_processed query  
-                        mock_reindexed_record2     # From solr_processed query
-                    ]
-
-                    # Set up the query chain for the new union structure
-                    mock_session.query.return_value.filter.return_value = mock_bib_data_query
-
-                    # Set up mock task results
-                    mock_manage_result = Mock()
-                    mock_manage_result.id = 'test-solr-manage-123'
-                    mock_manage.return_value = mock_manage_result
-
-                    mock_files_result = Mock()
-                    mock_files_result.id = 'test-solr-files-456'
-                    mock_files.return_value = mock_files_result
-
-                    # Call the function
-                    manage_task_id, file_task_id = update_sitemaps_auto(days_back=1)
-
-                    # Verify results
-                    self.assertEqual(manage_task_id, 'test-solr-manage-123')
-                    self.assertEqual(file_task_id, 'test-solr-files-456')
-
-                    # Verify manage task was called with all bibcodes
-                    self.assertTrue(mock_manage.called)
-                    manage_call_args = mock_manage.call_args
-                    bibcodes_passed = manage_call_args[1]['args'][0]  # args=(bibcodes, 'add')
-
-                    # Should include bibcodes from both bib_data_updated and solr_processed queries
-                    expected_bibcodes = ['2023ApJ...123..791E', '2023ApJ...123..789C', '2023ApJ...123..790D']
-                    self.assertEqual(set(bibcodes_passed), set(expected_bibcodes))
+                        # Verify chain was called
+                        self.assertTrue(mock_chain.called)
+                        
+                        # Should include bibcodes from both bib_data_updated and solr_processed queries
+                        expected_bibcodes = ['2023ApJ...123..791E', '2023ApJ...123..789C', '2023ApJ...123..790D']
+                        self.assertEqual(set(captured_bibcodes), set(expected_bibcodes))
 
     def test_cleanup_invalid_sitemaps(self):
         """Test cleanup_invalid_sitemaps function"""
-
-        with patch('run.tasks.task_cleanup_invalid_sitemaps.apply_async') as mock_cleanup:
-            # Mock the cleanup task result
+        
+        with patch('run.chain') as mock_chain:
+            # Mock the chain and its apply_async method
+            mock_workflow = Mock()
             mock_result = Mock()
             mock_result.id = 'test-cleanup-task-123'
-            mock_cleanup.return_value = mock_result
-
+            mock_workflow.apply_async.return_value = mock_result
+            mock_chain.return_value = mock_workflow
+            
             # Call the function
             task_id = cleanup_invalid_sitemaps()
-
-            # Verify task was submitted correctly
-            mock_cleanup.assert_called_once_with(priority=1)
-
+            
+            # Verify chain was created
+            self.assertEqual(mock_chain.call_count, 1, "chain() should be called once")
+            
+            # Verify apply_async was called with correct priority
+            mock_workflow.apply_async.assert_called_once_with(priority=1)
+            
             # Verify return value
             self.assertEqual(task_id, 'test-cleanup-task-123')
 

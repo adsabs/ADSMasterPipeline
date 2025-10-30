@@ -2,6 +2,7 @@ from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
 import os
 import time
+import shutil
 import adsputils
 import math
 from adsmp import app as app_module
@@ -17,7 +18,7 @@ import math
 from collections import defaultdict
 import pdb
 from sqlalchemy.orm import load_only
-from celery import chord
+from celery.exceptions import Retry
 
 
 
@@ -415,6 +416,7 @@ def task_cleanup_invalid_sitemaps():
     
     batch_size = app.conf.get('SITEMAP_BOOTSTRAP_BATCH_SIZE', 50000)
     total_removed = 0
+    all_files_to_update = set()
     batch_count = 0
     total_processed = 0
     
@@ -471,26 +473,31 @@ def task_cleanup_invalid_sitemaps():
                            batch_count, len(bibcodes_to_remove), total_processed)
                 
                 # Use our existing remove action helper
-                removed_count, files_to_delete = app._execute_remove_action(session, bibcodes_to_remove)
+                removed_count, files_to_delete, files_to_update = app._execute_remove_action(session, bibcodes_to_remove)
                 session.commit()  # Commit database changes first
 
                 app.delete_sitemap_files(files_to_delete, app.sitemap_dir)
                 
                 total_removed += removed_count
+                all_files_to_update.update(files_to_update)
             else:
                 logger.debug('Batch %d: no invalid records found (processed %d total)', 
                            batch_count, total_processed)
-    
-    # Schedule sitemap file regeneration if any records were removed
-    if total_removed > 0:
-        logger.info('Scheduling sitemap file regeneration after cleanup')
-        task_update_sitemap_files.apply_async()
+                
+    # Synchronously flag files to regenerate (one row per file)
+    flagged = 0
+    if all_files_to_update:
+        with app.session_scope() as flag_session:
+            for filename in sorted(all_files_to_update):
+                flagged += app.flag_one_row_for_filename(flag_session, filename)
+                flag_session.commit()
     
     cleanup_result = {
         'total_processed': total_processed,
         'invalid_removed': total_removed,
         'batches_processed': batch_count,
-        'files_regenerated': total_removed > 0
+        'files_regenerated': total_removed > 0,
+        'files_flagged': flagged
     }
     
     logger.info('Sitemap cleanup completed: %s', cleanup_result)
@@ -531,6 +538,7 @@ def task_manage_sitemap(bibcodes, action):
         
         total_removed = 0
         all_files_to_delete = set()
+        all_files_to_update = set()
         with app.session_scope() as session:
             # Process removes in batches with commit per batch
             for batch_num, batch in enumerate(chunked(bibcodes, batch_size), 1):
@@ -538,11 +546,12 @@ def task_manage_sitemap(bibcodes, action):
                             batch_num, total_batches, len(batch))
                 
             
-                removed_count, files_to_delete = app._execute_remove_action(session, batch)
+                removed_count, files_to_delete, files_to_update = app._execute_remove_action(session, batch)
                 session.commit()  # Commit per batch 
                 
                 total_removed += removed_count
                 all_files_to_delete.update(files_to_delete)
+                all_files_to_update.update(files_to_update)
                 
                 logger.info('Batch %d completed: %d bibcodes removed, %d files marked for deletion', 
                         batch_num, removed_count, len(files_to_delete))
@@ -550,8 +559,15 @@ def task_manage_sitemap(bibcodes, action):
         # Delete all empty files after all batches are processed
         app.delete_sitemap_files(all_files_to_delete, sitemap_dir)
         
-        logger.info('Remove operation completed: %d total bibcodes removed, %d empty files deleted', 
-                    total_removed, len(all_files_to_delete))
+        # Synchronously flag files to regenerate (one row per file)
+        flagged = 0
+        with app.session_scope() as flag_session:
+            for filename in sorted(all_files_to_update):
+                flagged += app.flag_one_row_for_filename(flag_session, filename)
+                flag_session.commit()
+
+        logger.info('Remove operation completed: %d total bibcodes removed, %d empty files deleted, %d files flagged', 
+                    total_removed, len(all_files_to_delete), flagged)
         return
 
     elif action == 'update-robots':
@@ -678,6 +694,8 @@ def task_manage_sitemap(bibcodes, action):
     elif action in ['add', 'force-update']:
         overall_successful_count = 0
         overall_failed_count = 0
+        overall_new_count = 0
+        overall_updated_count = 0
         all_sitemap_records = []
         
         # Use single session across all batches for state consistency
@@ -690,7 +708,7 @@ def task_manage_sitemap(bibcodes, action):
                 logger.info('Processing batch %d/%d (%d records)', 
                             batch_num, total_batches, len(batch))
                 
-                successful_count, failed_count, sitemap_records, updated_state = app._process_sitemap_batch(
+                batch_stats, updated_state = app._process_sitemap_batch(
                     batch, action, session, current_state
                 )
                 
@@ -700,18 +718,23 @@ def task_manage_sitemap(bibcodes, action):
                 # Update state for next batch
                 current_state = updated_state
                 
-                overall_successful_count += successful_count
-                overall_failed_count += failed_count
-                all_sitemap_records.extend(sitemap_records)
+                # Accumulate statistics
+                overall_successful_count += batch_stats['successful']
+                overall_failed_count += batch_stats['failed']
+                overall_new_count += batch_stats['new_records']
+                overall_updated_count += batch_stats['updated_records']
+                all_sitemap_records.extend(batch_stats['sitemap_records'])
                 
-                logger.info('Batch %d completed: %d successful, %d failed',
-                            batch_num, successful_count, failed_count)
+                logger.info('Batch %d completed: %d successful (%d new, %d updated), %d failed',
+                            batch_num, batch_stats['successful'], 
+                            batch_stats['new_records'], batch_stats['updated_records'],
+                            batch_stats['failed'])
 
-        logger.info('Sitemap population completed: %d successful, %d failed out of %d total bibcodes',
+        logger.debug('Sitemap population completed: %d successful, %d failed out of %d total bibcodes',
                     overall_successful_count, overall_failed_count, total_bibcodes)
-        logger.info('Total sitemap records created/updated: %s', len(all_sitemap_records))
+        logger.debug('Records breakdown: %d new, %d updated (total: %d)', 
+                    overall_new_count, overall_updated_count, len(all_sitemap_records))
 
-# TODO: Add directory names: about, help, blog  
 # TODO: Need to query github to find when above dirs are updated: https://docs.github.com/en/rest?apiVersion=2022-11-28
 # TODO: Need to generate an API token from ADStailor (maybe)
 def update_robots_files(force_update=False):
@@ -811,6 +834,20 @@ def update_sitemap_index():
                     base_url = site_config.get('base_url', 'https://ui.adsabs.harvard.edu/')
                     sitemap_base_url = site_config.get('sitemap_url', base_url.rstrip('/'))
                     sitemap_entries = []
+                    
+                    # Add static sitemap first (if it exists)
+                    static_filename = f'sitemap_static_{site_key}.xml'
+                    static_template_path = os.path.join(os.path.dirname(__file__), 'templates', static_filename)
+                    if os.path.exists(static_template_path):
+                        # Copy static sitemap to output directory
+                        static_output_path = os.path.join(site_output_dir, 'sitemap_static.xml')
+                        shutil.copy2(static_template_path, static_output_path)
+                        
+                        # Add to index with current date
+                        lastmod_date = time.strftime('%Y-%m-%d', time.gmtime())
+                        entry = templates.format_sitemap_entry(sitemap_base_url, 'sitemap_static.xml', lastmod_date)
+                        sitemap_entries.append(entry)
+                        logger.info('Added static sitemap to index for %s', site_key)
                     
                     for filename in sitemap_filenames:
                         # Check if the actual sitemap file exists for this site
@@ -939,18 +976,42 @@ def task_generate_single_sitemap(sitemap_filename, record_ids):
         logger.error('Failed to generate sitemap file %s: %s', sitemap_filename, str(e))
         return False
 
-@app.task(queue='generate-single-sitemap')
-def task_generate_sitemap_index():
-    """Generate sitemap index files after individual sitemap files are complete"""
+@app.task(queue='update-sitemap-files', bind=True)
+def task_generate_sitemap_index(self, retry_count=0):
+    """Generate sitemap index files after individual sitemap files are complete
+    
+    This task will automatically retry if there are still pending file generation tasks,
+    waiting for all files to be complete before generating the index.
+    
+    Uses progressive backoff: starts with 10s delays, increases to 30s after 20 retries,
+    then 60s after 50 retries. Can handle up to 100 retries (~90 minutes total wait time).
+    """
+    # Override the default max_retries from config
+    max_retries = app.conf.get('SITEMAP_INDEX_MAX_RETRIES', 100)
+    self.max_retries = max_retries
+    
     try:
-        logger.info('Generating sitemap index files')
+        logger.info('Generating sitemap index files (attempt %d/%d)', retry_count + 1, max_retries)
         
         with app.session_scope() as session:
             pending_count = session.query(SitemapInfo).filter(SitemapInfo.update_flag == True).count()
             
             if pending_count > 0:
-                logger.warning('Found %d records still pending file generation - index may be incomplete', pending_count)
-                # Continue anyway - index will include completed files, exclude incomplete ones
+                if retry_count >= max_retries - 1:
+                    logger.warning('Reached max retries (%d) with %d records still pending - generating index anyway', 
+                                  max_retries, pending_count)
+                    # Fall through to generate index with whatever files are complete
+                else:
+                    if retry_count < 20:
+                        retry_delay = 10  # First 20 retries: 10s each (3m 20s)
+                    elif retry_count < 50:
+                        retry_delay = 30  # Next 30 retries: 30s each (15m)
+                    else:
+                        retry_delay = 60  # Remaining retries: 60s each (50m)
+                    
+                    logger.info('Found %d records still pending file generation - will retry in %ds (attempt %d/%d)', 
+                               pending_count, retry_delay, retry_count + 1, max_retries)
+                    raise self.retry(countdown=retry_delay, kwargs={'retry_count': retry_count + 1})
         
         success = update_sitemap_index()
         
@@ -961,13 +1022,20 @@ def task_generate_sitemap_index():
             
         return success
         
+    except Retry:
+        # Re-raise Retry exceptions without logging as errors
+        raise
     except Exception as e:
         logger.error('Error in sitemap index generation task: %s', str(e))
         raise
 
 @app.task(queue='update-sitemap-files') 
-def task_update_sitemap_files():
-    """Orchestrator task: Updates robots.txt first, then spawns parallel tasks for each sitemap file"""
+def task_update_sitemap_files(previous_result=None):
+    """Orchestrator task: Updates robots.txt first, then spawns parallel tasks for each sitemap file
+    
+    Args:
+        previous_result: Result from previous task in chain (ignored, but required for chaining)
+    """
     
     try:
         logger.info('Starting sitemap workflow')
@@ -1019,14 +1087,17 @@ def task_update_sitemap_files():
         tasks = []
 
         for sitemap_filename, record_ids in files_dict.items():
-            # Collect signatures for each task
-            tasks.append(task_generate_single_sitemap.s(sitemap_filename, record_ids))
+            # Spawn each task independently
+            task_generate_single_sitemap.apply_async(args=(sitemap_filename, record_ids))
             logger.debug('Spawned task for %s with %d records', sitemap_filename, len(record_ids))
         
-        if tasks:
-            chord(tasks)(task_generate_sitemap_index.s())
+        # Trigger index generation immediately
+        # The index task will automatically retry if files aren't ready yet
+        if files_dict:
+            task_generate_sitemap_index.apply_async()
+            logger.info('Index generation task submitted (will wait for files to complete)')
         
-        logger.info('Sitemap file generation tasks submitted, index generation scheduled')
+        logger.info('Sitemap file generation tasks submitted')
         
     except Exception as e:
         logger.error('Error in orchestrator task: %s', str(e))

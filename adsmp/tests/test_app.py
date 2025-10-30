@@ -1025,7 +1025,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             # Test 1: Process first batch of 50 bibcodes
             batch_bibcodes_1 = test_bibcodes[:50]
-            successful_count_1, failed_count_1, sitemap_records_1, updated_state_1 = self.app._process_sitemap_batch(
+            batch_stats, updated_state_1 = self.app._process_sitemap_batch(
                 batch_bibcodes_1, 'add', session, sitemap_state
             )
             
@@ -1036,9 +1036,9 @@ class TestAdsOrcidCelery(unittest.TestCase):
             self.assertLess(query_time, 5.0, f"Batch processing took {query_time:.3f}s, should be under 5s")
             
             # Verify first batch results
-            self.assertEqual(successful_count_1, 50, "Should successfully process all 50 bibcodes")
-            self.assertEqual(failed_count_1, 0, "Should have no failed bibcodes")
-            self.assertEqual(len(sitemap_records_1), 50, "Should return 50 sitemap records")
+            self.assertEqual(batch_stats['successful'], 50, "Should successfully process all 50 bibcodes")
+            self.assertEqual(batch_stats['failed'], 0, "Should have no failed bibcodes")
+            self.assertEqual(len(batch_stats['sitemap_records']), 50, "Should return 50 sitemap records")
             
             print(f"process_sitemap_batch performance (ADD): processed 50 records in {query_time:.3f}s")
             
@@ -1050,16 +1050,16 @@ class TestAdsOrcidCelery(unittest.TestCase):
             self.assertEqual(len(created_records_1), 50, 
                            "All 50 sitemap records should be visible in same session")
             
-            # Test 3: Process second batch using updated_state from first batch (session stickiness!)
+            # Test 3: Process second batch using updated_state from first batch
             batch_bibcodes_2 = test_bibcodes[50:80]
-            successful_count_2, failed_count_2, sitemap_records_2, updated_state_2 = self.app._process_sitemap_batch(
-                batch_bibcodes_2, 'force-update', session, updated_state_1  # Using updated state!
+            batch_stats, updated_state_2 = self.app._process_sitemap_batch(
+                batch_bibcodes_2, 'force-update', session, updated_state_1
             )
             
             # Verify second batch results
-            self.assertEqual(successful_count_2, 30, "Should successfully process all 30 bibcodes")
-            self.assertEqual(failed_count_2, 0, "Should have no failed bibcodes")
-            self.assertEqual(len(sitemap_records_2), 30, "Should return 30 sitemap records")
+            self.assertEqual(batch_stats['successful'], 30, "Should successfully process all 30 bibcodes")
+            self.assertEqual(batch_stats['failed'], 0, "Should have no failed bibcodes")
+            self.assertEqual(len(batch_stats['sitemap_records']), 30, "Should return 30 sitemap records")
             
             # Test 4: Verify session consistency - state should be cumulative
             initial_count = sitemap_state['count']
@@ -1100,12 +1100,12 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 6: Test empty batch edge case
         with self.app.session_scope() as session:
             empty_state = self.app.get_current_sitemap_state(session)
-            empty_successful, empty_failed, empty_records, empty_updated_state = self.app._process_sitemap_batch(
+            batch_stats, empty_updated_state = self.app._process_sitemap_batch(
                 [], 'add', session, empty_state
             )
-            self.assertEqual(empty_successful, 0, "Empty batch should return 0 successful")
-            self.assertEqual(empty_failed, 0, "Empty batch should return 0 failed")
-            self.assertEqual(len(empty_records), 0, "Empty batch should return empty records list")
+            self.assertEqual(batch_stats['successful'], 0, "Empty batch should return 0 successful")
+            self.assertEqual(batch_stats['failed'], 0, "Empty batch should return 0 failed")
+            self.assertEqual(len(batch_stats['sitemap_records']), 0, "Empty batch should return empty records list")
             self.assertEqual(empty_updated_state, empty_state, "Empty batch should return unchanged state")
 
     def test_process_sitemap_batch_solr_filtering(self):
@@ -1138,34 +1138,34 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 0, 'index': 1}
             
-            successful_count_add, failed_count_add, sitemap_records_add, updated_state_add = self.app._process_sitemap_batch(
+            batch_stats, updated_state_add = self.app._process_sitemap_batch(
                 test_bibcodes, 'add', session, initial_state
             )
             
             # Should include: success, metrics-failed, links-failed = 3 successful
             # Should exclude: solr-failed, retrying, no-bib-data = 3 failed
-            self.assertEqual(successful_count_add, 3, "Add: Should include success, metrics-failed, links-failed statuses")
-            self.assertEqual(failed_count_add, 3, "Add: Should exclude solr-failed, retrying, and no-bib-data records")
-            self.assertEqual(len(sitemap_records_add), 3, "Add: Should return 3 sitemap records")
+            self.assertEqual(batch_stats['successful'], 3, "Add: Should include success, metrics-failed, links-failed statuses")
+            self.assertEqual(batch_stats['failed'], 3, "Add: Should exclude solr-failed, retrying, and no-bib-data records")
+            self.assertEqual(len(batch_stats['sitemap_records']), 3, "Add: Should return 3 sitemap records")
             self.assertEqual(updated_state_add['count'], 3, "Add: State should reflect only successful records")
         
         # Test 'force-update' action - should have same filtering results
         with self.app.session_scope() as session:
             initial_state = {'filename': 'sitemap_bib_2.xml', 'count': 0, 'index': 2}
             
-            successful_count_force, failed_count_force, sitemap_records_force, updated_state_force = self.app._process_sitemap_batch(
+            batch_stats, updated_state_force = self.app._process_sitemap_batch(
                 test_bibcodes, 'force-update', session, initial_state
             )
             
             # Force-update should have same filtering results as add
-            self.assertEqual(successful_count_force, 3, "Force-update: Should include success, metrics-failed, links-failed statuses")
-            self.assertEqual(failed_count_force, 3, "Force-update: Should exclude solr-failed, retrying, and no-bib-data records")
-            self.assertEqual(len(sitemap_records_force), 0, "Force-update: Should return 0 NEW sitemap records (updating existing ones)")
+            self.assertEqual(batch_stats['successful'], 3, "Force-update: Should include success, metrics-failed, links-failed statuses")
+            self.assertEqual(batch_stats['failed'], 3, "Force-update: Should exclude solr-failed, retrying, and no-bib-data records")
+            self.assertEqual(len(batch_stats['sitemap_records']), 3, "Force-update: Should return updated sitemap records for reporting")
             self.assertEqual(updated_state_force['count'], 0, "Force-update: State count should remain 0 (updating existing, not adding new)")
             
             # Results should be identical for filtering
-            self.assertEqual(successful_count_add, successful_count_force, "Both actions should have same successful count")
-            self.assertEqual(failed_count_add, failed_count_force, "Both actions should have same failed count")
+            self.assertEqual(batch_stats['successful'], batch_stats['successful'], "Both actions should have same successful count")
+            self.assertEqual(batch_stats['failed'], batch_stats['failed'], "Both actions should have same failed count")
 
 
     def test_process_sitemap_batch_new_vs_existing_records(self):
@@ -1221,24 +1221,24 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 5, 'index': 1}
             
-            successful_count, failed_count, sitemap_records, updated_state = self.app._process_sitemap_batch(
+            batch_stats, updated_state = self.app._process_sitemap_batch(
                 test_bibcodes, 'add', session, initial_state
             )
             
             # All 3 should be successful
-            self.assertEqual(successful_count, 3, "All records should be processed successfully")
-            self.assertEqual(failed_count, 0, "No records should fail")
+            self.assertEqual(batch_stats['successful'], 3, "All records should be processed successfully")
+            self.assertEqual(batch_stats['failed'], 0, "No records should fail")
             
             # Only NEW record increments count (1 new record)
             self.assertEqual(updated_state['count'], 6, "Only new record should increment count (5 + 1 = 6)")
             
             # Check that update_flags are set correctly
             with self.app.session_scope() as session:
-                sitemap_records = session.query(SitemapInfo).filter(
+                batch_stats['sitemap_records'] = session.query(SitemapInfo).filter(
                     SitemapInfo.bibcode.in_(test_bibcodes)
                 ).all()
                 
-                for record in sitemap_records:
+                for record in batch_stats['sitemap_records']:
                     if record.bibcode == new_bibcode:
                         # New record should have update_flag = True
                         self.assertTrue(record.update_flag, f"New record {record.bibcode} should have update_flag=True")
@@ -1289,15 +1289,15 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 0, 'index': 1}
             
-            successful_count, failed_count, _, _ = self.app._process_sitemap_batch(
+            batch_stats, _ = self.app._process_sitemap_batch(
                 [test_bibcode], 'add', session, initial_state
             )
             
             # Check that sitemap_info record remains unchanged
             sitemap_record = session.query(SitemapInfo).filter(SitemapInfo.bibcode == test_bibcode).first()
             
-            self.assertEqual(successful_count, 1, "Record should be processed successfully")
-            self.assertEqual(failed_count, 0, "No records should fail")
+            self.assertEqual(batch_stats['successful'], 1, "Record should be processed successfully")
+            self.assertEqual(batch_stats['failed'], 0, "No records should fail")
             
             # Verify the record was not modified
             self.assertFalse(sitemap_record.update_flag, "'add' should NOT set update_flag when file is newer than data")
@@ -1345,15 +1345,15 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 0, 'index': 1}
             
-            successful_count, failed_count, _, _ = self.app._process_sitemap_batch(
+            batch_stats, _ = self.app._process_sitemap_batch(
                 [test_bibcode], 'add', session, initial_state
             )
             
             # Check that sitemap_info record was updated appropriately
             sitemap_record = session.query(SitemapInfo).filter(SitemapInfo.bibcode == test_bibcode).first()
             
-            self.assertEqual(successful_count, 1, "Record should be processed successfully")
-            self.assertEqual(failed_count, 0, "No records should fail")
+            self.assertEqual(batch_stats['successful'], 1, "Record should be processed successfully")
+            self.assertEqual(batch_stats['failed'], 0, "No records should fail")
             
             # Verify the record was updated correctly
             self.assertTrue(sitemap_record.update_flag, "'add' should set update_flag when data is newer than file")
@@ -1402,15 +1402,15 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 0, 'index': 1}
             
-            successful_count, failed_count, _, _ = self.app._process_sitemap_batch(
+            batch_stats, _ = self.app._process_sitemap_batch(
                 [test_bibcode], 'add', session, initial_state
             )
             
             # Check that sitemap_info record was updated appropriately
             sitemap_record = session.query(SitemapInfo).filter(SitemapInfo.bibcode == test_bibcode).first()
             
-            self.assertEqual(successful_count, 1, "Record should be processed successfully")
-            self.assertEqual(failed_count, 0, "No records should fail")
+            self.assertEqual(batch_stats['successful'], 1, "Record should be processed successfully")
+            self.assertEqual(batch_stats['failed'], 0, "No records should fail")
             
             # Verify the record was updated correctly
             self.assertTrue(sitemap_record.update_flag, "'add' should set update_flag when file has never been generated")
@@ -1460,15 +1460,15 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 0, 'index': 1}
             
-            successful_count, failed_count, _, _ = self.app._process_sitemap_batch(
+            batch_stats, _ = self.app._process_sitemap_batch(
                 [test_bibcode], 'force-update', session, initial_state
             )
             
             # Check that sitemap_info record was updated appropriately
             sitemap_record = session.query(SitemapInfo).filter(SitemapInfo.bibcode == test_bibcode).first()
             
-            self.assertEqual(successful_count, 1, "Record should be processed successfully")
-            self.assertEqual(failed_count, 0, "No records should fail")
+            self.assertEqual(batch_stats['successful'], 1, "Record should be processed successfully")
+            self.assertEqual(batch_stats['failed'], 0, "No records should fail")
             
             # Verify the record was updated correctly
             self.assertTrue(sitemap_record.update_flag, "'force-update' should ALWAYS set update_flag, even when file is newer")
@@ -1517,15 +1517,15 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 0, 'index': 1}
             
-            successful_count, failed_count, _, _ = self.app._process_sitemap_batch(
+            batch_stats, _ = self.app._process_sitemap_batch(
                 [test_bibcode], 'force-update', session, initial_state
             )
             
             # Check that sitemap_info record was updated appropriately
             sitemap_record = session.query(SitemapInfo).filter(SitemapInfo.bibcode == test_bibcode).first()
             
-            self.assertEqual(successful_count, 1, "Record should be processed successfully")
-            self.assertEqual(failed_count, 0, "No records should fail")
+            self.assertEqual(batch_stats['successful'], 1, "Record should be processed successfully")
+            self.assertEqual(batch_stats['failed'], 0, "No records should fail")
             
             # Verify the record was updated correctly
             self.assertTrue(sitemap_record.update_flag, "'force-update' should ALWAYS set update_flag, regardless of timestamps")
@@ -1557,7 +1557,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
                     'index': 3
                 }
                 
-                successful_count, failed_count, sitemap_records, updated_state = self.app._process_sitemap_batch(
+                batch_stats, updated_state = self.app._process_sitemap_batch(
                     rollover_bibcodes, 'add', session, initial_state
                 )
                 
@@ -1566,7 +1566,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
                                "Final filename should be sitemap_bib_5.xml after both rollovers")
                 self.assertEqual(updated_state['index'], 5, "Final index should be 5 after both rollovers")
                 self.assertEqual(updated_state['count'], 1, "Final count should be 1 (second record in sitemap_bib_5.xml)")
-                self.assertEqual(successful_count, 2, "Both records should be processed successfully")
+                self.assertEqual(batch_stats['successful'], 2, "Both records should be processed successfully")
                 
                 # Verify database was updated correctly
                 sitemap_records_db = session.query(SitemapInfo).filter(
@@ -1615,12 +1615,12 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 0, 'index': 1}
             
-            successful_count, failed_count, sitemap_records, updated_state = self.app._process_sitemap_batch(
+            batch_stats, updated_state = self.app._process_sitemap_batch(
                 [non_existent_bibcode], 'add', session, initial_state
             )
             
-            self.assertEqual(successful_count, 0, "Non-existent record should not be processed")
-            self.assertEqual(failed_count, 1, "Non-existent record should be counted as failed")
+            self.assertEqual(batch_stats['successful'], 0, "Non-existent record should not be processed")
+            self.assertEqual(batch_stats['failed'], 1, "Non-existent record should be counted as failed")
             self.assertEqual(updated_state, initial_state, "State should not change for failed records")
         
         # Test 2: Exception during processing
@@ -1639,12 +1639,12 @@ class TestAdsOrcidCelery(unittest.TestCase):
         
         try:
             with self.app.session_scope() as session:
-                successful_count, failed_count, sitemap_records, updated_state = self.app._process_sitemap_batch(
+                batch_stats, updated_state = self.app._process_sitemap_batch(
                     [problematic_bibcode], 'add', session, initial_state
                 )
                 
-                self.assertEqual(successful_count, 0, "Exception should result in 0 successful")
-                self.assertEqual(failed_count, 1, "Exception should result in 1 failed")
+                self.assertEqual(batch_stats['successful'], 0, "Exception should result in 0 successful")
+                self.assertEqual(batch_stats['failed'], 1, "Exception should result in 1 failed")
                 
         finally:
             # Restore original method
@@ -1656,13 +1656,13 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 5, 'index': 1}
             
-            successful_count, failed_count, sitemap_records, updated_state = self.app._process_sitemap_batch(
+            batch_stats, updated_state = self.app._process_sitemap_batch(
                 [], 'add', session, initial_state
             )
             
-            self.assertEqual(successful_count, 0, "Empty batch should have 0 successful")
-            self.assertEqual(failed_count, 0, "Empty batch should have 0 failed")
-            self.assertEqual(len(sitemap_records), 0, "Empty batch should return empty records")
+            self.assertEqual(batch_stats['successful'], 0, "Empty batch should have 0 successful")
+            self.assertEqual(batch_stats['failed'], 0, "Empty batch should have 0 failed")
+            self.assertEqual(len(batch_stats['sitemap_records']), 0, "Empty batch should return empty records")
             self.assertEqual(updated_state, initial_state, "Empty batch should not change state")
 
     def test_process_sitemap_batch_integration(self):
@@ -1704,13 +1704,13 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 10, 'index': 1}
             
-            successful_count, failed_count, sitemap_records, updated_state = self.app._process_sitemap_batch(
+            batch_stats, updated_state = self.app._process_sitemap_batch(
                 test_bibcodes, 'add', session, initial_state
             )
             
             # Expected: 2 successful (1 new valid + 1 existing valid), 1 failed (solr-failed)
-            self.assertEqual(successful_count, 2, "Should process 1 new + 1 existing valid record")
-            self.assertEqual(failed_count, 1, "Should fail 1 solr-failed record")
+            self.assertEqual(batch_stats['successful'], 2, "Should process 1 new + 1 existing valid record")
+            self.assertEqual(batch_stats['failed'], 1, "Should fail 1 solr-failed record")
             # Only 1 new record should increment count
             self.assertEqual(updated_state['count'], 11, "Only new record should increment count")
             self.assertEqual(updated_state['filename'], 'sitemap_bib_1.xml', "Should stay in same file")
@@ -1805,13 +1805,13 @@ class TestAdsOrcidCelery(unittest.TestCase):
             with self.app.session_scope() as session:
                 initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 10, 'index': 1}
                 
-                successful_count, failed_count, sitemap_records, updated_state = self.app._process_sitemap_batch(
+                batch_stats, updated_state = self.app._process_sitemap_batch(
                     test_bibcodes, 'add', session, initial_state
                 )
                 
                 # Verify results
-                self.assertEqual(successful_count, 4, "Should process all 4 records successfully")
-                self.assertEqual(failed_count, 0, "Should have no failures")
+                self.assertEqual(batch_stats['successful'], 4, "Should process all 4 records successfully")
+                self.assertEqual(batch_stats['failed'], 0, "Should have no failures")
                 self.assertEqual(updated_state['count'], 12, "Should increment count by 2 (new records only)")
                 
                 # Verify bulk_insert_sitemap_records was called with new records
@@ -1898,13 +1898,13 @@ class TestAdsOrcidCelery(unittest.TestCase):
             with self.app.session_scope() as session:
                 initial_state = {'filename': 'sitemap_bib_1.xml', 'count': 10, 'index': 1}
                 
-                successful_count, failed_count, sitemap_records, updated_state = self.app._process_sitemap_batch(
+                batch_stats, updated_state = self.app._process_sitemap_batch(
                     test_bibcodes, 'add', session, initial_state
                 )
                 
                 # Verify results
-                self.assertEqual(successful_count, 0, "Should have no successful records")
-                self.assertEqual(failed_count, 2, "Should have 2 failed records (filtered out)")
+                self.assertEqual(batch_stats['successful'], 0, "Should have no successful records")
+                self.assertEqual(batch_stats['failed'], 2, "Should have 2 failed records (filtered out)")
                 self.assertEqual(updated_state['count'], 10, "Count should not change")
                 
                 # Verify bulk operations were not called (no valid records to process)
@@ -2170,7 +2170,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         
         # Test edge cases
         
-        # Test 1: Empty sitemap_records list
+        # Test 1: Empty batch_stats['sitemap_records'] list
         with self.app.session_scope() as session:
             # Should not raise an exception
             self.app.bulk_insert_sitemap_records([], session)
@@ -2414,7 +2414,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             # Test removing 2 bibcodes
             bibcodes_to_remove = test_bibcodes[:2]  # Remove first 2
-            removed_count, files_to_delete = self.app._execute_remove_action(session, bibcodes_to_remove)
+            removed_count, files_to_delete, _ = self.app._execute_remove_action(session, bibcodes_to_remove)
             
             # Verify results
             self.assertEqual(removed_count, 2, "Should remove exactly 2 bibcodes")
@@ -2488,19 +2488,21 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             # Remove records that will make file2 and file3 empty, but leave file1 with 1 record
             bibcodes_to_remove = [test_bibcodes[1], test_bibcodes[2], test_bibcodes[3]]  # Remove from file1, all of file2, all of file3
-            removed_count, files_to_delete = self.app._execute_remove_action(session, bibcodes_to_remove)
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, bibcodes_to_remove)
             
             # Verify results
             self.assertEqual(removed_count, 3, "Should remove exactly 3 bibcodes")
             self.assertEqual(files_to_delete, {'sitemap_bib_2.xml', 'sitemap_bib_3.xml'}, 
                            "Should identify files 2 and 3 as empty")
             
-            # Verify file1 still has records and is marked for update
+            # Verify file1 is in files_to_update (needs regeneration but not deletion)
+            self.assertIn('sitemap_bib_1.xml', files_to_update, "File 1 should be marked for update")
+            
+            # Verify file1 still has records
             file1_records = session.query(SitemapInfo).filter(
                 SitemapInfo.sitemap_filename == 'sitemap_bib_1.xml'
             ).all()
             self.assertEqual(len(file1_records), 1, "File 1 should have 1 remaining record")
-            self.assertTrue(file1_records[0].update_flag, "File 1 record should be marked for update")
             
             # Clean up
             session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023EmptyTest%')).delete(synchronize_session=False)
@@ -2513,7 +2515,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             # Test with non-existent bibcodes
             non_existent_bibcodes = ['2023NonExistent..1..1A', '2023NonExistent..1..2A']
-            removed_count, files_to_delete = self.app._execute_remove_action(session, non_existent_bibcodes)
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, non_existent_bibcodes)
             
             # Should return zero results
             self.assertEqual(removed_count, 0, "Should remove 0 bibcodes when none exist")
@@ -2524,7 +2526,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         
         with self.app.session_scope() as session:
             # Test with empty list
-            removed_count, files_to_delete = self.app._execute_remove_action(session, [])
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, [])
             
             # Should return zero results immediately
             self.assertEqual(removed_count, 0, "Should remove 0 bibcodes with empty input")
@@ -2575,7 +2577,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             # Test removing mix of existing and non-existing bibcodes
             mixed_bibcodes = test_bibcodes + non_existent_bibcodes
-            removed_count, files_to_delete = self.app._execute_remove_action(session, mixed_bibcodes)
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, mixed_bibcodes)
             
             # Should only remove the existing ones
             self.assertEqual(removed_count, 2, "Should remove only the 2 existing bibcodes")
@@ -2644,13 +2646,17 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             # Remove 1 record from file1 and 1 record from file2 (partial removal)
             bibcodes_to_remove = [test_bibcodes[1], test_bibcodes[3]]  # 1 from each file
-            removed_count, files_to_delete = self.app._execute_remove_action(session, bibcodes_to_remove)
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, bibcodes_to_remove)
             
             # Verify results
             self.assertEqual(removed_count, 2, "Should remove exactly 2 bibcodes")
             self.assertEqual(files_to_delete, set(), "Should not delete any files (both still have records)")
             
-            # Verify both files still have records and are marked for update
+            # Verify both files are in files_to_update
+            self.assertIn('sitemap_bib_1.xml', files_to_update, "File 1 should be marked for update")
+            self.assertIn('sitemap_bib_2.xml', files_to_update, "File 2 should be marked for update")
+            
+            # Verify both files still have records
             file1_records = session.query(SitemapInfo).filter(
                 SitemapInfo.sitemap_filename == 'sitemap_bib_1.xml'
             ).all()
@@ -2660,10 +2666,6 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             self.assertEqual(len(file1_records), 2, "File 1 should have 2 remaining records")
             self.assertEqual(len(file2_records), 1, "File 2 should have 1 remaining record")
-            
-            # All remaining records should be marked for update
-            for record in file1_records + file2_records:
-                self.assertTrue(record.update_flag, f"Record {record.bibcode} should be marked for update")
             
             # Clean up
             session.query(SitemapInfo).filter(SitemapInfo.bibcode.like('2023PartialTest%')).delete(synchronize_session=False)
@@ -2714,7 +2716,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             
             # Time the removal operation
             start_time = time.time()
-            removed_count, files_to_delete = self.app._execute_remove_action(session, test_bibcodes)
+            removed_count, files_to_delete, files_to_update = self.app._execute_remove_action(session, test_bibcodes)
             end_time = time.time()
             
             execution_time = end_time - start_time
