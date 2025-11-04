@@ -796,7 +796,7 @@ if __name__ == '__main__':
                         dest='scix_id_flag',
                         choices=['update', 'update-all', 'force', 'force-all', 'reset', 'reset-all'],
                         help='update records to be assigned a new scix_id, update all records in recordsDB with new scix_id, force reset scix_id and assign new scix_ids, force all records in recordsDB with new scix_id, reset scix_id to None, reset all scix_id in recordDB to None')
-    
+
     parser.add_argument('--boost',
                         dest='boost',
                         action='store_true',
@@ -879,6 +879,7 @@ if __name__ == '__main__':
 
                         app.request_aff_augment(bibcode)
 
+
     elif args.boost:
         print('Running Boost Pipeline')
 
@@ -930,16 +931,6 @@ if __name__ == '__main__':
                     if bibcode:
                         bibcodes.append(bibcode)
         elif args.bibcodes:
-            bibs = args.bibcodes
-        if args.scix_id_flag:
-            flag = args.scix_id_flag
-        else:
-            flag = ''
-        if flag == 'update-all' or flag == 'force-all' or flag == 'reset-all':
-            batch_size = args.batch_size
-            process_all_scixid(batch_size, flag)
-        else:
-            tasks.task_update_scixid(bibs, flag = flag)
             bibcodes = args.bibcodes
         
         # Validate that actions requiring bibcodes have them
@@ -1038,6 +1029,3 @@ if __name__ == '__main__':
                     update_solr=update_solr, update_metrics=update_metrics,
                     update_links=update_links, force_processing=args.force_processing, ignore_checksums=args.ignore_checksums,
                     solr_targets=solr_urls, update_processed=args.update_processed, priority=args.priority)
-
-
-
