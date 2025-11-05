@@ -227,7 +227,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
             with self.app.session_scope() as session:
                 r = session.query(models.Records).filter_by(bibcode='abc').first()
                 self.assertTrue(r.id == 1)
-                self.assertEqual(r.scix_id, 'scix:0RW9-X19B-XHYY')
+                self.assertEqual(r.scix_id, 'scix:8FB4-3X1R-42CZ')
                 j = r.toJSON()
                 self.assertEqual(j[k], {'foo': 'bar', 'hey': 1})
                 t = j[k + '_updated']
@@ -247,12 +247,12 @@ class TestAdsOrcidCelery(unittest.TestCase):
         
         r = self.app.get_record('abc')
         self.assertEqual(r['id'], 1)
-        self.assertEqual(r['scix_id'],'scix:0RW9-X19B-XHYY')
+        self.assertEqual(r['scix_id'],'scix:8FB4-3X1R-42CZ')
         self.assertEqual(r['processed'], None)
         
         r = self.app.get_record(['abc'])
         self.assertEqual(r[0]['id'], 1)
-        self.assertEqual(r[0]['scix_id'],'scix:0RW9-X19B-XHYY')
+        self.assertEqual(r[0]['scix_id'],'scix:8FB4-3X1R-42CZ')
         self.assertEqual(r[0]['processed'], None)
         
         r = self.app.get_record('abc', load_only=['id'])
