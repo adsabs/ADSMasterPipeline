@@ -707,11 +707,11 @@ class TestWorkers(unittest.TestCase):
 
     def test_task_update_scixid(self):
         self.app.update_storage("bibcode", "bib_data", {"title":"abc test 123"})
-        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:8FB4-3X1R-42CZ")
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:5RNB-CG0M-EQYN")
 
         tasks.task_update_scixid(bibcodes=["bibcode"], flag="force")
         # scixid should not change since bib_data has not changed
-        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:8FB4-3X1R-42CZ")
+        self.assertEqual(self.app.get_record("bibcode")["scix_id"], "scix:5RNB-CG0M-EQYN")
 
         self.app.update_storage("bibcode", "bib_data", {"title":"abc test 456"})
         tasks.task_update_scixid(bibcodes=["bibcode"], flag="force")
