@@ -688,7 +688,6 @@ def task_manage_sitemap(bibcodes, action):
             logger.info('Bootstrap completed: %d successful, %d failed out of %d total records', 
                        successful_count, failed_count, processed)
             logger.info('All records marked with update_flag=True')
-            logger.info('Run --update-sitemap-files to generate sitemap XML files')
         return
     
     elif action in ['add', 'force-update']:
