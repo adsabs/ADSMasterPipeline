@@ -386,7 +386,7 @@ class TestSolrUpdater(unittest.TestCase):
         )
         rec = self.app.get_record("bibcode")
         x = solr_updater.transform_json_record(rec)
-        self.assertEqual(x["scix_id"], "scix:42MM-89VE-90A0")
+        self.assertEqual(x["scix_id"], "scix:6ZMN-X0HN-Z85V")
         self.assertEqual(round(x["doctype_boost"],3),0.857)
         self.assertEqual(round(x["astronomy_final_boost"],3), 0.514)
 

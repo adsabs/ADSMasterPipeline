@@ -4,4 +4,4 @@ httplib2==0.19.0
 portalocker==1.7.1
 psycopg2==2.8.6
 pyrabbit==1.1.0
-ScixPipelineUtils @ git+https://github.com/adsabs/SciXPipelineUtils.git@v0.5.2
+ScixPipelineUtils @ git+https://github.com/adsabs/SciXPipelineUtils.git@v0.6.0

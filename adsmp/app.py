@@ -198,6 +198,8 @@ class ADSMasterPipelineCelery(ADSCelery):
     def generate_scix_id(self, bib_data):
         if self._config.get('SCIX_ID_GENERATION_FIELDS', None):
             user_fields = self._config.get('SCIX_ID_GENERATION_FIELDS')
+        else:
+            user_fields = None
         return scix_id.generate_scix_id(bib_data, user_fields = user_fields) 
 
     def delete_by_bibcode(self, bibcode):
