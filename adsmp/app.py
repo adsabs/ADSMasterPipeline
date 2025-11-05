@@ -158,12 +158,6 @@ class ADSMasterPipelineCelery(ADSCelery):
                 oldval = 'not-stored'
                 record.augments = payload
                 record.augments_updated = now
-            elif type == 'classify':
-                # payload contains new value for collections field
-                # r.augments holds a list, save it in database
-                oldval = 'not-stored'
-                record.classifications = payload
-                record.classifications_updated = now
             elif type == 'boost':
                 # payload contains new value for boost fields
                 # r.augments holds a dict, save it in database
@@ -315,8 +309,6 @@ class ADSMasterPipelineCelery(ADSCelery):
             return 'metrics_records'
         elif isinstance(msg, AugmentAffiliationResponseRecord):
             return 'augment'
-        elif isinstance(msg, ClassifyResponseRecord):
-            return 'classify'
         elif isinstance(msg, BoostResponseRecord):
             return 'boost'
         else:
@@ -611,125 +603,6 @@ class ADSMasterPipelineCelery(ADSCelery):
             self.logger.debug('sent augment affiliation request for bibcode {}'.format(bibcode))
         else:
             self.logger.debug('request_aff_augment called but bibcode {} has no aff data'.format(bibcode))
-
-    def prepare_bibcode(self, bibcode):
-        """prepare data for classifier pipeline
-        
-        Parameters
-        ----------
-        bibcode = reference ID for record (Needs to include SciXID)
-
-        """
-        rec = self.get_record(bibcode)
-        if rec is None:
-            self.logger.warning('request_classifier called but no data at all for bibcode {}'.format(bibcode))
-            return
-        bib_data = rec.get('bib_data', None)
-        if bib_data is None:
-            self.logger.warning('request_classifier called but no bib data for bibcode {}'.format(bibcode))
-            return
-        title = bib_data.get('title', '')
-        abstract = bib_data.get('abstract', '')
-        data = {
-            'bibcode': bibcode,
-            'title': title,
-            'abstract': abstract,
-        }
-        return data
-
-    def request_classify(self, bibcode=None,scix_id = None, filename=None,mode='auto', batch_size=500, data=None, check_boolean=False, operation_step=None):
-        """ send classifier request for bibcode to classifier pipeline
-
-        set data parameter to provide test data
-
-        Parameters
-        ----------
-        bibcode = reference ID for record (Needs to include SciXID)
-        scix_id = reference ID for record
-        filename : filename of input file with list of records to classify 
-        mode : 'auto' (default) assumes single record input from master, 'manual' assumes multiple records input at command line
-        batch_size : size of batch for large input files
-        check_boolean : Used for testing - writes the message to file
-        operation_step: string - defines mode of operation: classify, classify_verify, or verify
-        
-        """
-        self.logger.info('request_classify called with bibcode={}, filename={}, mode={}, batch_size={}, data={}, validate={}'.format(bibcode, filename, mode, batch_size, data, check_boolean))
-
-        if not self._config.get('OUTPUT_TASKNAME_CLASSIFIER'):
-            self.logger.warning('request_classifier called but no classifier taskname in config')
-            return
-        if not self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER'):
-            self.logger.warning('request_classifier called but no classifier broker in config')
-            return
-
-        if bibcode is not None and mode == 'auto':
-            if data is None:
-                data = self.prepare_bibcode(bibcode)
-            if data and data.get('title'):
-                data['operation_step'] = operation_step
-                self.logger.DEBUG(f'Converting {data} to protobuf')
-                message = ClassifyRequestRecordList()
-                entry = message.classify_requests.add()
-                entry.bibcode = data.get('bibcode')
-                title = data.get('title')
-                if isinstance(title, (list,tuple)):
-                    title = title[0]
-                entry.title = title
-                entry.abstract = data.get('abstract')
-                entry.operation_step = data.get('operation_step')
-                output_taskname=self._config.get('OUTPUT_TASKNAME_CLASSIFIER')
-                output_broker=self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER')
-                self.logger.DEBUG('Sending message for batch - bibcode only input')
-                self.logger.DEBUG('sending message {}'.format(message))
-                self.forward_message(message, pipeline='classifier')
-                self.logger.debug('sent classifier request for bibcode {}'.format(bibcode))
-            else:
-                self.logger.debug('request_classifier called but bibcode {} has no title data'.format(bibcode))
-        if filename is not None and mode == 'manual':
-            batch_idx = 0
-            batch_list = []
-            self.logger.info('request_classifier called with filename {}'.format(filename))
-            with open(filename, 'r') as f:
-                reader = csv.DictReader(f)
-                bibcodes =  [row for row in reader]
-            while batch_idx < len(bibcodes):
-                bibcodes_batch = bibcodes[batch_idx:batch_idx+batch_size]
-                for record in bibcodes_batch:
-                    if record.get('title') or record.get('abstract'):
-                        data = record
-                    else:
-                        data = self.prepare_bibcode(record['bibcode'])
-                    if data and data.get('title'):
-                        batch_list.append(data)
-                if len(batch_list) > 0:
-                    message = ClassifyRequestRecordList() 
-                    for item in batch_list:
-                        entry = message.classify_requests.add()
-                        entry.bibcode = item.get('bibcode')
-                        title = item.get('title')
-                        if isinstance(title, (list, tuple)):
-                            title = title[0]
-                        entry.title = title
-                        entry.abstract = item.get('abstract')
-                        entry.operation_step = operation_step
-                        entry.output_path = filename.split('.')[0]
-                    output_taskname=self._config.get('OUTPUT_TASKNAME_CLASSIFIER')
-                    output_broker=self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER')
-                    if check_boolean is True:
-                        # Save message to file 
-                        # with open('classifier_request.json', 'w') as f:
-                        #     f.write(str(message))
-                        json_message = MessageToJson(message)
-                        with open('classifier_request.json', 'w') as f:
-                            f.write(json_message)
-                    else:
-                        self.logger.info('Sending message for batch')
-                        self.logger.info('sending message {}'.format(message))
-                        self.forward_message(message, pipeline='classifier')
-                        self.logger.debug('sent classifier request for batch {}'.format(batch_idx))
-
-                batch_idx += batch_size
-                batch_list = []
 
     def _populate_boost_request_from_record(self, rec, metrics, classifications, 
                                             run_id=None, output_path=None, request_type=None):

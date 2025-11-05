@@ -175,19 +175,6 @@ def extract_augments_pipeline(db_augments, solrdoc):
         "institution": db_augments.get("institution", None),
     }
 
-def extract_classifications_pipeline(db_classifications, solrdoc):
-    """retrieve expected classifier collections
-
-    classifications is a solr virtual field so it should never be set"""
-    db_classifications = [element for element in db_classifications if element] # remove empty strings
-    if db_classifications is None or len(db_classifications) == 0:
-        return {"database" : solrdoc.get("database", None)}
-
-    # Append classifier results to classic collections
-    return {
-        "database" : list(set(db_classifications + solrdoc.get("database", [])))
-    }
-
 
 def extract_boost_pipeline(db_boost_factors, solrdoc):
     """retrieve expected boost factors from Boost Pipeline database
@@ -372,7 +359,6 @@ DB_COLUMN_DESTINATIONS = [
     ("fulltext", extract_fulltext),
     ("#timestamps", get_timestamps),  # use 'id' to be always called
     ("augments", extract_augments_pipeline),  # over aff field, adds aff_*
-    ("classifications", extract_classifications_pipeline), # overwrites databse field in bib_data 
     ("boost_factors", extract_boost_pipeline),  # adds boost factors from Boost Pipeline
 ]
 
