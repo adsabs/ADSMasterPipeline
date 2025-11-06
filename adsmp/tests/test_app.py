@@ -83,8 +83,8 @@ class TestAdsOrcidCelery(unittest.TestCase):
         self.assertEqual(r['status'], 'solr-failed')
 
     def test_index_solr(self):
-        self.app.update_storage('abc', 'bib_data', {'bibcode': 'abc', 'hey': 1, 'test': 'test'})
-        self.app.update_storage('foo', 'bib_data', {'bibcode': 'foo', 'hey': 1})
+        self.app.update_storage('abc', 'bib_data', {'bibcode': 'abc', 'hey': 1, 'test': 'test', 'title':'Test record abc solr'})
+        self.app.update_storage('foo', 'bib_data', {'bibcode': 'foo', 'hey': 1, 'title':'Test record foo solr'})
         
         with mock.patch('adsmp.solr_updater.update_solr', return_value=[200]):
             self.app.index_solr([{'bibcode': 'abc'},
@@ -223,13 +223,13 @@ class TestAdsOrcidCelery(unittest.TestCase):
         now = adsputils.get_date()
         last_time = adsputils.get_date()
         for k in ['bib_data', 'nonbib_data', 'orcid_claims']:
-            self.app.update_storage('abc', k, {'foo': 'bar', 'hey': 1})
+            self.app.update_storage('abc', k, {'foo': 'bar', 'hey': 1, 'title':'Test record abc'})
             with self.app.session_scope() as session:
                 r = session.query(models.Records).filter_by(bibcode='abc').first()
                 self.assertTrue(r.id == 1)
-                self.assertTrue(r.scix_id == 'scix:0RW9-X19B-XHYY')
+                self.assertEqual(r.scix_id, 'scix:265Y-8X5N-YHJZ')
                 j = r.toJSON()
-                self.assertEqual(j[k], {'foo': 'bar', 'hey': 1})
+                self.assertEqual(j[k], {'foo': 'bar', 'hey': 1, 'title':'Test record abc'})
                 t = j[k + '_updated']
                 self.assertTrue(now < t)
                 self.assertTrue(last_time < j['updated'])
@@ -239,7 +239,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         with self.app.session_scope() as session:
             r = session.query(models.Records).filter_by(bibcode='abc').first()
             self.assertTrue(r.id == 1)
-            self.assertTrue(r.scix_id == 'scix:0RW9-X19B-XHYY')
+            self.assertEqual(r.scix_id, 'scix:265Y-8X5N-YHJZ')
             j = r.toJSON()
             self.assertEqual(j['fulltext'], {'body': 'foo bar'})
             t = j['fulltext_updated']
@@ -247,12 +247,12 @@ class TestAdsOrcidCelery(unittest.TestCase):
         
         r = self.app.get_record('abc')
         self.assertEqual(r['id'], 1)
-        self.assertEqual(r['scix_id'],'scix:0RW9-X19B-XHYY')
+        self.assertEqual(r['scix_id'],'scix:265Y-8X5N-YHJZ')
         self.assertEqual(r['processed'], None)
         
         r = self.app.get_record(['abc'])
         self.assertEqual(r[0]['id'], 1)
-        self.assertEqual(r[0]['scix_id'],'scix:0RW9-X19B-XHYY')
+        self.assertEqual(r[0]['scix_id'],'scix:265Y-8X5N-YHJZ')
         self.assertEqual(r[0]['processed'], None)
         
         r = self.app.get_record('abc', load_only=['id'])

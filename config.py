@@ -142,3 +142,12 @@ DOCTYPE_RANKING = {
     "techreport": 3,
     "misc": 8
 }
+
+SCIX_ID_GENERATION_FIELDS = [
+    "author_norm",
+    "doi",
+    "abstract",
+    "title",
+    "doctype",
+    "pub_raw"
+]
