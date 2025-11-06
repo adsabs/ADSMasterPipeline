@@ -4,5 +4,5 @@ httplib2==0.19.0
 portalocker==1.7.1
 psycopg2==2.8.6
 pyrabbit==1.1.0
-awscli==1.29.85
+awscli==1.27.60
 ScixPipelineUtils @ git+https://github.com/adsabs/SciXPipelineUtils.git@v0.5.2
