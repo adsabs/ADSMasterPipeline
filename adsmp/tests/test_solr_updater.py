@@ -367,7 +367,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "volume",
             ],
         )
-        self.assertEqual(x["scix_id"], "scix:42MM-89VE-90A0")
+        self.assertEqual(x["scix_id"], "scix:70FP-S952-V74A")
         self.assertEqual(round(x["doctype_boost"],3),0.857)
 
         self.app.update_storage(
@@ -386,7 +386,7 @@ class TestSolrUpdater(unittest.TestCase):
         )
         rec = self.app.get_record("bibcode")
         x = solr_updater.transform_json_record(rec)
-        self.assertEqual(x["scix_id"], "scix:42MM-89VE-90A0")
+        self.assertEqual(x["scix_id"], "scix:70FP-S952-V74A")
         self.assertEqual(round(x["doctype_boost"],3),0.857)
         self.assertEqual(round(x["astronomy_final_boost"],3), 0.514)
 
