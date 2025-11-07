@@ -18,6 +18,7 @@ import math
 from collections import defaultdict
 import pdb
 from sqlalchemy.orm import load_only
+import json
 from celery.exceptions import Retry
 
 
@@ -42,6 +43,7 @@ app.conf.CELERY_QUEUES = (
     Queue('update-sitemap-files', app.exchange, routing_key='update-sitemap-files'),
     Queue('update-scixid', app.exchange, routing_key='update-scixid'),
     Queue('boost-request', app.exchange, routing_key='boost-request'),
+    Queue('boost-request-batch', app.exchange, routing_key='boost-request-batch'),
 )
 
 
@@ -1113,12 +1115,30 @@ def task_boost_request(bibcodes):
         bibcodes = [bibcodes]
         
     for bibcode in bibcodes:
+        logger.info('Processing boost request for bibcode: {}'.format(bibcode))
         result = app.generate_boost_request_message(bibcode)
     
     logger.info('Boost requests for %s bibcode(s) sent to boost pipeline', len(bibcodes))
     
     return result
 
+@app.task(queue='boost-request-batch')
+def task_boost_request_batch(bibcode_list, bib_data_list, metrics_list, classifications_list, scix_ids_list):
+    """Process boost requests for a batch of records
+    
+    @param bib_data: dictionary - the bib_data section of the record
+    @param metrics: dictionary - the metrics section of the record
+    @param classifications: list - the classifications section of the record
+    @param scix_ids: list - the scix_ids section of the record
+    """
+
+    logger.info('Processing boost request for batch of records')
+    for (bibcode, bib_data, met, cl, scix_id) in zip(bibcode_list, bib_data_list, metrics_list, classifications_list, scix_ids_list):
+        logger.info('Processing boost request for record: {}'.format(bibcode))
+        app.generate_boost_request_message_batch(bibcode, bib_data, met, cl, scix_id)
+    
+    logger.info('Boost requests for %s records sent to boost pipeline', len(bibcode_list))
+    return True
 
 if __name__ == '__main__':
     app.start()
