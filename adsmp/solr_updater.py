@@ -26,6 +26,14 @@ def extract_data_pipeline(data, solrdoc):
     reader = data.get("readers", [])
     read_count = len(reader)
 
+    reference = data.get("reference", [])
+    reference_count = data.get("reference_count", len(reference))
+
+    credit = data.get("credit", [])
+    credit_count = data.get("credit_count", len(credit))
+    mention = data.get("mention", [])
+    mention_count = data.get("mention_count", len(mention))
+
     grant = []
     grant_facet_hier = []
     for x in data.get("grants", []):
@@ -114,7 +122,8 @@ def extract_data_pipeline(data, solrdoc):
         read_count=read_count,
         cite_read_boost=data.get("boost", 0.0),
         classic_factor=data.get("norm_cites", 0.0),
-        reference=data.get("reference", []),
+        reference=reference,
+        reference_count=reference_count,
         data=data.get("data", []),
         data_facet=[x.split(":")[0] for x in data.get("data", [])],
         esources=data.get("esource", []),
@@ -136,6 +145,10 @@ def extract_data_pipeline(data, solrdoc):
         ned_object_facet_hier=ned_object_facet_hier,
         citation_count=data.get("citation_count", 0),
         citation_count_norm=data.get("citation_count_norm", 0),
+        credit=credit,
+        credit_count=credit_count,
+        mention=mention,
+        mention_count=mention_count,
     )
     if data.get("links_data", None):
         d["links_data"] = data["links_data"]
@@ -161,6 +174,53 @@ def extract_augments_pipeline(db_augments, solrdoc):
         "aff_id": db_augments.get("aff_id", None),
         "institution": db_augments.get("institution", None),
     }
+
+def extract_classifications_pipeline(db_classifications, solrdoc):
+    """retrieve expected classifier collections
+
+    classifications is a solr virtual field so it should never be set"""
+    if db_classifications is None or len(db_classifications) == 0:
+        return {"database" : solrdoc.get("database", None)}
+
+    # Append classifier results to classic collections
+    return {
+        "database" : list(set(db_classifications + solrdoc.get("database", [])))
+    }
+
+
+def extract_boost_pipeline(db_boost_factors, solrdoc):
+    """retrieve expected boost factors from Boost Pipeline database
+    
+    boost_factors is retrieved from the Boost Pipeline database and processed here"""
+    if db_boost_factors is None or len(db_boost_factors) == 0:
+        return {}
+    
+    # Extract boost factors from the Boost Pipeline data
+    boost_data = {}
+    
+    if isinstance(db_boost_factors, str):
+        try:
+            db_boost_factors = json.loads(db_boost_factors)
+        except Exception:
+            logger.warning(f"Failed to parse boost_factors JSON: {db_boost_factors}")
+            return {}
+    
+    if isinstance(db_boost_factors, dict):
+        # Extract individual boost factors
+        boost_data.update({
+            'doctype_boost': db_boost_factors.get('doctype_boost'),
+            'refereed_boost': db_boost_factors.get('refereed_boost'),
+            'recency_boost': db_boost_factors.get('recency_boost'),
+            'boost_factor': db_boost_factors.get('boost_factor'),
+        })
+        
+        # Extract discipline-specific final boosts
+        for discipline in ['astronomy', 'physics', 'earth_science', 'planetary_science', 'heliophysics', 'general']:
+            final_boost_key = f'{discipline}_final_boost'
+            if final_boost_key in db_boost_factors:
+                boost_data[final_boost_key] = db_boost_factors[final_boost_key]
+        
+    return boost_data
 
 
 def extract_fulltext(data, solrdoc):
@@ -311,6 +371,8 @@ DB_COLUMN_DESTINATIONS = [
     ("fulltext", extract_fulltext),
     ("#timestamps", get_timestamps),  # use 'id' to be always called
     ("augments", extract_augments_pipeline),  # over aff field, adds aff_*
+    ("classifications", extract_classifications_pipeline), # overwrites databse field in bib_data 
+    ("boost_factors", extract_boost_pipeline),  # adds boost factors from Boost Pipeline
 ]
 
 
@@ -447,32 +509,16 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
-
+    boost_columns = ['doctype_boost', 'recency_boost', 'boost_factor', 'astronomy_final_boost', 'physics_final_boost', \
+        'earth_science_final_boost', 'planetary_science_final_boost', 'heliophysics_final_boost', 'general_final_boost']
+    
+    for column in boost_columns:
+        if column not in out.keys():
+            out[column] = 1
+    
     out["scix_id"] = None
     if db_record.get("scix_id", None):
         out["scix_id"] = db_record.get("scix_id")
-
-    # override temporal priority for bibgroup and bibgroup_facet, prefer nonbib
-    for key in ("bibgroup", "bibgroup_facet"):
-        if db_record.get("nonbib_data", {}).get(key):
-            out[key] = db_record["nonbib_data"][key]
-
-
-    # Compute doctype scores on the fly
-    out["doctype_boost"] = None
-
-    if config.get("DOCTYPE_RANKING", False):
-        doctype_rank = config.get("DOCTYPE_RANKING") 
-        unique_ranks = sorted(set(doctype_rank.values()))
-
-        # Map ranks to scores evenly spaced between 0 and 1 (invert: lowest rank gets the highest score)
-        rank_to_score = {rank: 1 - ( i / (len(unique_ranks) - 1)) for i, rank in enumerate(unique_ranks)}
-
-        # Assign scores to each rank
-        doctype_scores = {doctype: rank_to_score[rank] for doctype, rank in doctype_rank.items()}
-
-        if "doctype" in out.keys():
-            out["doctype_boost"] = doctype_scores.get(out["doctype"], None)
 
     if config.get("ENABLE_HAS", False):
         # Read-in names of fields to check for solr "has:" field

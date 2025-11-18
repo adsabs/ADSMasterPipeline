@@ -1,15 +1,18 @@
 from __future__ import absolute_import, unicode_literals
 from past.builtins import basestring
+import os
+from itertools import chain, islice
 from . import exceptions
-from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records
-from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord
+from adsmp.models import ChangeLog, IdentifierMapping, MetricsBase, MetricsModel, Records, SitemapInfo
+from adsmsg import OrcidClaims, DenormalizedRecord, FulltextUpdate, MetricsRecord, NonBibRecord, NonBibRecordList, MetricsRecordList, AugmentAffiliationResponseRecord, AugmentAffiliationRequestRecord, ClassifyRequestRecord, ClassifyRequestRecordList, ClassifyResponseRecord, ClassifyResponseRecordList, BoostRequestRecord, BoostRequestRecordList, BoostResponseRecord, BoostResponseRecordList,Status as AdsMsgStatus
 from adsmsg.msg import Msg
 from adsputils import ADSCelery, create_engine, sessionmaker, scoped_session, contextmanager
 from sqlalchemy.orm import load_only as _load_only
-from sqlalchemy import Table, bindparam
+from sqlalchemy import Table, bindparam, func
 import adsputils
 import json
 from adsmp import solr_updater
+from adsmp import templates
 from adsputils import serializer
 from sqlalchemy import exc
 from multiprocessing.util import register_after_fork
@@ -19,6 +22,8 @@ from copy import deepcopy
 import sys
 from sqlalchemy.dialects.postgresql import insert
 import re
+import csv
+from datetime import timedelta
 from SciXPipelineUtils import scix_id
 
 
@@ -73,6 +78,47 @@ class ADSMasterPipelineCelery(ADSCelery):
                 'rn_citation_data': getattr(self._metrics_table_upsert.excluded, 'rn_citation_data')}
             self._metrics_table_upsert = self._metrics_table_upsert.on_conflict_do_update(index_elements=['bibcode'], set_=update_columns)
 
+    @property
+    def sitemap_dir(self):
+        """Get the sitemap directory from configuration"""
+        return self.conf.get('SITEMAP_DIR', '/app/logs/sitemap/')
+
+    def flag_one_row_for_filename(self, session, filename):
+        """Flag exactly one sitemap row for the given filename if none already flagged.
+        Returns number of rows flagged (0 or 1)."""
+        if not filename:
+            return 0
+
+        already = (
+            session.query(SitemapInfo.id)
+            .filter(
+                SitemapInfo.sitemap_filename == filename,
+                SitemapInfo.update_flag.is_(True),
+            )
+            .limit(1)
+            .scalar()
+        )
+        if already:
+            return 0
+
+        row_id = (
+            session.query(SitemapInfo.id)
+            .filter(
+                SitemapInfo.sitemap_filename == filename,
+                SitemapInfo.update_flag.is_(False),
+            )
+            .order_by(SitemapInfo.id.asc())
+            .limit(1)
+            .scalar()
+        )
+        if row_id is None:
+            return 0
+
+        return session.query(SitemapInfo).filter(
+            SitemapInfo.id == row_id,
+            SitemapInfo.update_flag.is_(False),
+        ).update({ 'update_flag': True }, synchronize_session=False)
+
     def update_storage(self, bibcode, type, payload):
         """Update the document in the database, every time
         empty the solr/metrics processed timestamps.
@@ -82,66 +128,123 @@ class ADSMasterPipelineCelery(ADSCelery):
             payload = json.dumps(payload)
 
         with self.session_scope() as session:
-            r = session.query(Records).filter_by(bibcode=bibcode).first()
-            if r is None:
-                r = Records(bibcode=bibcode)
-                session.add(r)
+            record = session.query(Records).filter_by(bibcode=bibcode).first()
+            if record is None:
+                record = Records(bibcode=bibcode)
+                session.add(record)
             now = adsputils.get_date()
             oldval = None
             if type == 'metadata' or type == 'bib_data':
-                oldval = r.bib_data
-                r.bib_data = payload
-                r.bib_data_updated = now
+                oldval = record.bib_data
+                record.bib_data = payload
+                record.bib_data_updated = now
             elif type == 'nonbib_data':
-                oldval = r.nonbib_data
-                r.nonbib_data = payload
-                r.nonbib_data_updated = now
+                oldval = record.nonbib_data
+                record.nonbib_data = payload
+                record.nonbib_data_updated = now
             elif type == 'orcid_claims':
-                oldval = r.orcid_claims
-                r.orcid_claims = payload
-                r.orcid_claims_updated = now
+                oldval = record.orcid_claims
+                record.orcid_claims = payload
+                record.orcid_claims_updated = now
             elif type == 'fulltext':
                 oldval = 'not-stored'
-                r.fulltext = payload
-                r.fulltext_updated = now
+                record.fulltext = payload
+                record.fulltext_updated = now
             elif type == 'metrics':
                 oldval = 'not-stored'
-                r.metrics = payload
-                r.metrics_updated = now
+                record.metrics = payload
+                record.metrics_updated = now
             elif type == 'augment':
                 # payload contains new value for affilation fields
                 # r.augments holds a dict, save it in database
                 oldval = 'not-stored'
-                r.augments = payload
-                r.augments_updated = now
+                record.augments = payload
+                record.augments_updated = now
+            elif type == 'classify':
+                # payload contains new value for collections field
+                # r.augments holds a list, save it in database
+                oldval = 'not-stored'
+                record.classifications = payload
+                record.classifications_updated = now
+            elif type == 'boost':
+                # payload contains new value for boost fields
+                # r.augments holds a dict, save it in database
+                oldval = 'not-stored'
+                record.boost_factors = payload
+                record.boost_factors_updated = now
             else:
                 raise Exception('Unknown type: %s' % type)
             session.add(ChangeLog(key=bibcode, type=type, oldvalue=oldval))
-            r.updated = now
-            out = r.toJSON()
+            record.updated = now
+            out = record.toJSON()                      
             try:
                 session.flush()
-                if not r.scix_id:
-                    r.scix_id = "scix:" + str(self.generate_scix_id(r.id))
-                    out = r.toJSON()
+                if not record.scix_id and record.bib_data:
+                    record.scix_id = "scix:" + str(self.generate_scix_id(record.bib_data))
+                    out = record.toJSON()
                 session.commit()
+
+                # Send payload to Boost pipeline
+                if type != 'boost' and not self._config.get('TESTING_MODE', False):
+                    try:
+                        self.generate_boost_request_message(bibcode)
+                    except Exception as e:
+                        self.logger.exception('Error generating boost request message for bibcode %s: %s', bibcode, e)
+
                 return out
             except exc.IntegrityError:
                 self.logger.exception('error in app.update_storage while updating database for bibcode {}, type {}'.format(bibcode, type))
                 session.rollback()
                 raise
 
-    def generate_scix_id(self, number):
-        return scix_id.encode(number) 
+    def generate_scix_id(self, bib_data):
+        if self._config.get('SCIX_ID_GENERATION_FIELDS', None):
+            user_fields = self._config.get('SCIX_ID_GENERATION_FIELDS')
+        else:
+            user_fields = None
+        return scix_id.generate_scix_id(bib_data, user_fields = user_fields) 
 
     def delete_by_bibcode(self, bibcode):
         with self.session_scope() as session:
             r = session.query(Records).filter_by(bibcode=bibcode).first()
+            # Get affected sitemap files BEFORE deletion so we can mark them for regeneration
+            affected_files = session.query(SitemapInfo.sitemap_filename)\
+                               .filter_by(bibcode=bibcode)\
+                               .distinct().all()
+            
             if r is not None:
+                
+                # First delete any associated SitemapInfo records
+                session.query(SitemapInfo).filter_by(bibcode=bibcode).delete(synchronize_session=False)
+                # Then delete the Records entry and create ChangeLog
                 session.add(ChangeLog(key='bibcode:%s' % bibcode, type='deleted', oldvalue=serializer.dumps(r.toJSON())))
                 session.delete(r)
+                
+                # Mark affected sitemap files for regeneration synchronously (one row per file)
+                for (filename,) in sorted({f for f in affected_files if f}):
+                    if self.flag_one_row_for_filename(session, filename):
+                        session.commit()
+                
                 session.commit()
                 return True
+            
+            # Handle orphaned SitemapInfo records (if Records was already deleted)
+            s = session.query(SitemapInfo).filter_by(bibcode=bibcode).first()
+            if s is not None:
+                # Get the filename before deleting the orphaned record
+                orphaned_filename = s.sitemap_filename
+                session.delete(s)
+                
+                # Mark the file for regeneration if it has a filename (synchronously)
+                if orphaned_filename:
+                    if self.flag_one_row_for_filename(session, orphaned_filename):
+                        session.commit()
+                
+                session.commit()
+                return True
+            
+            # Neither Records nor SitemapInfo found
+            return None
 
     def rename_bibcode(self, old_bibcode, new_bibcode):
         assert old_bibcode and new_bibcode
@@ -222,7 +325,10 @@ class ADSMasterPipelineCelery(ADSCelery):
             return 'metrics_records'
         elif isinstance(msg, AugmentAffiliationResponseRecord):
             return 'augment'
-
+        elif isinstance(msg, ClassifyResponseRecord):
+            return 'classify'
+        elif isinstance(msg, BoostResponseRecord):
+            return 'boost'
         else:
             raise exceptions.IgnorableException('Unkwnown type {0} submitted for update'.format(repr(msg)))
 
@@ -515,6 +621,227 @@ class ADSMasterPipelineCelery(ADSCelery):
             self.logger.debug('sent augment affiliation request for bibcode {}'.format(bibcode))
         else:
             self.logger.debug('request_aff_augment called but bibcode {} has no aff data'.format(bibcode))
+
+    def prepare_bibcode(self, bibcode):
+        """prepare data for classifier pipeline
+        
+        Parameters
+        ----------
+        bibcode = reference ID for record (Needs to include SciXID)
+
+        """
+        rec = self.get_record(bibcode)
+        if rec is None:
+            self.logger.warning('request_classifier called but no data at all for bibcode {}'.format(bibcode))
+            return
+        bib_data = rec.get('bib_data', None)
+        if bib_data is None:
+            self.logger.warning('request_classifier called but no bib data for bibcode {}'.format(bibcode))
+            return
+        title = bib_data.get('title', '')
+        abstract = bib_data.get('abstract', '')
+        data = {
+            'bibcode': bibcode,
+            'title': title,
+            'abstract': abstract,
+        }
+        return data
+
+    def request_classify(self, bibcode=None,scix_id = None, filename=None,mode='auto', batch_size=500, data=None, check_boolean=False, operation_step=None):
+        """ send classifier request for bibcode to classifier pipeline
+
+        set data parameter to provide test data
+
+        Parameters
+        ----------
+        bibcode = reference ID for record (Needs to include SciXID)
+        scix_id = reference ID for record
+        filename : filename of input file with list of records to classify 
+        mode : 'auto' (default) assumes single record input from master, 'manual' assumes multiple records input at command line
+        batch_size : size of batch for large input files
+        check_boolean : Used for testing - writes the message to file
+        operation_step: string - defines mode of operation: classify, classify_verify, or verify
+        
+        """
+        self.logger.info('request_classify called with bibcode={}, filename={}, mode={}, batch_size={}, data={}, validate={}'.format(bibcode, filename, mode, batch_size, data, check_boolean))
+
+        if not self._config.get('OUTPUT_TASKNAME_CLASSIFIER'):
+            self.logger.warning('request_classifier called but no classifier taskname in config')
+            return
+        if not self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER'):
+            self.logger.warning('request_classifier called but no classifier broker in config')
+            return
+
+        if bibcode is not None and mode == 'auto':
+            if data is None:
+                data = self.prepare_bibcode(bibcode)
+            if data and data.get('title'):
+                data['operation_step'] = operation_step
+                self.logger.DEBUG(f'Converting {data} to protobuf')
+                message = ClassifyRequestRecordList()
+                entry = message.classify_requests.add()
+                entry.bibcode = data.get('bibcode')
+                title = data.get('title')
+                if isinstance(title, (list,tuple)):
+                    title = title[0]
+                entry.title = title
+                entry.abstract = data.get('abstract')
+                entry.operation_step = data.get('operation_step')
+                output_taskname=self._config.get('OUTPUT_TASKNAME_CLASSIFIER')
+                output_broker=self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER')
+                self.logger.DEBUG('Sending message for batch - bibcode only input')
+                self.logger.DEBUG('sending message {}'.format(message))
+                self.forward_message(message, pipeline='classifier')
+                self.logger.debug('sent classifier request for bibcode {}'.format(bibcode))
+            else:
+                self.logger.debug('request_classifier called but bibcode {} has no title data'.format(bibcode))
+        if filename is not None and mode == 'manual':
+            batch_idx = 0
+            batch_list = []
+            self.logger.info('request_classifier called with filename {}'.format(filename))
+            with open(filename, 'r') as f:
+                reader = csv.DictReader(f)
+                bibcodes =  [row for row in reader]
+            while batch_idx < len(bibcodes):
+                bibcodes_batch = bibcodes[batch_idx:batch_idx+batch_size]
+                for record in bibcodes_batch:
+                    if record.get('title') or record.get('abstract'):
+                        data = record
+                    else:
+                        data = self.prepare_bibcode(record['bibcode'])
+                    if data and data.get('title'):
+                        batch_list.append(data)
+                if len(batch_list) > 0:
+                    message = ClassifyRequestRecordList() 
+                    for item in batch_list:
+                        entry = message.classify_requests.add()
+                        entry.bibcode = item.get('bibcode')
+                        title = item.get('title')
+                        if isinstance(title, (list, tuple)):
+                            title = title[0]
+                        entry.title = title
+                        entry.abstract = item.get('abstract')
+                        entry.operation_step = operation_step
+                        entry.output_path = filename.split('.')[0]
+                    output_taskname=self._config.get('OUTPUT_TASKNAME_CLASSIFIER')
+                    output_broker=self._config.get('OUTPUT_CELERY_BROKER_CLASSIFIER')
+                    if check_boolean is True:
+                        # Save message to file 
+                        # with open('classifier_request.json', 'w') as f:
+                        #     f.write(str(message))
+                        json_message = MessageToJson(message)
+                        with open('classifier_request.json', 'w') as f:
+                            f.write(json_message)
+                    else:
+                        self.logger.info('Sending message for batch')
+                        self.logger.info('sending message {}'.format(message))
+                        self.forward_message(message, pipeline='classifier')
+                        self.logger.debug('sent classifier request for batch {}'.format(batch_idx))
+
+                batch_idx += batch_size
+                batch_list = []
+
+    def _populate_boost_request_from_record(self, rec, metrics, classifications, 
+                                            run_id=None, output_path=None, request_type=None):
+        """
+        Returns a dictionary with bib_data, metrics, and classifications to Boost Pipeline.
+        """
+        bib_data = rec.get('bib_data', '')
+
+        # Create the new nested message structure that Boost Pipeline expects
+        message = {
+            # Root level fields
+            'bibcode': rec.get('bibcode', ''),
+            'scix_id': rec.get('scix_id', ''),
+            'status': 'updated',
+
+            # bib_data section - primary source for paper metadata
+            'bib_data': bib_data.decode('utf-8') if isinstance(bib_data, bytes) else bib_data,            
+            # metrics section - primary source for refereed status and citations
+            'metrics': metrics.decode('utf-8') if isinstance(metrics, bytes) else metrics,
+            
+            # classifications section - primary source for collections
+            'classifications': list(classifications),
+            
+            'collections': list(''),
+            'run_id': 0,
+            'output_path': ''
+        }
+        
+        return message
+
+    def _get_info_for_boost_entry(self, bibcode):
+        rec = self.get_record(bibcode) or {}
+        metrics = {}
+        try:
+            metrics = self.get_metrics(bibcode) or {}
+        except Exception:
+            pass
+
+        collections = []
+        
+        # Extract collections from classifications (primary source)
+        classifications = rec.get('classifications', list(''))
+                
+        entry = None
+        if rec:
+            entry = (rec, metrics, collections)
+        return entry
+
+    def generate_boost_request_message(self, bibcode, run_id=None, output_path=None):
+        """Build and send boost request message to Boost Pipeline.
+        
+        Parameters
+        ----------
+        bibcode : str
+            Single bibcode to send.
+        run_id : int, optional
+            Optional job/run identifier added to each entry.
+        output_path : str, optional
+            Optional output path hint added to each entry.
+
+        Returns
+        -------
+        bool
+            True if message was sent successfully, False otherwise.
+        """
+
+        # Check if bibcode is provided
+        if not bibcode:
+            self.logger.warning('generate_boost_request_message called without bibcode')
+            return False
+        
+        try:
+            # Get record data for this bibcode
+            (rec, metrics, classifications) = self._get_info_for_boost_entry(bibcode)
+            if not rec:
+                self.logger.debug('Skipping bibcode with no data: %s', bibcode)
+                return False
+                
+            # Create message for this record
+            message = self._populate_boost_request_from_record(rec, metrics, classifications, 
+                                                            run_id, output_path, None)
+                
+        except Exception as e:
+            self.logger.error('Error retrieving record data for bibcode %s: %s', bibcode, e)
+            self.logger.error('Message content: %s', message)
+            raise
+
+        output_taskname=self._config.get('OUTPUT_TASKNAME_BOOST')
+        output_broker=self._config.get('OUTPUT_CELERY_BROKER_BOOST')
+        self.logger.debug('output_taskname: {}'.format(output_taskname))
+        self.logger.debug('output_broker: {}'.format(output_broker))
+        self.logger.debug('sending message {}'.format(message))
+
+        # Forward message to Boost Pipeline - Celery workers will handle the rest
+        try: 
+            self.forward_message(message, pipeline='boost')
+            self.logger.info('Sent boost request for bibcode %s to Boost Pipeline', bibcode)
+            return True
+            
+        except Exception as e:
+            self.logger.exception('Error sending boost request for bibcode %s: %s', bibcode, e)
+            return False
 
     def generate_links_for_resolver(self, record):
         """use nonbib or bib elements of database record and return links for resolver and checksum"""
@@ -868,3 +1195,429 @@ class ADSMasterPipelineCelery(ADSCelery):
                     
             return list(identifiers)
                 
+
+    def should_include_in_sitemap(self, record):
+        """
+        Determine if a record should be included in the sitemap based on SOLR processing status.
+        Logs the reasoning for inclusion/exclusion decisions.
+        
+        Include record in sitemap if:
+        1. Has bib_data (will be processed by SOLR)
+        2. SOLR processing succeeded (not solr-failed or retrying)
+        3. If processed, processing isn't too stale
+        
+        Args:
+            record: Dictionary with record data including bib_data, status, timestamps
+            
+        Returns:
+            bool: True if record should be included in sitemap, False otherwise
+        """
+        
+        
+        # Extract values from record dictionary
+        bibcode = record.get('bibcode', None)
+        bib_data = record.get('bib_data', None)
+        bib_data_updated = record.get('bib_data_updated')
+        solr_processed = record.get('solr_processed') 
+        status = record.get('status')
+        
+        # Must have bibliographic data
+        if not bib_data or not bibcode or (isinstance(bib_data, str) and not bib_data.strip()):
+            self.logger.debug('Excluding %s from sitemap: No bibcode or bib_data', bibcode)
+            return False
+        
+         # Exclude if SOLR failed or if record is being retried (previously failed)
+        if status in ['solr-failed', 'retrying']:
+            self.logger.warning('Excluding %s from sitemap: SOLR failed or retrying (status: %s)', bibcode, status)
+            return False
+        
+        # If never processed by SOLR, include it (will be processed soon)
+        if not solr_processed:
+            self.logger.debug('Including %s in sitemap: Has bib_data, pending SOLR processing', bibcode)
+            return True
+    
+        
+        # If we have both timestamps, check staleness (but still include in sitemap)
+        if bib_data_updated and solr_processed:
+            processing_lag = bib_data_updated - solr_processed
+            if processing_lag > timedelta(days=5):
+                self.logger.debug('SOLR processing might be stale for %s by %s (bib_data_updated: %s, solr_processed: %s) - keeping in sitemap',
+                            bibcode, processing_lag, bib_data_updated, solr_processed)
+                return True
+        
+        # All good - include in sitemap
+        self.logger.debug('Including %s in sitemap: Valid (status: %s, solr_processed: %s)', bibcode, status, solr_processed)
+        return True
+    
+    def get_records_bulk(self, bibcodes, session, load_only=None):
+        """Get multiple records efficiently using provided session.
+        
+        :param bibcodes: list of bibcodes
+        :param session: database session to use
+        :param load_only: list of fields to load
+        :return: dict mapping bibcode to record data
+        """
+        if not bibcodes:
+            return {}
+        
+        query = session.query(Records).filter(Records.bibcode.in_(bibcodes))
+        if load_only:
+            query = query.options(_load_only(*load_only))
+        
+        records = query.all()
+        
+        # Convert to dictionary for fast lookup
+        records_dict = {}
+        for record in records:
+            record_data = {}
+            for field in (load_only or ['id', 'bibcode', 'bib_data', 'bib_data_updated', 'solr_processed', 'status']):
+                record_data[field] = getattr(record, field, None)
+            records_dict[record.bibcode] = record_data
+        
+        return records_dict
+    
+    
+    def get_sitemap_info_bulk(self, bibcodes, session):
+        """Get multiple sitemap infos efficiently using provided session.
+        
+        :param bibcodes: list of bibcodes
+        :param session: database session to use
+        :return: dict mapping bibcode to sitemap info data
+        """
+        if not bibcodes:
+            return {}
+        
+        sitemap_infos = session.query(SitemapInfo).filter(SitemapInfo.bibcode.in_(bibcodes)).all()
+        return {info.bibcode: info.toJSON() for info in sitemap_infos}
+    
+    
+    def get_current_sitemap_state(self, session):
+        """Get current sitemap state using provided session.
+        
+        Finds the last file being filled (highest index number).
+        If that file is full (>= MAX_RECORDS_PER_SITEMAP), returns state for next file.
+        
+        :param session: Database session to use
+        :return: dict with current filename, count, and index
+        """
+        max_records = self.conf.get('MAX_RECORDS_PER_SITEMAP', 50000)
+        
+        # Get all files with their counts
+        results = session.query(
+            SitemapInfo.sitemap_filename,
+            func.count(SitemapInfo.id).label('record_count')
+        ).filter(
+            SitemapInfo.sitemap_filename.isnot(None)
+        ).group_by(
+            SitemapInfo.sitemap_filename
+        ).all()
+        
+        if results:
+            # Sort by numeric index (not alphabetically)
+            def get_file_index(result):
+                return int(result.sitemap_filename.split('_bib_')[1].split('.')[0])
+            
+            sorted_results = sorted(results, key=get_file_index)
+            last_result = sorted_results[-1]
+            
+            filename = last_result.sitemap_filename
+            count = last_result.record_count
+            index = get_file_index(last_result)
+            
+            # If last file is full, prepare for next file
+            if count >= max_records:
+                return {
+                    'filename': f'sitemap_bib_{index + 1}.xml',
+                    'count': 0,
+                    'index': index + 1
+                }
+            
+            # Last file has room, use it
+            return {
+                'filename': filename,
+                'count': count,
+                'index': index
+            }
+        
+        # No files exist yet, start with file 1
+        return {
+            'filename': 'sitemap_bib_1.xml',
+            'count': 0,
+            'index': 1
+        }
+    
+    def _process_sitemap_batch(self, bibcodes, action, session, sitemap_state):
+        """Process a batch of bibcodes with provided session and state.
+        
+        :param bibcodes: list of bibcodes to process
+        :param action: 'add' or 'force-update'
+        :param session: database session to use
+        :param sitemap_state: current sitemap state dict
+        :return: tuple (successful_count, failed_count, sitemap_records, updated_state)
+        """
+        fields = ['id', 'bibcode', 'bib_data', 'bib_data_updated', 'solr_processed', 'status']
+        
+        # Get all data for this batch in bulk using the provided session
+        records_data = self.get_records_bulk(bibcodes, session, load_only=fields)
+        sitemap_infos = self.get_sitemap_info_bulk(bibcodes, session)
+        
+        # Use provided sitemap state
+        current_filename = sitemap_state['filename']
+        current_count = sitemap_state['count']
+        current_index = sitemap_state['index']
+        max_records = self.conf.get('MAX_RECORDS_PER_SITEMAP', 50000)
+        
+        # Process records
+        new_records = []
+        update_records = []
+        sitemap_records = []
+        successful_count = 0
+        failed_count = 0
+        
+        for bibcode in bibcodes:
+            try:
+                record = records_data.get(bibcode)
+                if record is None:
+                    self.logger.error('The bibcode %s doesn\'t exist!', bibcode)
+                    failed_count += 1
+                    continue
+                                
+                # Check if record should be included in sitemap based on SOLR status 
+                if not self.should_include_in_sitemap(record):
+                    self.logger.debug('Skipping %s: does not meet sitemap inclusion criteria', bibcode)
+                    failed_count += 1
+                    continue
+                
+                sitemap_info = sitemap_infos.get(bibcode)
+                
+                # Create sitemap record data structure
+                sitemap_record = {
+                    'record_id': record.get('id'),
+                    'bibcode': record.get('bibcode'),
+                    'bib_data_updated': record.get('bib_data_updated', None),
+                    'filename_lastmoddate': None,
+                    'sitemap_filename': None,
+                    'scix_id': None,
+                    'update_flag': False
+                }
+                
+                if sitemap_info is None:
+                    # New sitemap record - assign filename
+                    if current_count >= max_records:
+                        current_index += 1
+                        current_filename = f'sitemap_bib_{current_index}.xml'
+                        current_count = 0
+                    
+                    sitemap_record['sitemap_filename'] = current_filename
+                    sitemap_record['update_flag'] = True
+                    # filename_lastmoddate stays None for new records until files are generated
+                    new_records.append(sitemap_record)
+                    sitemap_records.append((sitemap_record['record_id'], sitemap_record['bibcode']))
+                    current_count += 1
+                    
+                else:
+                    # Existing sitemap record - update it
+                    sitemap_record['filename_lastmoddate'] = sitemap_info.get('filename_lastmoddate', None)
+                    sitemap_record['sitemap_filename'] = sitemap_info.get('sitemap_filename', None)
+                    
+                    bib_data_updated = sitemap_record.get('bib_data_updated', None)
+                    file_modified = sitemap_record.get('filename_lastmoddate', None)
+                    
+                    # Determine if update_flag should be True
+                    if action == 'force-update':
+                        sitemap_record['update_flag'] = True
+                        # Update filename_lastmoddate to bib_data_updated when forcing update
+                        sitemap_record['filename_lastmoddate'] = bib_data_updated
+                    elif action == 'add':
+                        # Sitemap file has never been generated OR data updated since last generation
+                        if file_modified is None or (file_modified and bib_data_updated and bib_data_updated > file_modified):
+                            sitemap_record['update_flag'] = True
+                            # Update filename_lastmoddate to bib_data_updated when updating
+                            sitemap_record['filename_lastmoddate'] = bib_data_updated
+                    
+                    update_records.append((sitemap_record, sitemap_info))
+                    sitemap_records.append((sitemap_record['record_id'], sitemap_record['bibcode']))
+                
+                successful_count += 1
+                self.logger.debug('Successfully processed sitemap for bibcode: %s', bibcode)
+                
+            except Exception as e:
+                failed_count += 1
+                self.logger.error('Failed to process sitemap for bibcode %s: %s', bibcode, str(e))
+                continue
+        
+        # Bulk database operations using the provided session
+        try:
+            if new_records:
+                self.bulk_insert_sitemap_records(new_records, session)
+            if update_records:
+                self.bulk_update_sitemap_records(update_records, session)
+        except Exception as e:
+            self.logger.error('Failed to perform bulk database operations: %s', str(e))
+            raise
+        
+        # Return updated state for next batch
+        updated_state = {
+            'filename': current_filename,
+            'count': current_count,
+            'index': current_index
+        }
+        
+        # Return counts of new vs updated records
+        batch_stats = {
+            'successful': successful_count,
+            'failed': failed_count,
+            'new_records': len(new_records),
+            'updated_records': len(update_records),
+            'sitemap_records': sitemap_records
+        }
+        
+        return batch_stats, updated_state
+    
+    
+    def bulk_insert_sitemap_records(self, sitemap_records, session):
+        """Bulk insert sitemap records using provided session.
+        
+        :param sitemap_records: list of sitemap record dictionaries
+        :param session: database session to use
+        """
+        if not sitemap_records:
+            return
+        
+        session.bulk_insert_mappings(SitemapInfo, sitemap_records)
+    
+    def bulk_update_sitemap_records(self, update_records, session):
+        """Bulk update sitemap records using provided session.
+        
+        :param update_records: list of tuples (sitemap_record, sitemap_info)
+        :param session: database session to use
+        """
+        if not update_records:
+            return
+            
+        # Prepare bulk update data
+        update_mappings = []
+        for sitemap_record, sitemap_info in update_records:
+            # Use the primary key 'id' from sitemap_info for bulk update
+            update_data = {'id': sitemap_info['id']}
+            
+            # Add fields that need updating
+            for field in ['bib_data_updated', 'sitemap_filename', 'filename_lastmoddate']:
+                if field in sitemap_record:
+                    update_data[field] = sitemap_record[field]
+            
+            # Set update_flag from sitemap_record (will be True for records needing regeneration)
+            update_data['update_flag'] = sitemap_record.get('update_flag', False)
+            update_mappings.append(update_data)
+        
+        session.bulk_update_mappings(SitemapInfo, update_mappings)
+
+        
+    def delete_contents(self, table):
+        """Delete all contents of the table
+
+        :param table: string, name of the table
+        """
+        with self.session_scope() as session:
+            session.query(table).delete()
+            session.commit()
+    
+    def backup_sitemap_files(self, directory):
+        """Backup the sitemap files to the given directory
+
+        :param directory: string, directory to backup the sitemap files
+        """
+
+        # move dir to /app/tmp 
+        date = adsputils.get_date()
+        tmpdir = '/app/logs/tmp/sitemap_{}_{}_{}-{}/'.format(date.year, date.month, date.day, date.time())
+        os.system('mkdir -p {}'.format(tmpdir))
+        os.system('mv {}/* {}/'.format(directory, tmpdir))
+        return
+    
+    def _execute_remove_action(self, session, bibcodes_to_remove):
+        """
+        Efficiently remove bibcodes from sitemaps using optimized bulk operations.
+        
+        Args:
+            session: Database session
+            bibcodes_to_remove: List of bibcodes to remove from sitemaps
+            
+        Returns:
+            tuple: (removed_count: int, files_to_delete: set, files_to_update: set)
+        """
+        if not bibcodes_to_remove:
+            return 0, set(), set()
+
+        # Get affected files before deletion
+        file_counts_before = dict(
+            session.query(SitemapInfo.sitemap_filename, func.count(SitemapInfo.id))
+            .filter(
+                SitemapInfo.bibcode.in_(bibcodes_to_remove),
+                SitemapInfo.sitemap_filename.isnot(None)
+            )
+            .group_by(SitemapInfo.sitemap_filename)
+            .all()
+        )
+        
+        if not file_counts_before:
+            return 0, set(), set()
+        
+        affected_files = set(file_counts_before.keys())
+        
+        # Bulk delete target records
+        removed_count = session.query(SitemapInfo).filter(
+            SitemapInfo.bibcode.in_(bibcodes_to_remove)
+        ).delete(synchronize_session=False)
+        
+        # Get file counts after deletion 
+        file_counts_after = dict(
+            session.query(SitemapInfo.sitemap_filename, func.count(SitemapInfo.id))
+            .filter(SitemapInfo.sitemap_filename.in_(affected_files))
+            .group_by(SitemapInfo.sitemap_filename)
+            .all()
+        )
+        
+        # Identify empty files and files that still have records
+        files_to_delete = set(file for file in affected_files if file not in file_counts_after)
+        files_to_update = affected_files - files_to_delete
+
+        self.logger.info('Removed %d bibcodes from %d files, %d files now empty, %d files pending regeneration flag', 
+                         removed_count, len(affected_files), len(files_to_delete), len(files_to_update))
+
+        return removed_count, files_to_delete, files_to_update
+
+
+    def delete_sitemap_files(self, files_to_delete, sitemap_dir):
+        """
+        Helper function to delete empty sitemap files from all sites.
+        
+        Args:
+            files_to_delete: Set of sitemap filenames to delete
+            sitemap_dir: Base sitemap directory path
+        """
+        if not files_to_delete:
+            return
+        
+        sites_config = self.conf.get('SITES', {})
+        deleted_count = 0
+        
+        for filename in files_to_delete:
+            for site_key in sites_config.keys():
+                site_filepath = os.path.join(sitemap_dir, site_key, filename)
+                if os.path.exists(site_filepath):
+                    os.remove(site_filepath)
+                    self.logger.info('Deleted empty sitemap file: %s', site_filepath)
+                    deleted_count += 1
+        
+        self.logger.info('Deleted %d empty sitemap files across all sites', deleted_count)
+
+
+    def chunked(self, iterable, chunk_size):
+        """Yield successive chunks from iterable without copying data"""
+        iterator = iter(iterable)
+        while True:
+            chunk = list(islice(iterator, chunk_size))
+            if not chunk:
+                break
+            yield chunk

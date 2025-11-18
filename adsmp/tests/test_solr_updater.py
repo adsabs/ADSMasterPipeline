@@ -118,6 +118,20 @@ class TestSolrUpdater(unittest.TestCase):
         )
         self.app.update_storage(
             "bibcode",
+            "boost",
+            {
+                "bibcode": "bibcode",
+                "scix_id": "scix_id",
+                "status": "updated",
+                "doctype_boost": 0.8571428571428572,
+                "recency_boost": 1.0,
+                "boost_factor": 0.5142857142857143,
+                "astronomy_final_boost": 0.5142857142857143,
+                "physics_final_boost": 0.5142857142857143,
+            }
+        )
+        self.app.update_storage(
+            "bibcode",
             "fulltext",
             {
                 "body": "texttext",
@@ -303,10 +317,18 @@ class TestSolrUpdater(unittest.TestCase):
                 "grants": ["2419335 g", "3111723 g*"],
                 "citation_count": 6,
                 "citation_count_norm": 0.2,
+                "reference_count": 17,
+                "mention": [
+                    "1977JAP....48.4729M",
+                ],
+                "mention_count": 1,
+                "credit": [
+                    "1981psd..book.....S",
+                ],
+                "credit_count": 1,
             },
         )
         rec = self.app.get_record("bibcode")
-
         x = solr_updater.transform_json_record(rec)
         # self.assertFalse('aff' in x, 'virtual field should not be in solr output')
 
@@ -327,21 +349,46 @@ class TestSolrUpdater(unittest.TestCase):
                 "author",
                 "bibgroup",
                 "body",
-                "citation_count",
+                "citation",
+                "credit",
+                "data",
                 "database",
                 "doctype",
                 "first_author",
+                "grant",
                 "identifier",
+                "mention",
                 "orcid_other",
                 "property",
                 "pub",
                 "pub_raw",
+                "reference",
                 "title",
                 "volume",
             ],
         )
-        self.assertEqual(x["scix_id"], "scix:0000-0000-0011")
+        self.assertEqual(x["scix_id"], "scix:70FP-S952-V74A")
         self.assertEqual(round(x["doctype_boost"],3),0.857)
+
+        self.app.update_storage(
+            "bibcode",
+            "boost",
+            {
+                "bibcode": "bibcode",
+                "scix_id": "scix_id",
+                "status": "updated",
+                "doctype_boost": 0.8571428571428572,
+                "recency_boost": 1.0,
+                "boost_factor": 0.5142857142857143,
+                "astronomy_final_boost": 0.5142857142857143,
+                "physics_final_boost": 0.5142857142857143,
+            }
+        )
+        rec = self.app.get_record("bibcode")
+        x = solr_updater.transform_json_record(rec)
+        self.assertEqual(x["scix_id"], "scix:70FP-S952-V74A")
+        self.assertEqual(round(x["doctype_boost"],3),0.857)
+        self.assertEqual(round(x["astronomy_final_boost"],3), 0.514)
 
         self.app.update_storage(
             "bibcode",
@@ -415,6 +462,10 @@ class TestSolrUpdater(unittest.TestCase):
                 "citation_count": 6,
                 "citation_count_norm": 0.2,
                 "cite_read_boost": 0.1899999976158142,
+                "credit": [
+                    "1981psd..book.....S",
+                ],
+                "credit_count": 1,
                 "data": ["MAST:3", "SIMBAD:1"],
                 "data_facet": ["MAST", "SIMBAD"],
                 "database": ["astronomy"],
@@ -436,6 +487,10 @@ class TestSolrUpdater(unittest.TestCase):
                 "links_data": "",
                 "orcid_other": ["-", "-", "0000-0003-2377-2356", "-"],
                 "orcid_pub": ["-", "-", "-", "-"],
+                "mention": [
+                    "1977JAP....48.4729M",
+                ],
+                "mention_count": 1,
                 "nedid": ["2419335", "3111723"],
                 "nedtype": ["HII Region", "Other"],
                 "ned_object_facet_hier": [
@@ -469,6 +524,7 @@ class TestSolrUpdater(unittest.TestCase):
                     "2005PhRvB..72s5208M",
                     "2006ApPhL..89l3505L",
                 ],
+                "reference_count": 17,
                 "simbid": ["2419335", "3111723"],
                 "simbtype": ["Other", "Star"],
                 "simbad_object_facet_hier": [
@@ -535,15 +591,20 @@ class TestSolrUpdater(unittest.TestCase):
                 "author",
                 "bibgroup",
                 "body",
-                "citation_count",
+                "citation",
+                "credit",
+                "data",
                 "database",
                 "doctype",
                 "first_author",
+                "grant",
                 "identifier",
+                "mention",
                 "orcid_other",
                 "property",
                 "pub",
                 "pub_raw",
+                "reference",
                 "title",
                 "volume",
             ],

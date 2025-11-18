@@ -6,6 +6,7 @@ import adsputils
 import argparse
 import warnings
 import json
+from datetime import datetime, timedelta
 from requests.packages.urllib3 import exceptions
 warnings.simplefilter('ignore', exceptions.InsecurePlatformWarning)
 import time
@@ -17,17 +18,18 @@ except ImportError:
     from urlparse import urlparse
 
 from adsputils import setup_logging, get_date, load_config
-from adsmp.models import KeyValue, Records
-from adsmp import tasks, solr_updater, validate
+from adsmp.models import KeyValue, Records, SitemapInfo
+from adsmp import tasks, solr_updater, validate #s3_utils
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import InstrumentedAttribute
+from celery import chain
 
 # ============================= INITIALIZATION ==================================== #
 proj_home = os.path.realpath(os.path.dirname(__file__))
 config = load_config(proj_home=proj_home)
 
 logger = setup_logging('run.py', proj_home=proj_home,
-                       level=config.get('LOGGING_LEVEL', 'INFO'),
+                       level=config.get('LOGGING_LEVEL', 'DEBUG'),
                        attach_stdout=config.get('LOG_STDOUT', False))
 
 app = tasks.app
@@ -290,6 +292,76 @@ def delete_obsolete_records(older_than, batch_size=1000):
 
     logger.info("Deleted {} obsolete records".format(deleted))
 
+def process_all_scixid(batch_size, flag):
+    logger.info('Starting process_all_scixid with flag: %s', flag)
+    if flag == 'update-all':
+        flag = 'update'
+    elif flag == 'force-all':
+        flag = 'force'
+    elif flag == 'reset-all':
+        flag = 'reset'
+    logger.info('Converted flag to: %s', flag)
+    
+    sent = 0
+    batch = []
+    _tasks = []
+    with app.session_scope() as session:
+        # load all records from RecordsDB
+        for rec in session.query(Records) \
+                        .options(load_only(Records.bibcode)) \
+                        .yield_per(batch_size):
+
+            sent += 1
+            if sent % 1000 == 0:
+                logger.debug('Sending %s records', sent)
+
+            batch.append(rec.bibcode)
+            if len(batch) >= batch_size:
+                logger.info('Sending batch of %s records with flag %s', len(batch), flag)
+                t = tasks.task_update_scixid.delay(batch, flag)
+                _tasks.append(t)
+                batch = []
+    
+    if len(batch) > 0:
+        logger.info('Sending final batch of %s records with flag %s', len(batch), flag)
+        t = tasks.task_update_scixid.delay(batch, flag)
+        logger.debug('Sending %s records', len(batch))
+        _tasks.append(t)
+    logger.info('Completed process_all_scixid, sent total of %s records', sent)
+
+
+def process_all_boost(batch_size):
+    """Process all records in RecordsDB through the Boost Pipeline"""
+    logger.info('Starting process_all_boost')
+    
+    sent = 0
+    batch = []
+    _tasks = []
+    with app.session_scope() as session:
+        # load all records from RecordsDB
+        for rec in session.query(Records) \
+                        .options(load_only(Records.bibcode)) \
+                        .yield_per(batch_size):
+
+            sent += 1
+            if sent % 1000 == 0:
+                logger.debug('Sending %s records', sent)
+
+            batch.append(rec.bibcode)
+            if len(batch) >= batch_size:
+                logger.info('Sending batch of %s records to Boost Pipeline', len(batch))
+                t = tasks.task_boost_request.delay(batch)
+                _tasks.append(t)
+                batch = []
+    
+    if len(batch) > 0:
+        logger.info('Sending final batch of %s records to Boost Pipeline', len(batch))
+        t = tasks.task_boost_request.delay(batch)
+        _tasks.append(t)
+        logger.debug('Sending %s records', len(batch))
+    
+    logger.info('Completed process_all_boost, sent total of %s records', sent)
+
 
 def rebuild_collection(collection_name, batch_size):
     """
@@ -399,6 +471,161 @@ def reindex_failed_bibcodes(app, update_processed=True):
             )
             bibs = []
         logger.info('Done reindexing %s previously failed bibcodes', count)
+
+def manage_sitemap(bibcodes, action):
+    """
+    Submit sitemap management task to Celery worker
+    
+    Actions:
+    - 'add': add/update record info to sitemap table if bibdata_updated is newer than filename_lastmoddate
+    - 'force-update': force update sitemap table entries for given bibcodes  
+    - 'remove': remove bibcodes from sitemap table
+    - 'bootstrap': populate entire sitemap table from all valid records in database
+    - 'delete-table': delete all contents of sitemap table and backup files
+    - 'update-robots': force update robots.txt files for all sites
+    
+    For actions that modify records (add/remove/force-update/bootstrap), automatically chains
+    task_update_sitemap_files to ensure files are regenerated after management completes.
+    
+    Args:
+        bibcodes: List of bibcodes to process
+        action: Action to perform
+    
+    Returns:
+        str: Celery task ID for monitoring task progress
+    """
+    
+    
+    # Actions that modify records should automatically update files
+    if action in ['add', 'remove', 'force-update', 'bootstrap']:
+        # Chain: manage_sitemap → update_sitemap_files
+        workflow = chain(
+            tasks.task_manage_sitemap.s(bibcodes, action),
+            tasks.task_update_sitemap_files.s()
+        )
+        result = workflow.apply_async()
+        print(f"Sitemap workflow (manage + update files) submitted: {result.id}")
+        print(f"Action: {action}")
+        print(f"Processing {len(bibcodes)} bibcodes")
+        print("Files will be automatically updated after management completes")
+    else:
+        # Other actions (delete-table, update-robots) run standalone
+        result = tasks.task_manage_sitemap.apply_async(args=(bibcodes, action))
+        print(f"Sitemap management task submitted: {result.id}")
+        print(f"Action: {action}")
+    
+    print("Task is running in the background...")
+    return result.id
+
+def update_sitemap_files():
+    """
+    Submit sitemap files update task to Celery worker
+    Updates all sitemap files for records with update_flag = True
+    
+    Returns:
+        str: Celery task ID for monitoring task progress
+    """
+    result = tasks.task_update_sitemap_files.apply_async()
+    print(f"Sitemap files update task submitted: {result.id}")
+    print("Task is running in the background...")
+    return result.id
+
+def cleanup_invalid_sitemaps():
+    """
+    Initiate cleanup of invalid sitemap entries 
+    
+    This schedules a background task that handles records which became invalid due to:
+    - SOLR processing failures (status changed to 'solr-failed' or 'retrying')
+    - Loss of bib_data
+    - Stale processing (SOLR processing too old compared to bib_data_updated)
+    - Records deleted from main database
+    
+    Returns:
+        str: Celery task ID for monitoring cleanup progress
+    """
+    logger.info('Initiating sitemap cleanup using background task')
+
+    # Chain cleanup → update files to ensure flagged files are regenerated immediately
+    workflow = chain(
+        tasks.task_cleanup_invalid_sitemaps.s(),
+        tasks.task_update_sitemap_files.s()
+    )
+    result = workflow.apply_async(priority=1)
+
+    logger.info('Sitemap cleanup workflow submitted: %s', result.id)
+    return result.id
+
+def update_sitemaps_auto(days_back=1):
+    """
+    Automatically find and process records needing sitemap updates
+    
+    Finds records that need sitemap updates based on:
+    1. Records where bib_data_updated >= cutoff_date
+    2. Records where solr_processed >= cutoff_date
+    
+    Uses UNION to combine both criteria, ensuring records that are either
+    newly ingested OR recently processed by SOLR are included in sitemaps.
+    
+    Excludes records that already have update_flag=True to avoid duplicate work,
+    as those records are already scheduled for sitemap regeneration.
+    
+    Args:
+        days_back: Number of days to look back for changes
+    
+    Returns:
+        str: Workflow task ID (chains manage + file generation), or None if no updates needed
+    """
+    
+    
+    logger.info('Starting automatic sitemap update (looking back %d days)', days_back)
+    
+    # Calculate cutoff date
+    cutoff_date = get_date() - timedelta(days=days_back)
+    logger.info('Looking for records updated since: %s', cutoff_date.isoformat())
+    
+    bibcodes_to_update = []
+    
+    with app.session_scope() as session:
+        # Find all records that were updated recently OR had SOLR processing recently
+        # Exclude records that already have update_flag=True to avoid duplicate work
+        
+        # Subquery to get bibcodes that already have update_flag=True
+        already_flagged_subquery = session.query(SitemapInfo.bibcode).filter(
+            SitemapInfo.update_flag.is_(True)
+        )
+        
+        bib_data_query = session.query(Records.bibcode).filter(
+            Records.bib_data_updated >= cutoff_date,
+            ~Records.bibcode.in_(already_flagged_subquery)
+        )
+        
+        solr_processed_query = session.query(Records.bibcode).filter(
+            Records.solr_processed >= cutoff_date,
+            ~Records.bibcode.in_(already_flagged_subquery)
+        )
+        
+        # UNION automatically eliminates duplicates
+        combined_query = bib_data_query.union(solr_processed_query)
+        
+        bibcodes_to_update = [record.bibcode for record in combined_query]
+        
+        logger.info('Found %d records updated since %s (excluding already flagged)', len(bibcodes_to_update), cutoff_date.isoformat())
+    
+    if not bibcodes_to_update:
+        logger.info('No records need sitemap updates')
+        return None
+    
+    logger.info('Submitting %d records for sitemap processing', len(bibcodes_to_update))
+    
+    # Chain tasks: manage sitemap → update files
+    workflow = chain(
+        tasks.task_manage_sitemap.s(bibcodes_to_update, 'add'),
+        tasks.task_update_sitemap_files.s()
+    )
+    result = workflow.apply_async(priority=0)
+    logger.info('Submitted sitemap workflow: %s', result.id)
+    
+    return result.id
 
 
 if __name__ == '__main__':
@@ -525,6 +752,40 @@ if __name__ == '__main__':
                         default=False,
                         dest='update_processed',
                         help='update processed timestamps and other state info in records table when a record is indexed')
+    parser.add_argument('--manage-sitemap',
+                        action='store_true',
+                        default=False,
+                        dest='manage_sitemap',
+                        help='populate sitemap table for list of bibcodes')
+    parser.add_argument('--action',
+                        default=False,
+                        choices=['add', 'delete-table', 'force-update', 'remove', 'update-robots', 'bootstrap'],
+                        help='action: add (add bibcodes), force-update (force update bibcodes), remove (remove bibcodes), delete-table (clear sitemap table), update-robots (force update robots.txt files), bootstrap (initialize sitemaps for all existing records)')
+    parser.add_argument('--update-sitemap-files',
+                        action='store_true',
+                        default=False,
+                        dest='update_sitemap_files',
+                        help='update sitemap files for records with update_flag = True in sitemap table')
+    parser.add_argument('--update-sitemaps-auto',
+                        action='store_true',
+                        default=False,
+                        dest='update_sitemaps_auto',
+                        help='automatically find and process records needing sitemap updates (for cron jobs)')
+    parser.add_argument('--days-back',
+                        type=int,
+                        default=1,
+                        dest='days_back',
+                        help='number of days to look back for changed records (used with --update-sitemaps-auto)')
+    parser.add_argument('--cleanup-invalid-sitemaps',
+                        dest='cleanup_invalid_sitemaps',
+                        action='store_true',
+                        default=False,
+                        help='Cleanup invalid sitemap entries (records that became invalid due to SOLR failures, missing data, etc.)')
+    # parser.add_argument('--sync-sitemap-s3',
+    #                     action='store_true',
+    #                     default=False,
+    #                     dest='sync_sitemap_s3',
+    #                     help='manually sync all sitemap files to S3')
     parser.add_argument('--update-scix-id',
                         action='store_true',
                         default=False,
@@ -533,8 +794,51 @@ if __name__ == '__main__':
     parser.add_argument('--scix-id-flag',
                         default=False,
                         dest='scix_id_flag',
-                        choices=['update', 'force'],
-                        help='update records to be assigned a new scix_id or force reset scix_id and assign all new scix_ids')
+                        choices=['update', 'update-all', 'force', 'force-all', 'reset', 'reset-all'],
+                        help='update records to be assigned a new scix_id, update all records in recordsDB with new scix_id, force reset scix_id and assign new scix_ids, force all records in recordsDB with new scix_id, reset scix_id to None, reset all scix_id in recordDB to None')
+
+    parser.add_argument('--classify_verify',
+                        dest='classify_verify',
+                        action='store_true',
+                        default=False,
+                        help='Run the classifier on the given bibcodes - Includes a manual verification step')
+
+    parser.add_argument('--classify',
+                        dest='classify',
+                        action='store_true',
+                        default=False,
+                        help='Run the classifier on the given bibcodes - No manual verification')
+
+    parser.add_argument('--manual',
+                        dest='manual',
+                        action='store_true',
+                        default=False,
+                        help='Allow the classifier to be run in manual mode')
+
+    parser.add_argument('--classifier_batch',
+                        dest='classifier_batch',
+                        action='store',
+                        default=500,
+                        help='Number of records sent to clssifier per batch')
+
+    parser.add_argument('--validate_classifier',
+                        dest='validate_classifier',
+                        action='store_true',
+                        default=False,
+                        help='Test data for classifier')
+
+    parser.add_argument('--boost',
+                        dest='boost',
+                        action='store_true',
+                        default=False,
+                        help='Run the boost pipeline on the given bibcodes')
+
+    parser.add_argument('--boost-all',
+                        dest='boost_all',
+                        action='store_true',
+                        default=False,
+                        help='Run the boost pipeline on all records in RecordsDB')
+
 
     args = parser.parse_args()
 
@@ -552,6 +856,10 @@ if __name__ == '__main__':
 
     elif args.delete_obsolete:
         delete_obsolete_records(args.since, batch_size=args.batch_size)
+
+    elif args.cleanup_invalid_sitemaps:
+        task_id = cleanup_invalid_sitemaps()
+        print(f"Sitemap cleanup task submitted: {task_id}")
 
     elif args.validate:
         fields = ('abstract', 'ack', 'aff', 'alternate_bibcode', 'alternate_title', 'arxiv_class', 'author',
@@ -581,7 +889,7 @@ if __name__ == '__main__':
     elif args.delete:
         if args.filename:
             print('deleting bibcodes from file via queue')
-            bibs = []
+            bibcodes = []
             with open(args.filename, 'r') as f:
                 for line in f:
                     bibcode = line.strip()
@@ -601,10 +909,120 @@ if __name__ == '__main__':
 
                         app.request_aff_augment(bibcode)
 
+    elif args.classify_verify or args.classify:
+        print('Running Classifier')
+
+        if args.classify_verify:
+            print('Include manual verification step - check output file and resubmit using the Classifier Pipeline')
+            operation_step = 'classify_verify'
+        elif args.classify:
+            print('Skipping manual verification')
+            operation_step = 'classify'
+        else:
+            print('Select classsification process')
+        if args.classifier_batch:
+            classifier_batch = int(args.classifier_batch)
+        else:
+            classifier_batch = 500
+        if args.validate_classifier:
+            data = None
+            check_boolean = True
+        else:
+            data = None
+            check_boolean = False
+        if args.manual:
+            if args.filename:
+                # filename should be checked
+                filename = args.filename
+                print('classifying bibcodes from file via queue')
+                logger.info('Classifying records from file via queue')
+                keywords_dictionary = {"filename": filename, "mode": "manual", "batch_size":classifier_batch, "data": data, "check_boolean": check_boolean, "operation_step" : operation_step}
+        else:
+            if args.filename:
+                with open(args.filename, 'r') as f:
+                    for line in f:
+                        bibcode = line.strip()
+                        if bibcode:
+                            keywords_dictionary = {"bibcode": bibcode, "mode": "auto", "operation_step" : operation_step}
+
+        app.request_classify(**keywords_dictionary)
+
+    elif args.boost:
+        print('Running Boost Pipeline')
+
+        if args.filename:
+            print('Processing boost requests from file')
+            logger.info('Processing boost requests from file')
+            bibcodes = []
+            with open(args.filename, 'r') as f:
+                for line in f:
+                    bibcode = line.strip()
+                    if bibcode:
+                        bibcodes.append(bibcode)
+            
+        elif args.bibcodes:
+            bibcodes = args.bibcodes
+            if isinstance(bibcodes, str):
+                bibcodes = [bibcodes]
+        else:
+            print('Please provide bibcodes via --bibcodes or --filename')
+        
+        print('Processing boost requests for following bibcodes: {}'.format(bibcodes))
+        tasks.task_boost_request.delay(bibcodes)
+        
+    elif args.boost_all:
+        print('Running Boost Pipeline on all records in RecordsDB')
+        batch_size = args.batch_size
+        process_all_boost(batch_size)
+
     elif args.rebuild_collection:
         rebuild_collection(args.solr_collection, args.batch_size)
     elif args.index_failed:
         reindex_failed_bibcodes(app, args.update_processed)
+    elif args.manage_sitemap:
+
+        # Validate required action parameter
+        if not args.action:
+            print("Error: --action is required when using --populate-sitemap-table")
+            print("Available actions: add, remove, force-update, delete-table, update-robots, bootstrap")
+            sys.exit(1)
+        
+        action = args.action
+        
+        # Get bibcodes from file or command line
+        bibcodes = []
+        if args.filename:
+            with open(args.filename) as f:
+                for line in f:
+                    bibcode = line.strip()
+                    if bibcode:
+                        bibcodes.append(bibcode)
+        elif args.bibcodes:
+            bibcodes = args.bibcodes
+        
+        # Validate that actions requiring bibcodes have them
+        if action in ['add', 'remove', 'force-update']:
+            if not bibcodes:
+                print(f"Error: --action {action} requires bibcodes")
+                print("Provide bibcodes using --bibcodes or --filename")
+                sys.exit(1)
+        
+        manage_sitemap(bibcodes, action)
+    elif args.update_sitemap_files:
+        update_sitemap_files()
+    elif args.update_sitemaps_auto:
+        workflow_id = update_sitemaps_auto(args.days_back)
+        if workflow_id:
+            print(f"Automatic sitemap update initiated:")
+            print(f"  Workflow ID: {workflow_id} (chains: manage sitemap → generate files)")
+          
+        else:
+            print("No records needed sitemap updates")
+    elif args.cleanup_invalid_sitemaps:
+        task_id = cleanup_invalid_sitemaps()
+        print(f"Sitemap cleanup task submitted: {task_id}")
+    # elif args.sync_sitemap_s3:
+    #     sync_sitemap_to_s3()
     elif args.update_scixid:
         if args.filename:
             bibs = []
@@ -620,7 +1038,11 @@ if __name__ == '__main__':
         else:
             flag = ''
 
-        tasks.task_update_scixid(bibs, flag = flag)
+        if flag == 'update-all' or flag == 'force-all' or flag == 'reset-all':
+            batch_size = args.batch_size
+            process_all_scixid(batch_size, flag)
+        else:
+            tasks.task_update_scixid(bibs, flag = flag)
     elif args.reindex:
         update_solr = 's' in args.reindex.lower()
         update_metrics = 'm' in args.reindex.lower()
@@ -630,15 +1052,15 @@ if __name__ == '__main__':
 
         if args.filename:
             print('sending bibcodes from file to the queue for reindexing')
-            bibs = []
+            bibcodes = []
             with open(args.filename) as f:
                 for line in f:
                     bibcode = line.strip()
                     if bibcode:
-                        bibs.append(bibcode)
-                    if len(bibs) >= 100:
+                        bibcodes.append(bibcode)
+                    if len(bibcodes) >= 100:
                         tasks.task_index_records.apply_async(
-                            args=(bibs,),
+                            args=(bibcodes,),
                             kwargs={
                                 'force': True,
                                 'update_solr': update_solr,
@@ -651,10 +1073,10 @@ if __name__ == '__main__':
                             },
                             priority=args.priority
                         )
-                        bibs = []
-                if len(bibs) > 0:
+                        bibcodes = []
+                if len(bibcodes) > 0:
                     tasks.task_index_records.apply_async(
-                        args=(bibs,),
+                        args=(bibcodes,),
                         kwargs={
                             'force': True,
                             'update_solr': update_solr,
@@ -667,13 +1089,10 @@ if __name__ == '__main__':
                         },
                         priority=args.priority
                     )
-                    bibs = []
+                    bibcodes = []
         else:
             print('sending bibcode since date to the queue for reindexing')
             reindex(since=args.since, batch_size=args.batch_size, force_indexing=args.force_indexing,
                     update_solr=update_solr, update_metrics=update_metrics,
                     update_links=update_links, force_processing=args.force_processing, ignore_checksums=args.ignore_checksums,
                     solr_targets=solr_urls, update_processed=args.update_processed, priority=args.priority)
-
-
-
