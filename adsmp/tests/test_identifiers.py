@@ -217,7 +217,7 @@ class TestIdentifierExtraction(unittest.TestCase):
         }
         
         # Call the method
-        updated_links = self.app._populate_identifiers(test_record, resolver_record, links)
+        updated_links = self.app._populate_identifiers(test_record['bibcode'], test_record['bib_data'], resolver_record, links)
         
         # Check that identifiers were extracted and consolidated
         self.assertIn('identifier', resolver_record)

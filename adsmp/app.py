@@ -868,6 +868,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         resolver_record = None   # default value to return
         bibcode = record.get('bibcode')
         nonbib = record.get('nonbib_data', {})
+
         # New format 
         nonbib_new_links = nonbib.get('links', {}) if nonbib else {}
 
@@ -1061,7 +1062,7 @@ class ADSMasterPipelineCelery(ADSCelery):
             
         return bibcode, bib_data, fulltext, metrics, nonbib, orcid_claims
     
-    def _populate_identifiers(self, record, resolver_record, links):
+    def _populate_identifiers(self, bibcode, bib_data, resolver_record, links):
         """Populate the identifier list and extract ARXIV and DOI links.
         
         Args:
@@ -1072,7 +1073,6 @@ class ADSMasterPipelineCelery(ADSCelery):
         Returns:
             dict: The updated links structure with ARXIV and DOI fields populated
         """
-        bibcode, bib_data, _, _, _, _ = self._extract_data_components(record)
         
         # Collect all identifiers from all sources
         identifiers = self._collect_identifiers(bibcode, bib_data)
@@ -1122,10 +1122,10 @@ class ADSMasterPipelineCelery(ADSCelery):
         links = resolver_record.get('links', {})
         
         # Extract all necessary components
-        _, bib_data, fulltext, metrics, nonbib, _ = self._extract_data_components(record)
+        bibcode, bib_data, _, metrics, nonbib, _ = self._extract_data_components(record)
         
         # Populate identifiers and extract ARXIV and DOI links
-        links = self._populate_identifiers(record, resolver_record, links)
+        links = self._populate_identifiers(bibcode, bib_data, resolver_record, links)
             
         # Always set ABSTRACT to True
         links['ABSTRACT'] = True
@@ -1135,7 +1135,7 @@ class ADSMasterPipelineCelery(ADSCelery):
            ('citation_count' in nonbib and nonbib['citation_count'] > 0):
             links['CITATIONS'] = True
             
-        # Set GRAPHICS flag if fulltext contains graphics indicators
+        # Always set GRAPHICS to True
         links['GRAPHICS'] = True
 
         # Set METRICS flag if metrics data is available
