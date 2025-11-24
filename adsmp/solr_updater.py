@@ -478,22 +478,10 @@ def transform_json_record(db_record):
         db_record.get(key, {}).get("links_data")
         for key in ("bib_data", "nonbib_data")
     ):
-       
+        logger.debug('Both bib and nonbib data provided links data. Using nonbib data: {}'.format(db_record["nonbib_data"]["links_data"]))
         out["links_data"] = db_record["nonbib_data"]["links_data"]
-
-        
-    # override temporal priority for bibgroup and bibgroup_facet, prefer nonbib
-    if db_record.get("nonbib_data", None) and db_record["nonbib_data"].get(
-        "bibgroup", None
-    ):
-        out["bibgroup"] = db_record["nonbib_data"]["bibgroup"]
-    if db_record.get("nonbib_data", None) and db_record["nonbib_data"].get(
-        "bibgroup_facet", None
-    ):
-        out["bibgroup_facet"] = db_record["nonbib_data"]["bibgroup_facet"]
-    
-    # Else if only bib pipeline provided links data
     elif db_record.get("bib_data", {}).get("links_data"):
+        logger.debug('Only bib data provided links data. Using bib data: {}'.format(db_record["bib_data"]["links_data"]))
         links_data = db_record["bib_data"].get("links_data", None)
         if links_data:
             try:
@@ -520,6 +508,18 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
+
+    # override temporal priority for bibgroup and bibgroup_facet, prefer nonbib
+    if db_record.get("nonbib_data", None) and db_record["nonbib_data"].get(
+        "bibgroup", None
+    ):
+        out["bibgroup"] = db_record["nonbib_data"]["bibgroup"]
+    if db_record.get("nonbib_data", None) and db_record["nonbib_data"].get(
+        "bibgroup_facet", None
+    ):
+        out["bibgroup_facet"] = db_record["nonbib_data"]["bibgroup_facet"]
+    
+    
     boost_columns = ['doctype_boost', 'recency_boost', 'boost_factor', 'astronomy_final_boost', 'physics_final_boost', \
         'earth_science_final_boost', 'planetary_science_final_boost', 'heliophysics_final_boost', 'general_final_boost']
     
@@ -554,5 +554,5 @@ def transform_json_record(db_record):
                 if any([char.isalnum() for char in out_field]):
                     has.append(field)
         out["has"] = has
-
+    logger.debug('Out: {}'.format(out))
     return out

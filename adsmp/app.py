@@ -888,6 +888,8 @@ class ADSMasterPipelineCelery(ADSCelery):
         
         # If not nonbib data in any format, use link from bib/direct ingest
         elif not nonbib_new_links:
+            self.logger.debug('No nonbib data in any format, using link from bib/direct ingest')
+
             bib = record.get('bib_data', {})
             if not isinstance(bib, dict):
                 bib = {} 
@@ -898,6 +900,8 @@ class ADSMasterPipelineCelery(ADSCelery):
             if bib_links_record:
                 try:
                     bib_links_data = json.loads(bib_links_record[0])
+                    self.logger.debug('Bib links data: {}'.format(bib_links_data))
+
                     url = bib_links_data.get('url', None)
                     if url:
                         # Need to change what direct sends
@@ -910,6 +914,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                                                                 'title': [''], 'item_count': 0,
                                                                 'link_type': 'ESOURCE',
                                                                 'link_sub_type': 'EPRINT_PDF'}]}
+                        self.logger.debug('Default data links rows: {}'.format(default_data_links_rows))
                         # Transform into new format
                         resolver_record['links'] = self._transform_old_links_to_new_format(default_data_links_rows['data_links_rows'])
                 except (KeyError, ValueError):
@@ -927,6 +932,8 @@ class ADSMasterPipelineCelery(ADSCelery):
 
     def _transform_old_links_to_new_format(self, data_links_rows):
         """Transform the old links format to the new links format"""
+
+        self.logger.debug('Transforming old links to new format. Old format: {}'.format(data_links_rows))
         
         link_type_mapping = {
             'DATA': 'DATA',
@@ -1001,11 +1008,14 @@ class ADSMasterPipelineCelery(ADSCelery):
                     new_links[mapped_type]['title'].extend(row['title'])
                 if 'item_count' in row:
                     new_links[mapped_type]['count'] = row['item_count']
+            
+            self.logger.debug('Transformed old links to new format: {}'.format(new_links))
                 
         return new_links
     
     def is_arxiv_id(self, identifier):
 
+        self.logger.debug('Checking if identifier is an arXiv ID: {}'.format(identifier))
         
         identifier = str(identifier).lower()
 
@@ -1016,11 +1026,16 @@ class ADSMasterPipelineCelery(ADSCelery):
             r'^10\.48550/arxiv\.[a-z\-]+/\d{7}$'         # 10.48550/arXiv.astro-ph/0610305
         ]
 
-        return any(re.match(pat, identifier) for pat in patterns)
+        result = any(re.match(pat, identifier) for pat in patterns)
+        self.logger.debug('Is arXiv ID: {}'.format(result))
+
+        return result
         
     
     def is_doi_id(self, identifier):
-        # Normalize whitespace and case
+        self.logger.debug('Checking if identifier is a DOI ID: {}'.format(identifier))
+        
+        
         identifier = str(identifier).strip().lower()
 
         # Regex pattern for DOI
@@ -1059,7 +1074,8 @@ class ADSMasterPipelineCelery(ADSCelery):
         orcid_claims = record.get('orcid_claims', {})
         if not isinstance(orcid_claims, dict):
             orcid_claims = {}
-            
+        
+        self.logger.debug('Extracted data components from record. Bibcode: {}, Bib data: {}, Fulltext: {}, Metrics: {}, Nonbib: {}, Orcid claims: {}'.format(bibcode, bib_data, fulltext, metrics, nonbib, orcid_claims))
         return bibcode, bib_data, fulltext, metrics, nonbib, orcid_claims
     
     def _populate_identifiers(self, bibcode, bib_data, resolver_record, links):
@@ -1073,7 +1089,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         Returns:
             dict: The updated links structure with ARXIV and DOI fields populated
         """
-        
+
         # Collect all identifiers from all sources
         identifiers = self._collect_identifiers(bibcode, bib_data)
         resolver_record['identifier'] = identifiers
@@ -1106,6 +1122,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         if doi_ids:
             links['DOI'].extend(list(doi_ids))
         
+        self.logger.debug('Populated identifiers for record: {}. ARXIV: {}, DOI: {}'.format(bibcode, arxiv_ids, doi_ids))
         return links
     
     def _populate_links_structure(self, record, resolver_record):
@@ -1118,9 +1135,9 @@ class ADSMasterPipelineCelery(ADSCelery):
         Returns:
             dict: The fully populated resolver record with all available link information
         '''
-      
+        self.logger.debug('Populating links structure for record: {}'.format(record))
         links = resolver_record.get('links', {})
-        
+
         # Extract all necessary components
         bibcode, bib_data, _, metrics, nonbib, _ = self._extract_data_components(record)
         
@@ -1161,7 +1178,8 @@ class ADSMasterPipelineCelery(ADSCelery):
             
         # Update the links in the resolver record
         resolver_record['links'] = links
-        
+
+        self.logger.debug('Populated links structure for record: {}'.format(resolver_record))
         return resolver_record
         
     def _collect_identifiers(self, bibcode, bib_data):
@@ -1192,7 +1210,8 @@ class ADSMasterPipelineCelery(ADSCelery):
                 alt_bibcodes = bib_data.get('alternate_bibcode', [])
                 if isinstance(alt_bibcodes, list):
                     identifiers.update([id for id in alt_bibcodes if id])
-                    
+            
+            self.logger.debug('Collected identifiers: {}'.format(identifiers))
             return list(identifiers)
                 
 
