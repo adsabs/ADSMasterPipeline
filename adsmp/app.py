@@ -969,14 +969,14 @@ class ADSMasterPipelineCelery(ADSCelery):
                             "title": [],
                             "count": 0
                         },
-                        "ABSTRACT": False,
+                        "ABSTRACT": True,
                         "CITATIONS": False,
-                        "GRAPHICS": False,
+                        "GRAPHICS": True,
                         "METRICS": False,
-                        "OPENURL": False, 
+                        "OPENURL": True,
                         "REFERENCES": False,
                         "TOC": False,
-                        "COREAD": False 
+                        "COREAD": True 
                     }
         
         for row in data_links_rows:
