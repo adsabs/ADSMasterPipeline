@@ -869,14 +869,15 @@ class ADSMasterPipelineCelery(ADSCelery):
         bibcode = record.get('bibcode')
         nonbib = record.get('nonbib_data', {})
 
+        # Validate nonbib is a dict before accessing its methods
+        if not isinstance(nonbib, dict):
+            nonbib = {}    # in case database has None or something odd
+
         # New format 
-        nonbib_new_links = nonbib.get('links', {}) if nonbib else {}
+        nonbib_new_links = nonbib.get('links', {})
 
         resolver_record = {'bibcode': bibcode,
                            'links':  nonbib_new_links}
-
-        if not isinstance(nonbib, dict):
-            nonbib = {}    # in case database has None or something odd
         
         # Old format links are in the "data_links_rows" key
         nonbib_old_links = nonbib.get('data_links_rows', [])
@@ -917,8 +918,8 @@ class ADSMasterPipelineCelery(ADSCelery):
                         self.logger.debug('Default data links rows: {}'.format(default_data_links_rows))
                         # Transform into new format
                         resolver_record['links'] = self._transform_old_links_to_new_format(default_data_links_rows['data_links_rows'])
-                except (KeyError, ValueError):
-                    # here if record holds unexpected value
+                except (KeyError, ValueError, IndexError):
+                    # here if record holds unexpected value or empty list
                     self.logger.error('invalid value in bib data, bibcode = {}, type = {}, value = {}'.format(bibcode, type(bib_links_record), bib_links_record))
                     return
         
@@ -981,6 +982,12 @@ class ADSMasterPipelineCelery(ADSCelery):
         
         for row in data_links_rows:
             link_type = row.get('link_type', '')
+            
+            # TOC is a boolean flag, not a URL-based link type
+            if link_type == 'TOC':
+                new_links['TOC'] = True
+                continue
+                
             if link_type not in link_type_mapping:
                 continue
 
@@ -1008,9 +1015,8 @@ class ADSMasterPipelineCelery(ADSCelery):
                     new_links[mapped_type]['title'].extend(row['title'])
                 if 'item_count' in row:
                     new_links[mapped_type]['count'] = row['item_count']
-            
-            self.logger.debug('Transformed old links to new format: {}'.format(new_links))
                 
+        self.logger.debug('Transformed old links to new format: {}'.format(new_links))
         return new_links
     
     def is_arxiv_id(self, identifier):
@@ -1020,10 +1026,10 @@ class ADSMasterPipelineCelery(ADSCelery):
         identifier = str(identifier).lower()
 
         patterns = [
-            r'^arxiv:\d{4}\.\d{5}$',                     # arXiv:2502.20510
-            r'^arxiv:[a-z\-]+/\d{7}$',                   # arXiv:astro-ph/0610305
-            r'^10\.48550/arxiv\.\d{4}\.\d{5}$',          # 10.48550/arXiv.2502.20510
-            r'^10\.48550/arxiv\.[a-z\-]+/\d{7}$'         # 10.48550/arXiv.astro-ph/0610305
+            r'^arxiv:\d{4}\.\d{4,5}(v\d+)?$',                         # new-style: arXiv:YYMM.NNNN(N)(vV)
+            r'^arxiv:[a-z\-]+(\.[a-z]{2})?/\d{7}(v\d+)?$',            # old-style: archive(.SC)/YYMMNNN(vV)
+            r'^10\.48550/arxiv\.\d{4}\.\d{4,5}(v\d+)?$',              # DOI new-style
+            r'^10\.48550/arxiv\.[a-z\-]+(\.[a-z]{2})?/\d{7}(v\d+)?$'  # DOI old-style
         ]
 
         result = any(re.match(pat, identifier) for pat in patterns)
@@ -1188,10 +1194,9 @@ class ADSMasterPipelineCelery(ADSCelery):
             Args:
                 bibcode (str): The bibcode of the record
                 bib_data (dict): The bibliographic data dictionary
-                nonbib (dict): The non-bibliographic data dictionary
                 
             Returns:
-                set: A set of all collected identifiers
+                list: A list of all collected identifiers (deduplicated)
             """
             identifiers = set()
             
