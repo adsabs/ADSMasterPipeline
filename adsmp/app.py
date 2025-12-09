@@ -182,14 +182,6 @@ class ADSMasterPipelineCelery(ADSCelery):
                     record.scix_id = "scix:" + str(self.generate_scix_id(record.bib_data))
                     out = record.toJSON()
                 session.commit()
-
-                # Send payload to Boost pipeline
-                if type != 'boost' and not self._config.get('TESTING_MODE', False):
-                    try:
-                        tasks.task_boost_request.apply_async(bibcode)
-                    except Exception as e:
-                        self.logger.exception('Error generating boost request message for bibcode %s: %s', bibcode, e)
-
                 return out
             except exc.IntegrityError:
                 self.logger.exception('error in app.update_storage while updating database for bibcode {}, type {}'.format(bibcode, type))

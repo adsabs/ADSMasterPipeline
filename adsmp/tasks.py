@@ -48,7 +48,7 @@ app.conf.CELERY_QUEUES = (
 
 # ============================= TASKS ============================================= #
 @app.task(queue='augment-record')
-def task_update_record(msg):
+def task_augment_record(msg):
     """Receives payload to augment the record.
 
     @param msg: protobuff that contains at minimum
@@ -100,12 +100,13 @@ def task_update_record(msg):
             record = app.update_storage(msg.bibcode, type, msg.toJSON())
             if record:
                 logger.debug('Saved record: %s', record)
-            if type == 'metadata':
-                # with new bib data we request to augment the affiliation
-                # that pipeline will eventually respond with a msg to task_update_record
-                logger.debug('requesting affilation augmentation for %s', msg.bibcode)
-                app.request_aff_augment(msg.bibcode)
-
+        if record:                        
+            # Send payload to Boost pipeline
+            if type != 'boost' and not app._config.get('TESTING_MODE', False):
+                try:
+                    task_boost_request.apply_async(msg.bibcode)
+                except Exception as e:
+                    app.logger.exception('Error generating boost request message for bibcode %s: %s', msg.bibcode, e)
     else:
         logger.error('Received a message with unclear status: %s', msg)
 
@@ -188,6 +189,13 @@ def task_update_record(msg):
                 # that pipeline will eventually respond with a msg to task_update_record
                 logger.debug('requesting affilation augmentation for %s', msg.bibcode)
                 app.request_aff_augment(msg.bibcode)
+        if record:                        
+            # Send payload to Boost pipeline
+            if type != 'boost' and not app._config.get('TESTING_MODE', False):
+                try:
+                    task_boost_request.apply_async(msg.bibcode)
+                except Exception as e:
+                    app.logger.exception('Error generating boost request message for bibcode %s: %s', msg.bibcode, e)
 
     else:
         logger.error('Received a message with unclear status: %s', msg)
