@@ -104,7 +104,7 @@ def task_augment_record(msg):
             # Send payload to Boost pipeline
             if type != 'boost' and not app._config.get('TESTING_MODE', False):
                 try:
-                    task_boost_request.apply_async(msg.bibcode)
+                    task_boost_request.apply_async(args=(msg.bibcode,))
                 except Exception as e:
                     app.logger.exception('Error generating boost request message for bibcode %s: %s', msg.bibcode, e)
     else:
@@ -193,7 +193,7 @@ def task_update_record(msg):
             # Send payload to Boost pipeline
             if type != 'boost' and not app._config.get('TESTING_MODE', False):
                 try:
-                    task_boost_request.apply_async(msg.bibcode)
+                    task_boost_request.apply_async(args=(msg.bibcode,))
                 except Exception as e:
                     app.logger.exception('Error generating boost request message for bibcode %s: %s', msg.bibcode, e)
 
