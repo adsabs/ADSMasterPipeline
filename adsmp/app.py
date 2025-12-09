@@ -12,6 +12,7 @@ from sqlalchemy import Table, bindparam, func
 import adsputils
 import json
 from adsmp import solr_updater
+from adsmp import tasks
 from adsmp import templates
 from adsputils import serializer
 from sqlalchemy import exc
@@ -185,7 +186,7 @@ class ADSMasterPipelineCelery(ADSCelery):
                 # Send payload to Boost pipeline
                 if type != 'boost' and not self._config.get('TESTING_MODE', False):
                     try:
-                        self.generate_boost_request_message(bibcode)
+                        tasks.task_boost_request.apply_async(bibcode)
                     except Exception as e:
                         self.logger.exception('Error generating boost request message for bibcode %s: %s', bibcode, e)
 

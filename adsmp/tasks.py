@@ -42,10 +42,72 @@ app.conf.CELERY_QUEUES = (
     Queue('update-sitemap-files', app.exchange, routing_key='update-sitemap-files'),
     Queue('update-scixid', app.exchange, routing_key='update-scixid'),
     Queue('boost-request', app.exchange, routing_key='boost-request'),
+    Queue('augment-record', app.exchange, routing_key='augment-record'),
 )
 
 
 # ============================= TASKS ============================================= #
+@app.task(queue='augment-record')
+def task_update_record(msg):
+    """Receives payload to augment the record.
+
+    @param msg: protobuff that contains at minimum
+        - bibcode
+        - and specific payload
+    """
+    # logger.debug('Updating record: %s', msg)
+    logger.debug('Updating record: %s', msg)
+    status = app.get_msg_status(msg)
+    logger.debug(f'Message status: {status}')
+    type = app.get_msg_type(msg)
+    logger.debug(f'Message type: {type}')
+    bibcodes = []
+
+    if status == 'active':
+        # save into a database
+        # passed msg may contain details on one bibcode or a list of bibcodes
+        if type == 'nonbib_records':
+            for m in msg.nonbib_records:
+                m = Msg(m, None, None) # m is a raw protobuf, TODO: return proper instance from .nonbib_records
+                bibcodes.append(m.bibcode)
+                record = app.update_storage(m.bibcode, 'nonbib_data', m.toJSON())
+                if record:
+                    logger.debug('Saved record from list: %s', record)
+        elif type == 'metrics_records':
+            for m in msg.metrics_records:
+                m = Msg(m, None, None)
+                bibcodes.append(m.bibcode)
+                record = app.update_storage(m.bibcode, 'metrics', m.toJSON(including_default_value_fields=True))
+                if record:
+                    logger.debug('Saved record from list: %s', record)
+        elif type == 'augment':
+            bibcodes.append(msg.bibcode)
+            record = app.update_storage(msg.bibcode, 'augment',
+                                        msg.toJSON(including_default_value_fields=True))
+            if record:
+                logger.debug('Saved augment message: %s', msg)
+        elif type == 'classify':
+            bibcodes.append(msg.bibcode)
+            logger.debug(f'message to JSON: {msg.toJSON(including_default_value_fields=True)}')
+            payload = msg.toJSON(including_default_value_fields=True)
+            payload = payload['collections']
+            record = app.update_storage(msg.bibcode, 'classify',payload)
+            if record:
+                logger.debug('Saved classify message: %s', msg)
+        else:
+            # here when record has a single bibcode
+            bibcodes.append(msg.bibcode)
+            record = app.update_storage(msg.bibcode, type, msg.toJSON())
+            if record:
+                logger.debug('Saved record: %s', record)
+            if type == 'metadata':
+                # with new bib data we request to augment the affiliation
+                # that pipeline will eventually respond with a msg to task_update_record
+                logger.debug('requesting affilation augmentation for %s', msg.bibcode)
+                app.request_aff_augment(msg.bibcode)
+
+    else:
+        logger.error('Received a message with unclear status: %s', msg)
 
 @app.task(queue='update-record')
 def task_update_record(msg):
