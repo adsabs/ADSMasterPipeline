@@ -12,7 +12,6 @@ from sqlalchemy import Table, bindparam, func
 import adsputils
 import json
 from adsmp import solr_updater
-from adsmp import tasks
 from adsmp import templates
 from adsputils import serializer
 from sqlalchemy import exc
