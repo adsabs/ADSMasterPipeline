@@ -457,7 +457,7 @@ def task_cleanup_invalid_sitemaps():
                 # Convert to dict for should_include_in_sitemap function
                 record_dict = {
                     'bibcode': record_data.bibcode,
-                    'bib_data': record_data.has_bib_data,
+                    'has_bib_data': record_data.has_bib_data,
                     'bib_data_updated': record_data.bib_data_updated,
                     'solr_processed': record_data.solr_processed,
                     'status': record_data.status
@@ -626,7 +626,7 @@ def task_manage_sitemap(bibcodes, action):
                         # Apply SOLR filtering - convert record to dict for should_include_in_sitemap
                         record_dict = {
                             'bibcode': record.bibcode,
-                            'bib_data': record.bib_data,
+                            'has_bib_data': bool(record.bib_data and record.bib_data.strip() != ''),
                             'bib_data_updated': record.bib_data_updated,
                             'solr_processed': record.solr_processed,
                             'status': record.status
