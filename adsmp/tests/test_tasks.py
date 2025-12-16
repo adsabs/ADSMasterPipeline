@@ -1223,7 +1223,7 @@ class TestSitemapWorkflow(unittest.TestCase):
     def test_task_cleanup_invalid_sitemaps_comprehensive_invalid_cases(self):
         """Test cleanup of all types of invalid records that should be removed from sitemaps"""
         
-        # Test various invalid scenarios (only realistic ones - no empty/whitespace strings)
+        # Test various invalid scenarios
         test_cases = [
             # (bibcode, bib_data, status, description)
             ('2023NoData..1..1A', None, 'success', 'No bib_data'),
