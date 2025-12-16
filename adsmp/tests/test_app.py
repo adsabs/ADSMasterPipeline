@@ -471,7 +471,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 1: Record with no bib_data (should be excluded)
         record_no_data = {
             'bibcode': '2023NoData..1..1A',
-            'bib_data': None,
+            'has_bib_data': False,
             'status': 'success'
         }
         self.assertFalse(self.app.should_include_in_sitemap(record_no_data), 
@@ -480,7 +480,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 2: Record with empty bib_data string (should be excluded)
         record_empty_data = {
             'bibcode': '2023Empty..1..1A',
-            'bib_data': '',
+            'has_bib_data': False,
             'status': 'success'
         }
         self.assertFalse(self.app.should_include_in_sitemap(record_empty_data), 
@@ -489,7 +489,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 3: Record with solr-failed status (should be excluded)
         record_solr_failed = {
             'bibcode': '2023Failed..1..1A',
-            'bib_data': '{"title": "Test"}',
+            'has_bib_data': True,
             'status': 'solr-failed'
         }
         self.assertFalse(self.app.should_include_in_sitemap(record_solr_failed), 
@@ -498,7 +498,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 4: Record with retrying status (should be excluded)
         record_retrying = {
             'bibcode': '2023Retrying..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': 'retrying'
         }
         self.assertFalse(self.app.should_include_in_sitemap(record_retrying), 
@@ -507,7 +507,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 5: Record with None status (should be included)
         record_none_status = {
             'bibcode': '2023NoneStatus..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': None
         }
         self.assertTrue(self.app.should_include_in_sitemap(record_none_status), 
@@ -516,7 +516,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 6: Record with success status (should be included)
         record_success = {
             'bibcode': '2023Success..1..1A',
-            'bib_data': '{"title": "Test"}',
+            'has_bib_data': True,
             'status': 'success',
             'bib_data_updated': base_time - timedelta(days=1)
         }
@@ -526,7 +526,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 7: Record with metrics-failed status (should be included - not SOLR-related)
         record_metrics_failed = {
             'bibcode': '2023MetricsFailed..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': 'metrics-failed'
         }
         self.assertTrue(self.app.should_include_in_sitemap(record_metrics_failed), 
@@ -535,7 +535,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 8: Record with links-failed status (should be included - not SOLR-related)
         record_links_failed = {
             'bibcode': '2023LinksFailed..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': 'links-failed'
         }
         self.assertTrue(self.app.should_include_in_sitemap(record_links_failed), 
@@ -544,7 +544,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 9: Record with None status and no solr_processed (should be included - not yet processed)
         record_not_processed = {
             'bibcode': '2023NotProcessed..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': None,
             'solr_processed': None
         }
@@ -554,7 +554,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 10: Record with recent solr_processed (should be included)
         record_recent_solr = {
             'bibcode': '2023Recent..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': 'success',
             'bib_data_updated': base_time - timedelta(days=1),
             'solr_processed': base_time  # More recent than bib_data_updated
@@ -565,7 +565,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 11: Record with stale solr_processed (should be included with warning)
         record_stale_solr = {
             'bibcode': '2023Stale..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': 'success',
             'bib_data_updated': base_time,
             'solr_processed': base_time - timedelta(days=6)  # 6 days stale (> 5 day threshold)
@@ -576,7 +576,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 12: Record with exactly 5+ days staleness (boundary condition)
         record_boundary = {
             'bibcode': '2023Boundary..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': 'success',
             'bib_data_updated': base_time,
             'solr_processed': base_time - timedelta(days=5, seconds=1)  # Just over 5 days
@@ -587,7 +587,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 13: Record with no timestamps (should be included)
         record_no_timestamps = {
             'bibcode': '2023NoTimestamps..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': 'success',
             'bib_data_updated': None,
             'solr_processed': None
@@ -598,7 +598,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 14: Record with bib_data_updated but no solr_processed (should be included)
         record_no_solr_time = {
             'bibcode': '2023NoSolrTime..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': 'success',
             'bib_data_updated': base_time,
             'solr_processed': None
@@ -609,7 +609,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 15: Record with solr_processed but no bib_data_updated (should be included)
         record_no_bib_time = {
             'bibcode': '2023NoBibTime..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': 'success',
             'bib_data_updated': None,
             'solr_processed': base_time
@@ -620,7 +620,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 16: Record with very fresh processing (should be included)
         record_fresh = {
             'bibcode': '2023Fresh..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': 'success',
             'bib_data_updated': base_time - timedelta(minutes=30),
             'solr_processed': base_time
@@ -631,7 +631,7 @@ class TestAdsOrcidCelery(unittest.TestCase):
         # Test 17: Record with moderate lag (2 days, should be included without warning)
         record_moderate_lag = {
             'bibcode': '2023Moderate..1..1A',
-            'bib_data': {'title': 'Test'},
+            'has_bib_data': True,
             'status': 'success',
             'bib_data_updated': base_time - timedelta(days=2),
             'solr_processed': base_time

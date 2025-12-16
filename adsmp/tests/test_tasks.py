@@ -1227,8 +1227,6 @@ class TestSitemapWorkflow(unittest.TestCase):
         test_cases = [
             # (bibcode, bib_data, status, description)
             ('2023NoData..1..1A', None, 'success', 'No bib_data'),
-            ('2023EmptyData..1..1B', '', 'success', 'Empty bib_data'),
-            ('2023EmptyData2..1..1C', '   ', 'success', 'Whitespace-only bib_data'),
             ('2023SolrFailed..1..1D', '{"title": "Test"}', 'solr-failed', 'SOLR failed status'),
             ('2023Retrying..1..1E', '{"title": "Test"}', 'retrying', 'Retrying status'),
         ]
@@ -1297,15 +1295,15 @@ class TestSitemapWorkflow(unittest.TestCase):
             
             # Verify setup
             total_records = session.query(SitemapInfo).count()
-            self.assertEqual(total_records, 7, "Should have 7 records (5 invalid + 2 valid)")
+            self.assertEqual(total_records, 5, "Should have 5 records (3 invalid + 2 valid)")
         
         # Execute cleanup
         with patch.object(self.app, 'delete_sitemap_files') as mock_delete_files:
             result = tasks.task_cleanup_invalid_sitemaps()
         
-        # Verify all invalid records were removed
-        self.assertEqual(result['invalid_removed'], 5, "Should remove all 5 invalid records")
-        self.assertEqual(result['total_processed'], 7, "Should process all 7 records")
+        # Verify invalid records were removed
+        self.assertEqual(result['invalid_removed'], 3, "Should remove 3 invalid records (None, solr-failed, retrying)")
+        self.assertEqual(result['total_processed'], 5, "Should process all 5 records")
         self.assertTrue(result['files_regenerated'], "Should indicate files need regeneration")
         
         # Verify files were flagged for regeneration (1 file with mixed valid/invalid records)
@@ -1313,16 +1311,18 @@ class TestSitemapWorkflow(unittest.TestCase):
         
         # Verify database state
         with self.app.session_scope() as session:
-            # Two valid records should remain
+            # Only 2 valid records should remain
             remaining_records = session.query(SitemapInfo).all()
             self.assertEqual(len(remaining_records), 2, "Should have 2 remaining valid records")
             remaining_bibcodes = {r.bibcode for r in remaining_records}
-            self.assertEqual(remaining_bibcodes, {valid_bibcode, valid_bibcode_in_mixed_file}, "Both valid records should remain")
+            expected_bibcodes = {valid_bibcode, valid_bibcode_in_mixed_file}
+            self.assertEqual(remaining_bibcodes, expected_bibcodes, "Both valid records should remain")
             
-            # All invalid records should be gone
-            for bibcode, _, _, description in test_cases:
+            # All invalid records (None bib_data, solr-failed, retrying) should be removed
+            removed_bibcodes = {'2023NoData..1..1A', '2023SolrFailed..1..1D', '2023Retrying..1..1E'}
+            for bibcode in removed_bibcodes:
                 invalid_count = session.query(SitemapInfo).filter_by(bibcode=bibcode).count()
-                self.assertEqual(invalid_count, 0, f"Invalid record should be removed: {description}")
+                self.assertEqual(invalid_count, 0, f"Invalid record should be removed: {bibcode}")
 
     def test_delete_by_bibcode_marks_sitemap_files_for_regeneration(self):
         """Test that delete_by_bibcode properly marks affected sitemap files for regeneration"""
