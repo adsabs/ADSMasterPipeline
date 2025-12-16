@@ -428,7 +428,7 @@ def task_cleanup_invalid_sitemaps():
                 session.query(
                     SitemapInfo.id,  
                     SitemapInfo.bibcode,
-                    Records.bib_data,
+                    (Records.bib_data.isnot(None)).label('has_bib_data'),
                     Records.bib_data_updated,
                     Records.solr_processed,
                     Records.status
@@ -457,7 +457,7 @@ def task_cleanup_invalid_sitemaps():
                 # Convert to dict for should_include_in_sitemap function
                 record_dict = {
                     'bibcode': record_data.bibcode,
-                    'bib_data': record_data.bib_data,
+                    'bib_data': record_data.has_bib_data,
                     'bib_data_updated': record_data.bib_data_updated,
                     'solr_processed': record_data.solr_processed,
                     'status': record_data.status
