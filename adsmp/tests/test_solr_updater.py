@@ -109,6 +109,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "page": ["283"],
                 # u'property': [u'OPENACCESS', u'ADS_OPENACCESS', u'ARTICLE', u'NOT REFEREED'],
                 "pub": "Astronomical Data Analysis Software and Systems XII",
+                "pub_abbrev": "ADASS XII",
                 "pub_raw": "Astronomical Data Analysis Software and Systems XII ASP Conference Series, Vol. 295, 2003 H. E. Payne, R. I. Jedrzejewski, and R. N. Hook, eds., p.283",
                 "pubdate": "2003-00-00",
                 "title": ["Chandra Data Archive Download and Usage Database"],
@@ -503,6 +504,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "property": ["OPENACCESS", "ADS_OPENACCESS", "ARTICLE", "NOT REFEREED"],
                 "pub": "Astronomical Data Analysis Software and Systems XII",
                 "pub_raw": "Astronomical Data Analysis Software and Systems XII ASP Conference Series, Vol. 295, 2003 H. E. Payne, R. I. Jedrzejewski, and R. N. Hook, eds., p.283",
+                "pub_abbrev": "ADASS XII",
                 "pubdate": "2003-00-00",
                 "read_count": 0,
                 "reference": [
