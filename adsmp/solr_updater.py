@@ -179,6 +179,7 @@ def extract_classifications_pipeline(db_classifications, solrdoc):
     """retrieve expected classifier collections
 
     classifications is a solr virtual field so it should never be set"""
+    db_classifications = [element for element in db_classifications if element] # remove empty strings
     if db_classifications is None or len(db_classifications) == 0:
         return {"database" : solrdoc.get("database", None)}
 
