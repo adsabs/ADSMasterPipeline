@@ -890,7 +890,7 @@ class ADSMasterPipelineCelery(ADSCelery):
         3. If processed, processing isn't too stale
         
         Args:
-            record: Dictionary with record data including bib_data, status, timestamps
+            record: Dictionary with record data including has_bib_data, status, timestamps
             
         Returns:
             bool: True if record should be included in sitemap, False otherwise
@@ -899,14 +899,14 @@ class ADSMasterPipelineCelery(ADSCelery):
         
         # Extract values from record dictionary
         bibcode = record.get('bibcode', None)
-        bib_data = record.get('bib_data', None)
+        has_bib_data = record.get('has_bib_data', None)
         bib_data_updated = record.get('bib_data_updated')
         solr_processed = record.get('solr_processed') 
         status = record.get('status')
         
         # Must have bibliographic data
-        if not bib_data or not bibcode or (isinstance(bib_data, str) and not bib_data.strip()):
-            self.logger.debug('Excluding %s from sitemap: No bibcode or bib_data', bibcode)
+        if not has_bib_data or not bibcode:
+            self.logger.debug('Excluding %s from sitemap: No bibcode or has_bib_data is False', bibcode)
             return False
         
          # Exclude if SOLR failed or if record is being retried (previously failed)
@@ -955,6 +955,8 @@ class ADSMasterPipelineCelery(ADSCelery):
             record_data = {}
             for field in (load_only or ['id', 'bibcode', 'bib_data', 'bib_data_updated', 'solr_processed', 'status']):
                 record_data[field] = getattr(record, field, None)
+            # Add has_bib_data boolean for sitemap checks
+            record_data['has_bib_data'] = bool(record_data.get('bib_data'))
             records_dict[record.bibcode] = record_data
         
         return records_dict
