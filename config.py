@@ -31,7 +31,7 @@ METRICS_SQLALCHEMY_URL = None  #'postgres://postgres@localhost:5432/metrics'
 # db connection to the Boost Pipeline database where boost factors are stored
 # if not present, boost factors will not be included in SOLR documents
 BOOST_SQLALCHEMY_URL = None  #'postgresql://boost_user:boost_pass@localhost:5432/boost_db'
-
+IGNORED_BOOST_PAYLOAD_TYPES = ["boost"]
 
 # Main Solr
 # SOLR_URLS = ["http://localhost:9983/solr/collection1/update"]
