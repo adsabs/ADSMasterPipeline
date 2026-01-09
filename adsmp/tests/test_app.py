@@ -39,15 +39,14 @@ class TestAdsOrcidCelery(unittest.TestCase):
         unittest.TestCase.setUp(self)
         
         proj_home = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
-        with mock.patch.dict('os.environ', {'ADS_API_TOKEN': 'fixme'}):
-            self.app = app.ADSMasterPipelineCelery('test', local_config=\
-                {
-                'SQLALCHEMY_URL': 'sqlite:///',
-                'METRICS_SQLALCHEMY_URL': 'postgresql://postgres@127.0.0.1:15678/test',
-                'SQLALCHEMY_ECHO': False,
-                'PROJ_HOME' : proj_home,
-                'TEST_DIR' : os.path.join(proj_home, 'adsmp/tests'),
-                })
+        self.app = app.ADSMasterPipelineCelery('test', local_config=\
+            {
+            'SQLALCHEMY_URL': 'sqlite:///',
+            'METRICS_SQLALCHEMY_URL': 'postgresql://postgres@127.0.0.1:15678/test',
+            'SQLALCHEMY_ECHO': False,
+            'PROJ_HOME' : proj_home,
+            'TEST_DIR' : os.path.join(proj_home, 'adsmp/tests'),
+            })
         Base.metadata.bind = self.app._session.get_bind()
         Base.metadata.create_all()
         
@@ -60,6 +59,88 @@ class TestAdsOrcidCelery(unittest.TestCase):
         MetricsBase.metadata.drop_all()
         self.app.close_app()
 
+    @classmethod
+    def get_document_data(cls):
+        """
+        Shared fixture-like method for test data.
+        """
+        return {
+            "bibcode": "2013MNRAS.435.1904M",
+                "identifier": ["2013MNRAS.435.1904M", "2013arXiv1307.6556M", "2013MNRAS.tmp.2206M", "10.1093/mnras/stt1379", "arXiv:1307.6556"],
+                "links": {
+                    "DOI": ["10.1093/mnras/stt1379"],
+                    "ARXIV": ["arXiv:1307.6556"],
+                    "DATA": {
+                        "Chandra": {
+                            "url": ["https://cda.harvard.edu/chaser?obsid=494,493,5290,5289,5286,5288,5287,3666,6162,6159,6163,6160,6161,13413,12028,10900,10898,13416,13414,12029,12027,13417,10899,13412,10901,13415,12026"],
+                            "title": ["Chandra Data Archive ObsIds 494, 493, 5290, 5289, 5286, 5288, 5287, 3666, 6162, 6159, 6163, 6160, 6161, 13413, 12028, 10900, 10898, 13416, 13414, 12029, 12027, 13417, 10899, 13412, 10901, 13415, 12026"],
+                            "count": 1
+                        },
+                        "ESA": {
+                            "url": ["http://archives.esac.esa.int/ehst/#bibcode=2013MNRAS.435.1904M"],
+                            "title": ["European HST References (EHST)"],
+                            "count": 1
+                        },
+                        "HEASARC": {
+                            "url": ["http://heasarc.gsfc.nasa.gov/cgi-bin/W3Browse/biblink.pl?code=2013MNRAS.435.1904M"],
+                            "title": ["http://heasarc.gsfc.nasa.gov/cgi-bin/W3Browse/biblink.pl?code=2013MNRAS.435.1904M"],
+                            "count": 1
+                        },
+                        "Herschel": {
+                            "url": ["http://archives.esac.esa.int/hsa/whsa/?ACTION=PUBLICATION&ID=2013MNRAS.435.1904M"],
+                            "title": ["http://archives.esac.esa.int/hsa/whsa/?ACTION=PUBLICATION&ID=2013MNRAS.435.1904M"],
+                            "count": 1
+                        },
+                        "MAST": {
+                            "url": ["https://archive.stsci.edu/mastbibref.php?bibcode=2013MNRAS.435.1904M"],
+                            "title": ["MAST References (HST, EUVE, GALEX)"],
+                            "count": 3
+                        },
+                        "NED": {
+                            "url": ["https://$NED$/uri/NED::InRefcode/2013MNRAS.435.1904M"],
+                            "title": ["NED Objects (1)"],
+                            "count": 1
+                        },
+                        "SIMBAD": {
+                            "url": ["http://$SIMBAD$/simbo.pl?bibcode=2013MNRAS.435.1904M"],
+                            "title": ["SIMBAD Objects (30)"],
+                            "count": 30
+                        },
+                        "XMM": {
+                            "url": ["https://nxsa.esac.esa.int/nxsa-web/#bibcode=2013MNRAS.435.1904M"],
+                            "title": ["XMM data (1 observations)"],
+                            "count": 1
+                        }
+                    },
+                    "ESOURCE": {
+                        "EPRINT_HTML": {
+                            "url": ["https://arxiv.org/abs/1307.6556"],
+                            "title": ['']
+                        },
+                        "EPRINT_PDF": {
+                            "url": ["https://arxiv.org/pdf/1307.6556"],
+                            "title": ['']
+                        },
+                        "PUB_HTML": {
+                            "url": ["https://doi.org/10.1093%2Fmnras%2Fstt1379"],
+                            "title": ['']
+                        },
+                        "PUB_PDF": {
+                            "url": ["https://academic.oup.com/mnras/pdf-lookup/doi/10.1093/mnras/stt1379"],
+                            "title": ['']
+                        }
+                    },
+                    "CITATIONS": True,
+                    "REFERENCES": True,
+                    "ABSTRACT": True,
+                    "METRICS": False,
+                    "TOC": True, 
+                    "COREAD": True, 
+                    "GRAPHICS": True,
+                    "OPENURL": True,
+            }
+        }
+        
     def test_app(self):
         assert self.app._config.get('SQLALCHEMY_URL') == 'sqlite:///'
         assert self.app.conf.get('SQLALCHEMY_URL') == 'sqlite:///'
@@ -303,19 +384,22 @@ class TestAdsOrcidCelery(unittest.TestCase):
         """
         m = mock.Mock()
         m.status_code = 200
+
+        document_data = self.get_document_data() 
         # init database so timestamps and checksum can be updated
-        nonbib_data = {'data_links_rows': [{'baz': 0}]}
-        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
+        self.app.update_storage('2013MNRAS.435.1904M', 'nonbib_data', document_data['links'])
+
         with mock.patch('requests.put', return_value=m) as p:
-            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
+
+            
             checksum = 'thechecksum'
-            self.app.index_datalinks([datalinks_payload], [checksum])
-            p.assert_called_with('http://localhost:8080/update',
-                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
+            self.app.index_datalinks([document_data], [checksum])
+            p.assert_called_with('http://localhost:8080/update_new',
+                                 data=json.dumps([document_data]),
                                  headers={'Authorization': 'Bearer fixme'})
             self.assertEqual(p.call_count, 1)
             # verify database updated
-            rec = self.app.get_record(bibcode='linkstest')
+            rec = self.app.get_record(bibcode='2013MNRAS.435.1904M')
             self.assertEqual(rec['datalinks_checksum'], 'thechecksum')
             self.assertEqual(rec['solr_checksum'], None)
             self.assertEqual(rec['metrics_checksum'], None)
@@ -328,18 +412,21 @@ class TestAdsOrcidCelery(unittest.TestCase):
         """
         m = mock.Mock()
         m.status_code = 500
+
+        document_data = self.get_document_data()
+        
         # init database so timestamps and checksum can be updated
-        nonbib_data = {'data_links_rows': [{'baz': 0}]}
-        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
+        self.app.update_storage('2013MNRAS.435.1904M', 'nonbib_data', document_data['links'])
+
         with mock.patch('requests.put', return_value=m) as p:
-            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
+                
             checksum = 'thechecksum'
-            self.app.index_datalinks([datalinks_payload], [checksum])
-            p.assert_called_with('http://localhost:8080/update',
-                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
+            self.app.index_datalinks([document_data], [checksum])
+            p.assert_called_with('http://localhost:8080/update_new',
+                                 data=json.dumps([document_data]),
                                  headers={'Authorization': 'Bearer fixme'})
 
-            rec = self.app.get_record(bibcode='linkstest')
+            rec = self.app.get_record(bibcode='2013MNRAS.435.1904M')
             self.assertEqual(p.call_count, 2)
             self.assertEqual(rec['datalinks_checksum'], None)
             self.assertEqual(rec['solr_checksum'], None)
@@ -349,23 +436,26 @@ class TestAdsOrcidCelery(unittest.TestCase):
 
     def test_index_datalinks_service_only_batch_failure(self):
         # init database so timestamps and checksum can be updated
-        nonbib_data = {'data_links_rows': [{'baz': 0}]}
-        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
+
+        document_data = self.get_document_data()
+        self.app.update_storage('2013MNRAS.435.1904M', 'nonbib_data', document_data['links'])
         with mock.patch('requests.put') as p:
             bad = mock.Mock()
             bad.status_code = 500
+
             good = mock.Mock()
             good.status_code = 200
+
             p.side_effect = [bad, good]
-            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
+
             checksum = 'thechecksum'
-            self.app.index_datalinks([datalinks_payload], [checksum])
-            p.assert_called_with('http://localhost:8080/update',
-                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
+            self.app.index_datalinks([document_data], [checksum])
+            p.assert_called_with('http://localhost:8080/update_new',
+                                 data=json.dumps([document_data]),
                                  headers={'Authorization': 'Bearer fixme'})
             self.assertEqual(p.call_count, 2)
             # verify database updated
-            rec = self.app.get_record(bibcode='linkstest')
+            rec = self.app.get_record(bibcode='2013MNRAS.435.1904M')
             self.assertEqual(rec['datalinks_checksum'], 'thechecksum')
             self.assertEqual(rec['solr_checksum'], None)
             self.assertEqual(rec['metrics_checksum'], None)
@@ -376,17 +466,17 @@ class TestAdsOrcidCelery(unittest.TestCase):
         m = mock.Mock()
         m.status_code = 200
         # init database so timestamps and checksum can be updated
-        nonbib_data = {'data_links_rows': [{'baz': 0}]}
-        self.app.update_storage('linkstest', 'nonbib_data', nonbib_data)
+        document_data = self.get_document_data()
+
+        self.app.update_storage('2013MNRAS.435.1904M', 'nonbib_data', document_data['links'])
         with mock.patch('requests.put', return_value=m) as p:
-            datalinks_payload = {u'bibcode': u'linkstest', u'data_links_rows': [{u'baz': 0}]}
             checksum = 'thechecksum'
-            self.app.index_datalinks([datalinks_payload], [checksum], update_processed=False)
-            p.assert_called_with('http://localhost:8080/update',
-                                 data=json.dumps([{'bibcode': 'linkstest', 'data_links_rows': [{'baz': 0}]}]),
+            self.app.index_datalinks([document_data], [checksum], update_processed=False)
+            p.assert_called_with('http://localhost:8080/update_new',
+                                 data=json.dumps([document_data]),
                                  headers={'Authorization': 'Bearer fixme'})
             # verify database updated
-            rec = self.app.get_record(bibcode='linkstest')
+            rec = self.app.get_record(bibcode='2013MNRAS.435.1904M')
             self.assertEqual(rec['datalinks_checksum'], None)
             self.assertEqual(rec['solr_checksum'], None)
             self.assertEqual(rec['metrics_checksum'], None)
@@ -411,33 +501,188 @@ class TestAdsOrcidCelery(unittest.TestCase):
         self.assertTrue(self.app.get_changelog('abc'), [{'target': u'def', 'key': u'abc'}])
 
     def test_generate_links_for_resolver(self):
-        only_nonbib = {'bibcode': 'asdf',
+        only_nonbib = {'bibcode': '2025arXiv250220510L',
                        'nonbib_data': 
-                       {'data_links_rows': [{'url': ['http://arxiv.org/abs/1902.09522']}]}}
+                       {'data_links_rows': [
+                            {
+                            "link_type": "DATA",
+                            "link_sub_type": "SIMBAD",
+                            "url": [
+                                "https://simbad.u-strasbg.fr/simbad/sim-id?Ident=2025XYZ1234"
+                            ],
+                            "title": [
+                                "SIMBAD Astronomical Database"
+                            ],
+                            "item_count": 1
+                            },
+                            {
+                            "link_type": "DATA",
+                            "link_sub_type": "VIZIER",
+                            "url": [
+                                "https://vizier.u-strasbg.fr/viz-bin/VizieR",
+                                "https://vizier.u-strasbg.fr/viz-bin/VizieR-2"
+                            ],
+                            "title": [
+                                "VizieR Catalog Entry 1",
+                                "VizieR Catalog Entry 2"
+                            ],
+                            "item_count": 2
+                            },
+                            {
+                            "link_type": "ESOURCE",
+                            "link_sub_type": "PUBLISHER",
+                            "url": [
+                                "https://journalpublisher.com/paper/2025XYZ1234"
+                            ],
+                            "title": [
+                                "Published Paper"
+                            ],
+                            "item_count": 1
+                            },
+                            {
+                            "link_type": "PRESENTATION",
+                            "url": [
+                                "https://conference.org/2025/presentation123",
+                                "https://conference.org/2025/slides123"
+                            ],
+                            "title": [
+                                "Conference Presentation",
+                                "Presentation Slides"
+                            ],
+                            "item_count": 2
+                            },
+                            {
+                            "link_type": "LIBRARYCATALOG",
+                            "url": [
+                                "https://library.university.edu/catalog/2025XYZ1234"
+                            ],
+                            "title": [
+                                "University Library Catalog Entry"
+                            ],
+                            "item_count": 1
+                            }
+                        ]
+                        }
+                        }
+
         links = self.app.generate_links_for_resolver(only_nonbib)
         self.assertEqual(only_nonbib['bibcode'], links['bibcode'])
-        self.assertEqual(only_nonbib['nonbib_data']['data_links_rows'], links['data_links_rows'])
+
+        expected_links = {'bibcode': '2025arXiv250220510L', 
+                          'links': {'ARXIV': [], 'DOI': [], 
+                                    'DATA': {'SIMBAD': {'url': ['https://simbad.u-strasbg.fr/simbad/sim-id?Ident=2025XYZ1234'], 'title': ['SIMBAD Astronomical Database'], 'count': 1}, 
+                                             'VIZIER': {'url': ['https://vizier.u-strasbg.fr/viz-bin/VizieR', 'https://vizier.u-strasbg.fr/viz-bin/VizieR-2'], 'title': ['VizieR Catalog Entry 1', 'VizieR Catalog Entry 2'], 'count': 2}}, 
+                                    'ESOURCE': {'PUBLISHER': {'url': ['https://journalpublisher.com/paper/2025XYZ1234'], 'title': ['Published Paper'], 'count': 1}}, 
+                                    'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 
+                                    'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
+                                    'LIBRARYCATALOG': {'url': ['https://library.university.edu/catalog/2025XYZ1234'], 'title': ['University Library Catalog Entry'], 'count': 1}, 
+                                    'PRESENTATION': {'url': ['https://conference.org/2025/presentation123', 'https://conference.org/2025/slides123'], 'title': ['Conference Presentation', 'Presentation Slides'], 'count': 2}, 
+                                    'ABSTRACT': True, 
+                                    'CITATIONS': False, 
+                                    'GRAPHICS': True, 
+                                    'METRICS': False, 
+                                    'OPENURL': True, 
+                                    'REFERENCES': False, 
+                                    'TOC': False, 
+                                    'COREAD': True}, 
+                            'identifier': ['2025arXiv250220510L']}
+        self.assertEqual(links, expected_links)
 
         only_bib = {'bibcode': 'asdf',
                     'bib_data':
                     {'links_data': ['{"access": "open", "instances": "", "title": "", "type": "preprint", "url": "http://arxiv.org/abs/1902.09522"}']}}
         links = self.app.generate_links_for_resolver(only_bib)
         self.assertEqual(only_bib['bibcode'], links['bibcode'])
-        first = links['data_links_rows'][0]
-        self.assertEqual('http://arxiv.org/abs/1902.09522', first['url'][0])
-        self.assertEqual('ESOURCE', first['link_type'])
-        self.assertEqual('EPRINT_HTML', first['link_sub_type'])
-        self.assertEqual([''], first['title'])
-        self.assertEqual(0, first['item_count'])
 
+        expected_links = {'bibcode': 'asdf', 'links': {'ARXIV': [], 'DOI': [], 'DATA': {}, 
+                                                       'ESOURCE': {'EPRINT_HTML': {'url': ['http://arxiv.org/abs/1902.09522'], 
+                                                                                   'title': [''], 'count': 0}, 
+                                                                    'EPRINT_PDF': {'url': ['http://arxiv.org/pdf/1902.09522'], 'title': [''], 'count': 0}}, 
+                                                        'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
+                                                        'LIBRARYCATALOG': {'url': [], 'title': [], 'count': 0}, 
+                                                        'PRESENTATION': {'url': [], 'title': [], 'count': 0}, 
+                                                        'ABSTRACT': True, 
+                                                        'CITATIONS': False, 
+                                                        'GRAPHICS': True, 
+                                                        'METRICS': False, 
+                                                        'OPENURL': True, 
+                                                        'REFERENCES': False, 
+                                                        'TOC': False, 
+                                                        'COREAD': True}, 
+                                                        'identifier': ['asdf']}
+
+        self.assertEqual(links, expected_links)
+
+        # Nonbib in old format and bib. Nonbib should be preferred
         bib_and_nonbib = {'bibcode': 'asdf',
                           'bib_data':
-                          {'links_data': ['{"access": "open", "instances": "", "title": "", "type": "preprint", "url": "http://arxiv.org/abs/1902.09522zz"}']},
+                          {'links_data': ['{"access": "open", "instances": "", "title": "", "type": "preprint", "url": "http://shouldnotbeused"}']},
                           'nonbib_data':
-                          {'data_links_rows': [{'url': ['http://arxiv.org/abs/1902.09522']}]}}
+                          {'data_links_rows': [{'url': ['http://returnthis'], 'link_type': 'ESOURCE', 'link_sub_type': 'EPRINT_HTML'}]}}
         links = self.app.generate_links_for_resolver(bib_and_nonbib)
-        self.assertEqual(only_nonbib['bibcode'], links['bibcode'])
-        self.assertEqual(only_nonbib['nonbib_data']['data_links_rows'], links['data_links_rows'])
+        
+        self.assertEqual(bib_and_nonbib['bibcode'], links['bibcode'])
+        expected_links = {'bibcode': 'asdf', 
+                          'links': {'ARXIV': [], 'DOI': [], 'DATA': {}, 
+                                    'ESOURCE': {'EPRINT_HTML': {'url': ['http://returnthis'], 'title': [], 'count': 0}}, 
+                                    'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
+                                    'LIBRARYCATALOG': {'url': [], 'title': [], 'count': 0}, 'PRESENTATION': {'url': [], 'title': [], 'count': 0}, 
+                                    'ABSTRACT': True, 
+                                    'CITATIONS': False, 
+                                    'GRAPHICS': True, 
+                                    'METRICS': False, 
+                                    'OPENURL': True, 
+                                    'REFERENCES': False, 
+                                    'TOC': False, 
+                                    'COREAD': True}, 
+                                    'identifier': ['asdf']}
+        self.assertEqual(links, expected_links)
+
+        # Nonbib in new format and bib. Nonbib should be preferred
+        bib_and_nonbib = {'bibcode': 'asdf',
+                          'bib_data':
+                          {'links_data': ['{"access": "open", "instances": "", "title": "", "type": "preprint", "url": "http://shouldnotbeused"}']},
+                          'nonbib_data':
+                          {'links': {'ARXIV': [], 'DOI': [], 'DATA': {}, 
+                                     'ESOURCE': {'EPRINT_HTML': {'url': ['http://returnthis'], 'title': [], 'count': 0}}, 
+                                     'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
+                                     'LIBRARYCATALOG': {'url': [], 'title': [], 'count': 0}, 'PRESENTATION': {'url': [], 'title': [], 'count': 0}, 
+                                     'ABSTRACT': False, 'CITATIONS': False, 'GRAPHICS': False, 'METRICS': False, 'OPENURL': False, 'REFERENCES': False, 'TOC': False, 'COREAD': False}}}
+        links = self.app.generate_links_for_resolver(bib_and_nonbib)
+
+        expected_links = {'bibcode': 'asdf', 'links': {'ARXIV': [], 
+                                                       'DOI': [], 'DATA': {}, 
+                                                       'ESOURCE': {'EPRINT_HTML': 
+                                                                   {'url': ['http://returnthis'], 'title': [], 'count': 0}}, 
+                                                                   'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 
+                                                                   'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
+                                                                   'LIBRARYCATALOG': {'url': [], 'title': [], 'count': 0}, 
+                                                                   'PRESENTATION': {'url': [], 'title': [], 'count': 0}, 'ABSTRACT': False, 'CITATIONS': False, 'GRAPHICS': True, 'METRICS': False, 'OPENURL': True, 'REFERENCES': False, 'TOC': False, 'COREAD': True}, 'identifier': ['asdf']}
+        
+
+        # Nonbib in new format and Nonbib in old format. This is a bug, but if it does happen, new format wins
+        bib_and_nonbib = {'bibcode': 'asdf',
+                          'bib_data':
+                          {'links_data': ['{"access": "open", "instances": "", "title": "", "type": "preprint", "url": "http://shouldnotbeused"}']},
+                          'nonbib_data':
+                          {'links': {'ARXIV': [], 'DOI': [], 'DATA': {}, 
+                                     'ESOURCE': {'EPRINT_HTML': {'url': ['http://returnthis'], 'title': [], 'count': 0}}, 
+                                     'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
+                                     'LIBRARYCATALOG': {'url': [], 'title': [], 'count': 0}, 'PRESENTATION': {'url': [], 'title': [], 'count': 0}, 
+                                     'ABSTRACT': False, 'CITATIONS': False, 'GRAPHICS': False, 'METRICS': False, 'OPENURL': False, 'REFERENCES': False, 'TOC': False, 'COREAD': False}}, 
+                            'data_links_rows': [{'url': ['http://returnthis'], 'link_type': 'ESOURCE', 'link_sub_type': 'EPRINT_HTML'}]}
+        links = self.app.generate_links_for_resolver(bib_and_nonbib)
+
+        expected_links = {'bibcode': 'asdf', 'links': {'ARXIV': [], 
+                                                       'DOI': [], 'DATA': {}, 
+                                                       'ESOURCE': {'EPRINT_HTML': 
+                                                                   {'url': ['http://returnthis'], 'title': [], 'count': 0}}, 
+                                                                   'ASSOCIATED': {'url': [], 'title': [], 'count': 0}, 
+                                                                   'INSPIRE': {'url': [], 'title': [], 'count': 0}, 
+                                                                   'LIBRARYCATALOG': {'url': [], 'title': [], 'count': 0}, 
+                                                                   'PRESENTATION': {'url': [], 'title': [], 'count': 0}, 'ABSTRACT': True, 'CITATIONS': False, 'GRAPHICS': True, 'METRICS': False, 'OPENURL': True, 'REFERENCES': False, 'TOC': False, 'COREAD': True}, 'identifier': ['asdf']}
+        
+        self.assertEqual(links, expected_links)
 
         # string in database
         only_bib = {'bibcode': 'asdf',
@@ -445,11 +690,12 @@ class TestAdsOrcidCelery(unittest.TestCase):
                     {'links_data': [u'{"access": "open", "instances": "", "title": "", "type": "preprint", "url": "http://arxiv.org/abs/1902.09522"}']}}
         links = self.app.generate_links_for_resolver(only_bib)
         self.assertEqual(only_bib['bibcode'], links['bibcode'])
-        first = links['data_links_rows'][0]
-        self.assertEqual('http://arxiv.org/abs/1902.09522', first['url'][0])
-        self.assertEqual('ESOURCE', first['link_type'])
-        self.assertEqual('EPRINT_HTML', first['link_sub_type'])
+        eprint_html = links['links']['ESOURCE']['EPRINT_HTML']
+        self.assertEqual('http://arxiv.org/abs/1902.09522', eprint_html['url'][0])
+        self.assertEqual([''], eprint_html['title'])
+        self.assertEqual(0, eprint_html['count']) 
         
+       
         # bad string in database
         with mock.patch.object(self.app.logger, 'error') as m:
             only_bib = {'bibcode': 'testbib',

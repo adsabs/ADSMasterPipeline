@@ -447,62 +447,42 @@ def transform_json_record(db_record):
     timestamps = []
     for k, v in DB_COLUMN_DESTINATIONS:
         ts = db_record.get(k + "_updated", None)
-        if ts:
-            ts = time.mktime(ts.timetuple())
-        else:
-            ts = sys.maxsize  # default to use option without timestamp
+        ts = time.mktime(ts.timetuple()) if ts else sys.maxsize # default to use option without timestamp
         timestamps.append((k, v, ts))
     timestamps.sort(key=lambda x: x[2])
 
     # merge data based on timestamps
-    for field, target, _ in timestamps:
+    for field, target, ts in timestamps: # fields = {bib_data, nonbib_data, orcid_claims, metrics ..}
         if db_record.get(field, None):
-            if target:
+            if not target: # bib_data
+                out.update(db_record.get(field))
+            else:
                 if callable(target):
-                    x = target(
+                    enriched_data = target(
                         db_record.get(field), out
                     )  # in the interest of speed, don't create copy of out
-                    if x:
-                        out.update(x)
-                else:
-                    out[target] = db_record.get(field)
-            else:
-                if target is None:
-                    continue
-
-                out.update(db_record.get(field))
-
-        elif field.startswith("#"):
+                    if enriched_data:
+                        out.update(enriched_data)
+                else: # id 
+                    out[target] = db_record.get(field)      
+        elif field.startswith("#"): # timestamps
             if callable(target):
-                x = target(
+                enriched_data = target(
                     db_record, out
                 )  # in the interest of speed, don't create copy of out
-                if x:
-                    out.update(x)
+                if enriched_data:
+                    out.update(enriched_data)
 
-    # override temporal priority for links data
-    if (
-        db_record.get("bib_data", None)
-        and db_record.get("nonbib_data", None)
-        and db_record["bib_data"].get("links_data", None)
-        and db_record["nonbib_data"].get("links_data", None)
+    # If both bib and nonbib pipeline provided links data
+    # use nonbib data even if it is older
+    if all(
+        db_record.get(key, {}).get("links_data")
+        for key in ("bib_data", "nonbib_data")
     ):
-        # here if both bib and nonbib pipeline provided links data
-        # use nonbib data even if it is older
+        logger.debug('Both bib and nonbib data provided links data. Using nonbib data: {}'.format(db_record["nonbib_data"]["links_data"]))
         out["links_data"] = db_record["nonbib_data"]["links_data"]
-
-    # override temporal priority for bibgroup and bibgroup_facet, prefer nonbib
-    if db_record.get("nonbib_data", None) and db_record["nonbib_data"].get(
-        "bibgroup", None
-    ):
-        out["bibgroup"] = db_record["nonbib_data"]["bibgroup"]
-    if db_record.get("nonbib_data", None) and db_record["nonbib_data"].get(
-        "bibgroup_facet", None
-    ):
-        out["bibgroup_facet"] = db_record["nonbib_data"]["bibgroup_facet"]
-    
-    # if only bib data is available, use it to compute property
-    if db_record.get("nonbib_data", None) is None and db_record.get("bib_data", None):
+    elif db_record.get("bib_data", {}).get("links_data"):
+        logger.debug('Only bib data provided links data. Using bib data: {}'.format(db_record["bib_data"]["links_data"]))
         links_data = db_record["bib_data"].get("links_data", None)
         if links_data:
             try:
@@ -529,6 +509,18 @@ def transform_json_record(db_record):
                         db_record["bibcode"], type(links_data), links_data
                     )
                 )
+
+    # override temporal priority for bibgroup and bibgroup_facet, prefer nonbib
+    if db_record.get("nonbib_data", None) and db_record["nonbib_data"].get(
+        "bibgroup", None
+    ):
+        out["bibgroup"] = db_record["nonbib_data"]["bibgroup"]
+    if db_record.get("nonbib_data", None) and db_record["nonbib_data"].get(
+        "bibgroup_facet", None
+    ):
+        out["bibgroup_facet"] = db_record["nonbib_data"]["bibgroup_facet"]
+    
+    
     boost_columns = ['doctype_boost', 'recency_boost', 'boost_factor', 'astronomy_final_boost', 'physics_final_boost', \
         'earth_science_final_boost', 'planetary_science_final_boost', 'heliophysics_final_boost', 'general_final_boost']
     
@@ -563,5 +555,5 @@ def transform_json_record(db_record):
                 if any([char.isalnum() for char in out_field]):
                     has.append(field)
         out["has"] = has
-
+    logger.debug('Out: {}'.format(out))
     return out
