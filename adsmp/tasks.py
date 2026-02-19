@@ -157,6 +157,7 @@ def task_update_record(msg):
                 record = app.update_storage(m.bibcode, 'nonbib_data', m.toJSON())
                 if record:
                     logger.debug('Saved record from list: %s', record)
+                    _generate_boost_request(m, type)
         elif type == 'metrics_records':
             for m in msg.metrics_records:
                 m = Msg(m, None, None)
@@ -164,6 +165,7 @@ def task_update_record(msg):
                 record = app.update_storage(m.bibcode, 'metrics', m.toJSON(including_default_value_fields=True))
                 if record:
                     logger.debug('Saved record from list: %s', record)
+                    _generate_boost_request(m, type)
         elif type == 'augment':
             bibcodes.append(msg.bibcode)
             record = app.update_storage(msg.bibcode, 'augment',
@@ -176,21 +178,24 @@ def task_update_record(msg):
             record = app.update_storage(msg.bibcode, type, msg.toJSON())
             if record:
                 logger.debug('Saved record: %s', record)
+                _generate_boost_request(msg, type)
             if type == 'metadata':
                 # with new bib data we request to augment the affiliation
                 # that pipeline will eventually respond with a msg to task_update_record
                 logger.debug('requesting affilation augmentation for %s', msg.bibcode)
                 app.request_aff_augment(msg.bibcode)
-        if record:                        
-            # Send payload to Boost pipeline
-            if type != 'boost' and not app._config.get('TESTING_MODE', False):
-                try:
-                    task_boost_request.apply_async(args=(msg.bibcode,))
-                except Exception as e:
-                    app.logger.exception('Error generating boost request message for bibcode %s: %s', msg.bibcode, e)
-
     else:
         logger.error('Received a message with unclear status: %s', msg)
+
+def _generate_boost_request(msg, msg_type):
+    # Send payload to Boost pipeline
+    if msg_type not in app._config.get('IGNORED_BOOST_PAYLOAD_TYPES', ['boost']) and not app._config.get('TESTING_MODE', False):
+        try:
+            task_boost_request.apply_async(args=(msg.bibcode,))
+        except Exception as e:
+            app.logger.exception('Error generating boost request message for bibcode %s: %s', msg.bibcode, e)
+    else:
+        app.logger.debug("Message for bibcode %s has type: %s, Skipping.".format(msg.bibcode, msg_type))
 
 @app.task(queue='update-scixid')
 def task_update_scixid(bibcodes, flag):
@@ -490,7 +495,7 @@ def task_cleanup_invalid_sitemaps():
                 session.query(
                     SitemapInfo.id,  
                     SitemapInfo.bibcode,
-                    Records.bib_data,
+                    (Records.bib_data.isnot(None)).label('has_bib_data'),
                     Records.bib_data_updated,
                     Records.solr_processed,
                     Records.status
@@ -519,7 +524,7 @@ def task_cleanup_invalid_sitemaps():
                 # Convert to dict for should_include_in_sitemap function
                 record_dict = {
                     'bibcode': record_data.bibcode,
-                    'bib_data': record_data.bib_data,
+                    'has_bib_data': record_data.has_bib_data,
                     'bib_data_updated': record_data.bib_data_updated,
                     'solr_processed': record_data.solr_processed,
                     'status': record_data.status
@@ -688,7 +693,7 @@ def task_manage_sitemap(bibcodes, action):
                         # Apply SOLR filtering - convert record to dict for should_include_in_sitemap
                         record_dict = {
                             'bibcode': record.bibcode,
-                            'bib_data': record.bib_data,
+                            'has_bib_data': bool(record.bib_data),
                             'bib_data_updated': record.bib_data_updated,
                             'solr_processed': record.solr_processed,
                             'status': record.status

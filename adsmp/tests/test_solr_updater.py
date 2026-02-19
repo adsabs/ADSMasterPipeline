@@ -109,6 +109,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "page": ["283"],
                 # u'property': [u'OPENACCESS', u'ADS_OPENACCESS', u'ARTICLE', u'NOT REFEREED'],
                 "pub": "Astronomical Data Analysis Software and Systems XII",
+                "pub_abbrev": "ADASS XII",
                 "pub_raw": "Astronomical Data Analysis Software and Systems XII ASP Conference Series, Vol. 295, 2003 H. E. Payne, R. I. Jedrzejewski, and R. N. Hook, eds., p.283",
                 "pubdate": "2003-00-00",
                 "title": ["Chandra Data Archive Download and Usage Database"],
@@ -128,7 +129,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "boost_factor": 0.5142857142857143,
                 "astronomy_final_boost": 0.5142857142857143,
                 "physics_final_boost": 0.5142857142857143,
-            }
+            },
         )
         self.app.update_storage(
             "bibcode",
@@ -367,8 +368,8 @@ class TestSolrUpdater(unittest.TestCase):
                 "volume",
             ],
         )
-        self.assertEqual(x["scix_id"], "scix:70FP-S952-V74A")
-        self.assertEqual(round(x["doctype_boost"],3),0.857)
+        self.assertEqual(x["scix_id"], "scix:2VD6-M93T-HEGP")
+        self.assertEqual(round(x["doctype_boost"], 3), 0.857)
 
         self.app.update_storage(
             "bibcode",
@@ -382,13 +383,13 @@ class TestSolrUpdater(unittest.TestCase):
                 "boost_factor": 0.5142857142857143,
                 "astronomy_final_boost": 0.5142857142857143,
                 "physics_final_boost": 0.5142857142857143,
-            }
+            },
         )
         rec = self.app.get_record("bibcode")
         x = solr_updater.transform_json_record(rec)
-        self.assertEqual(x["scix_id"], "scix:70FP-S952-V74A")
-        self.assertEqual(round(x["doctype_boost"],3),0.857)
-        self.assertEqual(round(x["astronomy_final_boost"],3), 0.514)
+        self.assertEqual(x["scix_id"], "scix:2VD6-M93T-HEGP")
+        self.assertEqual(round(x["doctype_boost"], 3), 0.857)
+        self.assertEqual(round(x["astronomy_final_boost"], 3), 0.514)
 
         self.app.update_storage(
             "bibcode",
@@ -503,6 +504,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "property": ["OPENACCESS", "ADS_OPENACCESS", "ARTICLE", "NOT REFEREED"],
                 "pub": "Astronomical Data Analysis Software and Systems XII",
                 "pub_raw": "Astronomical Data Analysis Software and Systems XII ASP Conference Series, Vol. 295, 2003 H. E. Payne, R. I. Jedrzejewski, and R. N. Hook, eds., p.283",
+                "pub_abbrev": "ADASS XII",
                 "pubdate": "2003-00-00",
                 "read_count": 0,
                 "reference": [
@@ -609,8 +611,7 @@ class TestSolrUpdater(unittest.TestCase):
                 "volume",
             ],
         )
-        self.assertEqual(round(x["doctype_boost"],3),0.857)
-
+        self.assertEqual(round(x["doctype_boost"], 3), 0.857)
 
     def test_links_data_merge(self):
         # links_data only from bib
