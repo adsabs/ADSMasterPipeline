@@ -545,7 +545,6 @@ def transform_json_record(db_record):
 
         # Merge sources and remove duplicates
         out["database"]= list(set(db_record["classifications"] + db_record["bib_data"].get("database", [])))
-        
         logger.info("Classifications superseded bib_data for bibcode: %s", out["bibcode"])
     
     out["scix_id"] = None
