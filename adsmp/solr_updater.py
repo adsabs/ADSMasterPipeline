@@ -179,7 +179,7 @@ def extract_classifications_pipeline(db_classifications, solrdoc):
     """retrieve expected classifier collections
 
     classifications is a solr virtual field so it should never be set"""
-    db_classifications = [element for element in db_classifications if element] # remove empty strings
+    db_classifications = [element for element in (db_classifications or []) if element] # remove empty strings
     if db_classifications is None or len(db_classifications) == 0:
         return {"database" : solrdoc.get("database", None)}
 
@@ -535,6 +535,17 @@ def transform_json_record(db_record):
     for column in boost_columns:
         if column not in out.keys():
             out[column] = 1
+
+    # Override temporal priority for classifications data
+    # if both bib_data and classifications provide values
+    # prefer classifications data, even when bib_data is newer
+    if (db_record.get("bib_data") 
+        and db_record.get("classifications") 
+        and db_record["bib_data"].get("database")):
+
+        # Merge sources and remove duplicates
+        out["database"]= list(set(db_record["classifications"] + db_record["bib_data"].get("database", [])))
+        logger.debug("Classifications superseded bib_data for bibcode: %s", out["bibcode"])
     
     out["scix_id"] = None
     if db_record.get("scix_id", None):
