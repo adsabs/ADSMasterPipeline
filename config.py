@@ -56,6 +56,7 @@ SITEMAP_INDEX_GENERATION_DELAY = 15 # This is the delay between the generation o
 # Sitemap index generation retry configuration
 # Default 100 retries = ~90 minutes. Increase for larger databases (e.g., 300 for ~5.5 hours)
 SITEMAP_INDEX_MAX_RETRIES = 100
+SITEMAP_MAX_BIBCODES_PER_MESSAGE = 100000
 
 
 # Site configurations for multi-site sitemap generation

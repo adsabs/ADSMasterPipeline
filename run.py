@@ -558,73 +558,92 @@ def cleanup_invalid_sitemaps():
 def update_sitemaps_auto(days_back=1):
     """
     Automatically find and process records needing sitemap updates
-    
+
     Finds records that need sitemap updates based on:
     1. Records where bib_data_updated >= cutoff_date
     2. Records where solr_processed >= cutoff_date
-    
+
     Uses UNION to combine both criteria, ensuring records that are either
     newly ingested OR recently processed by SOLR are included in sitemaps.
-    
+
     Excludes records that already have update_flag=True to avoid duplicate work,
     as those records are already scheduled for sitemap regeneration.
-    
+
+    Splits large bibcode lists into batches to avoid exceeding RabbitMQ's
+    message size limit (default max 256 MB).
+
     Args:
         days_back: Number of days to look back for changes
-    
+
     Returns:
-        str: Workflow task ID (chains manage + file generation), or None if no updates needed
+        str: Workflow task ID for the final chain, or None if no updates needed
     """
-    
-    
+
+
     logger.info('Starting automatic sitemap update (looking back %d days)', days_back)
-    
+
     # Calculate cutoff date
     cutoff_date = get_date() - timedelta(days=days_back)
     logger.info('Looking for records updated since: %s', cutoff_date.isoformat())
-    
+
     bibcodes_to_update = []
-    
+
     with app.session_scope() as session:
         # Find all records that were updated recently OR had SOLR processing recently
         # Exclude records that already have update_flag=True to avoid duplicate work
-        
+
         # Subquery to get bibcodes that already have update_flag=True
         already_flagged_subquery = session.query(SitemapInfo.bibcode).filter(
             SitemapInfo.update_flag.is_(True)
         )
-        
+
         bib_data_query = session.query(Records.bibcode).filter(
             Records.bib_data_updated >= cutoff_date,
             ~Records.bibcode.in_(already_flagged_subquery)
         )
-        
+
         solr_processed_query = session.query(Records.bibcode).filter(
             Records.solr_processed >= cutoff_date,
             ~Records.bibcode.in_(already_flagged_subquery)
         )
-        
+
         # UNION automatically eliminates duplicates
         combined_query = bib_data_query.union(solr_processed_query)
-        
+
         bibcodes_to_update = [record.bibcode for record in combined_query]
-        
+
         logger.info('Found %d records updated since %s (excluding already flagged)', len(bibcodes_to_update), cutoff_date.isoformat())
-    
+
     if not bibcodes_to_update:
         logger.info('No records need sitemap updates')
         return None
-    
+
     logger.info('Submitting %d records for sitemap processing', len(bibcodes_to_update))
-    
-    # Chain tasks: manage sitemap → update files
+
+    max_bibcodes_per_message = config.get('SITEMAP_MAX_BIBCODES_PER_MESSAGE', 100000)
+
+    if len(bibcodes_to_update) <= max_bibcodes_per_message:
+        workflow = chain(
+            tasks.task_manage_sitemap.s(bibcodes_to_update, 'add'),
+            tasks.task_update_sitemap_files.s()
+        )
+        result = workflow.apply_async(priority=0)
+        logger.info('Submitted sitemap workflow: %s', result.id)
+        return result.id
+
+    batches = [bibcodes_to_update[i:i + max_bibcodes_per_message]
+               for i in range(0, len(bibcodes_to_update), max_bibcodes_per_message)]
+    logger.info('Splitting %d bibcodes into %d batches of up to %d',
+                len(bibcodes_to_update), len(batches), max_bibcodes_per_message)
+
+    manage_tasks = [tasks.task_manage_sitemap.si(batch, 'add') for batch in batches]
     workflow = chain(
-        tasks.task_manage_sitemap.s(bibcodes_to_update, 'add'),
-        tasks.task_update_sitemap_files.s()
+        *manage_tasks,
+        tasks.task_update_sitemap_files.si()
     )
     result = workflow.apply_async(priority=0)
-    logger.info('Submitted sitemap workflow: %s', result.id)
-    
+    logger.info('Submitted sitemap workflow (%d batches): %s', len(batches), result.id)
+
     return result.id
 
 
