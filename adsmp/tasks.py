@@ -237,13 +237,14 @@ def task_update_scixid(bibcodes, flag):
             if flag == 'update':
                 if not r.scix_id:
                     if r.bib_data:
-                        r.scix_id = "scix:" + app.generate_scix_id(r.bib_data)
+                        attempted_scix_id = "scix:" + app.generate_scix_id(r.bib_data)
+                        r.scix_id = attempted_scix_id
                         try:
                             session.commit()
                             logger.debug('Bibcode %s has been assigned a new scix id: %s', bibcode, r.scix_id)
-                        except exc.IntegrityError:
-                            logger.exception('error in app.update_storage while updating database for bibcode %s', bibcode)
+                        except exc.IntegrityError as e:
                             session.rollback()
+                            app.log_scix_id_collision(bibcode, attempted_scix_id, e)
                     else:
                         r.scix_id = None
                         session.commit()
@@ -254,13 +255,14 @@ def task_update_scixid(bibcodes, flag):
             if flag == 'force': 
                 if r.bib_data:
                     old_id = r.scix_id
-                    r.scix_id = "scix:" + app.generate_scix_id(r.bib_data)
+                    attempted_scix_id = "scix:" + app.generate_scix_id(r.bib_data)
+                    r.scix_id = attempted_scix_id
                     try:
                         session.commit()
                         logger.debug('Bibcode %s scix_id changed from %s to %s', bibcode, old_id, r.scix_id)
-                    except exc.IntegrityError:
-                        logger.exception('error in app.update_storage while updating database for bibcode %s', bibcode)
+                    except exc.IntegrityError as e:
                         session.rollback()
+                        app.log_scix_id_collision(bibcode, attempted_scix_id, e)
                 else:
                     r.scix_id = None
                     session.commit()
