@@ -175,16 +175,23 @@ class ADSMasterPipelineCelery(ADSCelery):
             session.add(ChangeLog(key=bibcode, type=type, oldvalue=oldval))
             record.updated = now
             out = record.toJSON()                      
+            attempted_scix_id = None
             try:
                 session.flush()
                 if not record.scix_id and record.bib_data:
-                    record.scix_id = "scix:" + str(self.generate_scix_id(record.bib_data))
+                    attempted_scix_id = "scix:" + str(self.generate_scix_id(record.bib_data))
+                    record.scix_id = attempted_scix_id
                     out = record.toJSON()
                 session.commit()
                 return out
-            except exc.IntegrityError:
-                self.logger.exception('error in app.update_storage while updating database for bibcode {}, type {}'.format(bibcode, type))
+            except exc.IntegrityError as e:
                 session.rollback()
+                if attempted_scix_id:
+                    self.log_scix_id_collision(bibcode, attempted_scix_id, e)
+                else:
+                    self.logger.exception(
+                        'IntegrityError in update_storage for bibcode %s, type %s '
+                        '(not a scix_id collision)', bibcode, type)
                 raise
 
     def generate_scix_id(self, bib_data):
@@ -193,6 +200,39 @@ class ADSMasterPipelineCelery(ADSCelery):
         else:
             user_fields = None
         return scix_id.generate_scix_id(bib_data, user_fields = user_fields) 
+
+    def log_scix_id_collision(self, bibcode, attempted_scix_id, original_error=None):
+        """Query the database for the record that already holds attempted_scix_id
+        and log both the existing and new (bibcode, scix_id) pairs so curators
+        can identify which records are clashing."""
+        try:
+            with self.session_scope() as session:
+                existing = session.query(Records).filter_by(scix_id=attempted_scix_id).first()
+                if existing:
+                    self.logger.error(
+                        'SciX ID collision detected: '
+                        'existing record in DB: (bibcode=%s, scix_id=%s), '
+                        'new record that failed to commit: (bibcode=%s, scix_id=%s). '
+                        'Original error: %s',
+                        existing.bibcode, existing.scix_id,
+                        bibcode, attempted_scix_id,
+                        original_error
+                    )
+                else:
+                    self.logger.error(
+                        'IntegrityError for bibcode %s with scix_id %s, '
+                        'but no existing record found with that scix_id '
+                        '(possible race condition or other constraint violation). '
+                        'Original error: %s',
+                        bibcode, attempted_scix_id,
+                        original_error
+                    )
+        except Exception:
+            self.logger.exception(
+                'Failed to query database for scix_id collision details '
+                '(bibcode=%s, attempted_scix_id=%s)',
+                bibcode, attempted_scix_id
+            )
 
     def delete_by_bibcode(self, bibcode):
         with self.session_scope() as session:
