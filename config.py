@@ -151,3 +151,9 @@ SCIX_ID_GENERATION_FIELDS = [
     "doctype",
     "pub_raw"
 ]
+
+EXPOSE_COLLECTIONS = [
+    "astrophysics",
+    "heliophysics",
+    "planetary"
+    ]
