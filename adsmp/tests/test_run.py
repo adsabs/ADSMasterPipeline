@@ -610,6 +610,117 @@ class TestSitemapCommandLine(unittest.TestCase):
                         expected_bibcodes = ['2023ApJ...123..791E', '2023ApJ...123..789C', '2023ApJ...123..790D']
                         self.assertEqual(set(captured_bibcodes), set(expected_bibcodes))
 
+    def test_update_sitemaps_auto_batching_large_bibcode_list(self):
+        """Test that large bibcode lists are split into batches to avoid RabbitMQ message size limits"""
+
+        with self.app.session_scope() as session:
+            for i in range(5):
+                session.add(Records(
+                    bibcode=f'2023ApJ...123..{450+i:03d}A',
+                    bib_data='{"title": "Test"}',
+                    bib_data_updated=get_date() - timedelta(hours=6),
+                    solr_processed=get_date() - timedelta(days=5),
+                    status='success'
+                ))
+            session.commit()
+
+        with patch('run.chain') as mock_chain:
+            with patch('run.app', self.app):
+                with patch('run.config', {'SITEMAP_MAX_BIBCODES_PER_MESSAGE': 2}):
+                    mock_workflow = Mock()
+                    mock_result = Mock()
+                    mock_result.id = 'test-batched-workflow'
+                    mock_workflow.apply_async.return_value = mock_result
+                    mock_chain.return_value = mock_workflow
+
+                    captured_si_calls = []
+                    def capture_si(bibcodes, action):
+                        captured_si_calls.append((list(bibcodes), action))
+                        return Mock()
+
+                    with patch.object(tasks.task_manage_sitemap, 'si', side_effect=capture_si):
+                        with patch.object(tasks.task_update_sitemap_files, 'si', return_value=Mock()):
+                            workflow_id = update_sitemaps_auto(days_back=1)
+
+                            self.assertEqual(workflow_id, 'test-batched-workflow')
+                            self.assertEqual(len(captured_si_calls), 3)
+                            for _, action in captured_si_calls:
+                                self.assertEqual(action, 'add')
+                            self.assertTrue(all(len(batch) <= 2 for batch, _ in captured_si_calls))
+                            total = sum(len(batch) for batch, _ in captured_si_calls)
+                            self.assertEqual(total, 5)
+
+    def test_update_sitemaps_auto_small_list_no_batching(self):
+        """Test that small bibcode lists use a single chain without batching"""
+
+        with self.app.session_scope() as session:
+            session.add(Records(
+                bibcode='2023ApJ...123..456A',
+                bib_data='{"title": "Test"}',
+                bib_data_updated=get_date() - timedelta(hours=6),
+                status='success'
+            ))
+            session.commit()
+
+        with patch('run.chain') as mock_chain:
+            with patch('run.app', self.app):
+                with patch('run.config', {'SITEMAP_MAX_BIBCODES_PER_MESSAGE': 100000}):
+                    mock_workflow = Mock()
+                    mock_result = Mock()
+                    mock_result.id = 'test-single-workflow'
+                    mock_workflow.apply_async.return_value = mock_result
+                    mock_chain.return_value = mock_workflow
+
+                    s_called = []
+                    def capture_s(bibcodes, action):
+                        s_called.append((list(bibcodes), action))
+                        return Mock()
+
+                    with patch.object(tasks.task_manage_sitemap, 's', side_effect=capture_s):
+                        with patch.object(tasks.task_update_sitemap_files, 's', return_value=Mock()):
+                            workflow_id = update_sitemaps_auto(days_back=1)
+
+                            self.assertEqual(workflow_id, 'test-single-workflow')
+                            self.assertEqual(len(s_called), 1)
+                            self.assertEqual(s_called[0][0], ['2023ApJ...123..456A'])
+                            chain_args = mock_chain.call_args[0]
+                            self.assertEqual(len(chain_args), 2)
+
+    def test_update_sitemaps_auto_at_batch_boundary(self):
+        """Test that exactly max_bibcodes_per_message uses single chain (no batching)"""
+
+        with self.app.session_scope() as session:
+            for i in range(3):
+                session.add(Records(
+                    bibcode=f'2023ApJ...123..{460+i:03d}A',
+                    bib_data='{"title": "Test"}',
+                    bib_data_updated=get_date() - timedelta(hours=6),
+                    status='success'
+                ))
+            session.commit()
+
+        with patch('run.chain') as mock_chain:
+            with patch('run.app', self.app):
+                with patch('run.config', {'SITEMAP_MAX_BIBCODES_PER_MESSAGE': 3}):
+                    mock_workflow = Mock()
+                    mock_result = Mock()
+                    mock_result.id = 'test-boundary-workflow'
+                    mock_workflow.apply_async.return_value = mock_result
+                    mock_chain.return_value = mock_workflow
+
+                    s_called = []
+                    def capture_s(bibcodes, action):
+                        s_called.append(len(bibcodes))
+                        return Mock()
+
+                    with patch.object(tasks.task_manage_sitemap, 's', side_effect=capture_s):
+                        with patch.object(tasks.task_update_sitemap_files, 's', return_value=Mock()):
+                            workflow_id = update_sitemaps_auto(days_back=1)
+
+                            self.assertEqual(workflow_id, 'test-boundary-workflow')
+                            self.assertEqual(len(s_called), 1)
+                            self.assertEqual(s_called[0], 3)
+
     def test_cleanup_invalid_sitemaps(self):
         """Test cleanup_invalid_sitemaps function"""
         
