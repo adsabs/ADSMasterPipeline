@@ -44,7 +44,6 @@ def extract_data_pipeline(data, solrdoc):
 
     planetary_feature = []
     planetary_feature_id = []
-    planetary_feature_facet_hier_2level = []
     planetary_feature_facet_hier_3level = []
 
     featurelist = [
@@ -63,13 +62,9 @@ def extract_data_pipeline(data, solrdoc):
         planetary_feature.append("/".join([planet, feature, feature_name]))
         planetary_feature_id.append(id_no)
         planetary_feature_facet_hier_3level.extend(generate_hier_facet(planet, feature, feature_name))
-        if feature.lower() in featurelist:
-            feature_name = " ".join([feature, feature_name])
-        planetary_feature_facet_hier_2level.extend(generate_hier_facet(planet, feature_name))
 
     uat = []
     uat_id = []
-    uat_facet_hier = []
 
     for x in data.get("uat", []):
         uat_info = x.split("/")
@@ -77,7 +72,6 @@ def extract_data_pipeline(data, solrdoc):
         uat_no = uat_info[-1]
         uat.append("/".join(uat_keywords))
         uat_id.append(uat_no)
-        uat_facet_hier.extend(generate_hier_facet(*uat_keywords))
 
     simbid = []
     simbtype = []
@@ -130,11 +124,9 @@ def extract_data_pipeline(data, solrdoc):
         property=data.get("property", []),
         planetary_feature=planetary_feature,
         planetary_feature_id=planetary_feature_id,
-        planetary_feature_facet_hier_2level=planetary_feature_facet_hier_2level,
         planetary_feature_facet_hier_3level=planetary_feature_facet_hier_3level,
         uat=uat,
         uat_id=uat_id,
-        uat_facet_hier=uat_facet_hier,
         grant=grant,
         grant_facet_hier=grant_facet_hier,
         simbid=simbid,
