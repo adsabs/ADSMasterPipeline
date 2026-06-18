@@ -748,6 +748,7 @@ class TestSolrUpdater(unittest.TestCase):
         self.assertEqual(
             ["0/Mars", "1/Mars/Terra", "2/Mars/Terra/Terra Cimmeria"],
             d["planetary_feature_facet_hier_3level"],
+        )
 
 
         # Test one bibcode with multiple planetary_features assigned
