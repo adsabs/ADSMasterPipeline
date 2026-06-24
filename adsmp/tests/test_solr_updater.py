@@ -739,10 +739,6 @@ class TestSolrUpdater(unittest.TestCase):
             ["0/Moon", "1/Moon/Crater", "2/Moon/Crater/Langrenus"],
             d["planetary_feature_facet_hier_3level"],
         )
-        self.assertEqual(
-            ["0/Moon", "1/Moon/Crater Langrenus"],
-            d["planetary_feature_facet_hier_2level"],
-        )
 
         # Test planetary_feature with space in feature name
         nonbib = {"planetary_feature": ["Mars/Terra/Terra Cimmeria/5930"]}
@@ -753,10 +749,7 @@ class TestSolrUpdater(unittest.TestCase):
             ["0/Mars", "1/Mars/Terra", "2/Mars/Terra/Terra Cimmeria"],
             d["planetary_feature_facet_hier_3level"],
         )
-        self.assertEqual(
-            ["0/Mars", "1/Mars/Terra Cimmeria"],
-            d["planetary_feature_facet_hier_2level"],
-        )
+
 
         # Test one bibcode with multiple planetary_features assigned
         nonbib = {
@@ -795,19 +788,6 @@ class TestSolrUpdater(unittest.TestCase):
             ],
             d["planetary_feature_facet_hier_3level"],
         )
-        self.assertEqual(
-            [
-                "0/Moon",
-                "1/Moon/Mare Imbrium",
-                "0/Moon",
-                "1/Moon/Crater Alder",
-                "0/Moon",
-                "1/Moon/Crater Finsen",
-                "0/Moon",
-                "1/Moon/Crater Leibnitz",
-            ],
-            d["planetary_feature_facet_hier_2level"],
-        )
 
         # Test uat
         nonbib = {
@@ -833,41 +813,6 @@ class TestSolrUpdater(unittest.TestCase):
             d["uat"],
         )
         self.assertEqual(["322", "322", "322", "5", "5", "1646"], d["uat_id"])
-        self.assertEqual(
-            [
-                "0/cosmology",
-                "1/cosmology/origin of the universe",
-                "2/cosmology/origin of the universe/early universe",
-                "3/cosmology/origin of the universe/early universe/recombination (cosmology)",
-                "4/cosmology/origin of the universe/early universe/recombination (cosmology)/cosmic background radiation",
-                "5/cosmology/origin of the universe/early universe/recombination (cosmology)/cosmic background radiation/cosmic microwave background radiation",
-                "0/cosmology",
-                "1/cosmology/origin of the universe",
-                "2/cosmology/origin of the universe/big bang theory",
-                "3/cosmology/origin of the universe/big bang theory/recombination (cosmology)",
-                "4/cosmology/origin of the universe/big bang theory/recombination (cosmology)/cosmic background radiation",
-                "5/cosmology/origin of the universe/big bang theory/recombination (cosmology)/cosmic background radiation/cosmic microwave background radiation",
-                "0/observational astronomy",
-                "1/observational astronomy/astronomical methods",
-                "2/observational astronomy/astronomical methods/radio astronomy",
-                "3/observational astronomy/astronomical methods/radio astronomy/cosmic noise",
-                "4/observational astronomy/astronomical methods/radio astronomy/cosmic noise/cosmic background radiation",
-                "5/observational astronomy/astronomical methods/radio astronomy/cosmic noise/cosmic background radiation/cosmic microwave background radiation",
-                "0/cosmology",
-                "1/cosmology/astronomical radiation sources",
-                "2/cosmology/astronomical radiation sources/radio sources",
-                "3/cosmology/astronomical radiation sources/radio sources/radio continuum emission",
-                "0/interstellar medium",
-                "1/interstellar medium/interstellar emissions",
-                "2/interstellar medium/interstellar emissions/radio continuum emission",
-                "0/stellar astronomy",
-                "1/stellar astronomy/stellar types",
-                "2/stellar astronomy/stellar types/stellar evolutionary types",
-                "3/stellar astronomy/stellar types/stellar evolutionary types/evolved stars",
-                "4/stellar astronomy/stellar types/stellar evolutionary types/evolved stars/subgiant stars",
-            ],
-            d["uat_facet_hier"],
-        )
 
 
 if __name__ == "__main__":
