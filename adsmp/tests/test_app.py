@@ -530,6 +530,51 @@ class TestAdsOrcidCelery(unittest.TestCase):
             self.app.get_changelog("abc"), [{"target": "def", "key": "abc"}]
         )
 
+    def test_generate_boost_request_message(self):
+        self.app.update_storage(
+            "abc",
+            "bib_data",
+            {"bibcode": "abc", "hey": 1, "title": "Test record abc"},
+        )
+        self.app.update_storage(
+            "foo",
+            "bib_data",
+            {"bibcode": "foo", "hey": 1, "title": "Test record foo"},
+        )
+        self.app.update_storage("abc", "metrics", {"bibcode": "abc", "refereed": True})
+        self.app.update_storage("abc", "classify", ["astronomy"])
+
+        self.app._config["OUTPUT_TASKNAME_BOOST"] = None
+        self.assertEqual(self.app.generate_boost_request_message(["abc", "foo"]), 0)
+        self.app._config["OUTPUT_TASKNAME_BOOST"] = (
+            "adsboost.tasks.task_process_boost_request_message"
+        )
+        self.app._config["OUTPUT_CELERY_BROKER_BOOST"] = None
+        self.assertEqual(self.app.generate_boost_request_message(["abc", "foo"]), 0)
+
+        self.app._config["OUTPUT_CELERY_BROKER_BOOST"] = (
+            "pyamqp://guest:guest@localhost:5672/boost_pipeline"
+        )
+        with mock.patch.object(self.app, "forward_message") as forward:
+            sent = self.app.generate_boost_request_message(["abc", "foo"])
+        self.assertEqual(sent, 2)
+        self.assertEqual(forward.call_count, 1)
+        self.assertEqual(forward.call_args[1]["pipeline"], "boost")
+        message = forward.call_args[0][0]
+        self.assertEqual(
+            [entry.bibcode for entry in message.boost_requests], ["abc", "foo"]
+        )
+        self.assertEqual(
+            json.loads(message.boost_requests[0].metrics)["refereed"], True
+        )
+        self.assertEqual(list(message.boost_requests[0].classifications), ["astronomy"])
+
+        with mock.patch.object(self.app, "forward_message") as forward:
+            sent = self.app.generate_boost_request_message("abc")
+        self.assertEqual(sent, 1)
+        message = forward.call_args[0][0]
+        self.assertEqual(message.boost_requests[0].bibcode, "abc")
+
     def test_generate_links_for_resolver(self):
         only_nonbib = {
             "bibcode": "asdf",

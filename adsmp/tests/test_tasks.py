@@ -13,6 +13,8 @@ from unittest.mock import MagicMock, patch
 import mock
 from adsmsg import (
     AugmentAffiliationResponseRecord,
+    BoostResponseRecord,
+    BoostResponseRecordList,
     DenormalizedRecord,
     FulltextUpdate,
     MetricsRecord,
@@ -215,6 +217,110 @@ class TestWorkers(unittest.TestCase):
             recs.metrics_records.extend([rec._data, rec2._data])
             tasks.task_update_record(recs)
             self.assertFalse(next_task.called)
+
+    def test_task_update_record_boost(self):
+        with patch("adsmp.tasks.task_index_records.apply_async") as next_task:
+            tasks.task_update_record(
+                BoostResponseRecord(
+                    bibcode="2015ApJ...815..133S",
+                    boost_factor=0.5,
+                    refereed_boost=0.25,
+                )
+            )
+            self.assertEqual(
+                self.app.get_record(bibcode="2015ApJ...815..133S")["boost_factors"][
+                    "boost_factor"
+                ],
+                0.5,
+            )
+            self.assertEqual(
+                self.app.get_record(bibcode="2015ApJ...815..133S")["boost_factors"][
+                    "refereed_boost"
+                ],
+                0.25,
+            )
+            self.assertFalse(next_task.called)
+
+    def test_task_update_record_boost_list(self):
+        with patch("adsmp.tasks.task_index_records.apply_async") as next_task:
+            recs = BoostResponseRecordList()
+            boost_data = {
+                "bibcode": "2003ASPC..295..361M",
+                "boost_factor": 0.5,
+                "refereed_boost": 0.25,
+            }
+            boost_data2 = {"bibcode": "3003ASPC..295..361Z", "boost_factor": 0.25}
+            rec = BoostResponseRecord(**boost_data)
+            rec2 = BoostResponseRecord(**boost_data2)
+            recs.boost_responses.extend([rec._data, rec2._data])
+            tasks.task_update_record(recs)
+            self.assertEqual(
+                self.app.get_record(bibcode="2003ASPC..295..361M")["boost_factors"][
+                    "boost_factor"
+                ],
+                0.5,
+            )
+            self.assertEqual(
+                self.app.get_record(bibcode="3003ASPC..295..361Z")["boost_factors"][
+                    "boost_factor"
+                ],
+                0.25,
+            )
+            self.assertFalse(next_task.called)
+
+    def test_task_boost_request(self):
+        self.app.update_storage(
+            "2003ASPC..295..361M",
+            "bib_data",
+            {
+                "bibcode": "2003ASPC..295..361M",
+                "hey": 1,
+                "title": "Test record 2003ASPC..295..361M",
+            },
+        )
+        self.app.update_storage(
+            "3003ASPC..295..361Z",
+            "bib_data",
+            {
+                "bibcode": "3003ASPC..295..361Z",
+                "hey": 1,
+                "title": "Test record 3003ASPC..295..361Z",
+            },
+        )
+        self.app._config["OUTPUT_TASKNAME_BOOST"] = (
+            "adsboost.tasks.task_process_boost_request_message"
+        )
+        self.app._config["OUTPUT_CELERY_BROKER_BOOST"] = (
+            "pyamqp://guest:guest@localhost:5672/boost_pipeline"
+        )
+        with patch.object(self.app, "forward_message") as forward:
+            result = tasks.task_boost_request(
+                ["2003ASPC..295..361M", "3003ASPC..295..361Z"]
+            )
+        self.assertEqual(result, 2)
+        self.assertEqual(forward.call_count, 1)
+        self.assertEqual(forward.call_args[1]["pipeline"], "boost")
+        message = forward.call_args[0][0]
+        self.assertEqual(
+            [entry.bibcode for entry in message.boost_requests],
+            ["2003ASPC..295..361M", "3003ASPC..295..361Z"],
+        )
+
+        self.app.update_storage(
+            "2015ApJ...815..133S",
+            "bib_data",
+            {
+                "bibcode": "2015ApJ...815..133S",
+                "hey": 1,
+                "title": "Test record 2015ApJ...815..133S",
+            },
+        )
+        with patch.object(self.app, "forward_message") as forward:
+            result = tasks.task_boost_request("2015ApJ...815..133S")
+        self.assertEqual(result, 1)
+        self.assertEqual(forward.call_count, 1)
+        message = forward.call_args[0][0]
+        self.assertEqual(message.boost_requests[0].bibcode, "2015ApJ...815..133S")
 
     def _reset_checksum(self, bibcode):
         with self.app.session_scope() as session:
