@@ -1229,7 +1229,7 @@ def task_boost_request(bibcodes):
     # Pass the entire list to generate_boost_request_message for batch processing
     result = app.generate_boost_request_message(bibcodes)
     
-    logger.info('Boost requests for %s bibcode(s) sent to boost pipeline', len(bibcodes))
+    logger.debug('Boost requests for %s bibcode(s) sent to boost pipeline', len(bibcodes))
     
     return result
 

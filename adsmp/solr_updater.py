@@ -536,7 +536,8 @@ def transform_json_record(db_record):
         and db_record["bib_data"].get("database")):
 
         # Merge sources and remove duplicates
-        out["database"]= list(set(db_record["classifications"] + db_record["bib_data"].get("database", [])))
+        db_classifications = [element for element in (db_record.get("classifications") or []) if element in config.get("EXPOSE_COLLECTIONS")] # remove empty strings
+        out["database"]= list(set(db_classifications + db_record["bib_data"].get("database", [])))
         logger.debug("Classifications superseded bib_data for bibcode: %s", out["bibcode"])
     
     out["scix_id"] = None
