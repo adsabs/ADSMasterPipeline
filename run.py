@@ -951,8 +951,7 @@ if __name__ == '__main__':
         print('Running Boost Pipeline')
 
         if args.filename:
-            print('Processing boost requests from file')
-            logger.info('Processing boost requests from file')
+            logger.debug('Processing boost requests from file')
             bibcodes = []
             with open(args.filename, 'r') as f:
                 for line in f:
@@ -967,7 +966,6 @@ if __name__ == '__main__':
         else:
             print('Please provide bibcodes via --bibcodes or --filename')
         
-        print('Processing boost requests for following bibcodes: {}'.format(bibcodes))
         tasks.task_boost_request.delay(bibcodes)
         
     elif args.boost_all:
