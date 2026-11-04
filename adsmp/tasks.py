@@ -314,6 +314,36 @@ def task_index_data_links_resolver(links_data_records, links_data_records_checks
     app.index_datalinks(links_data_records, links_data_records_checksum, update_processed=update_processed)
 
 
+def _reconcile_author_num(metrics, bib_data):
+    """Replace the metrics author_num with the authoritative author_count from bib_data
+
+    The Data Pipeline takes author_num from a stale Classic facet file (defaulting
+    to 1 for records missing from it), while the Import Pipeline's author_count is
+    authoritative. Whenever author_count is present and greater than 0 it wins, and
+    the auth_norm values in rn_citation_data (1/author_num) are recomputed to match.
+    Must be applied before the metrics checksum is computed, so that a change in
+    bib_data also triggers a metrics update.
+    """
+    if not metrics or not bib_data:
+        return metrics
+    try:
+        author_count = int(bib_data.get('author_count', 0) or 0)
+    except (TypeError, ValueError):
+        return metrics
+    if author_count < 1:
+        return metrics
+
+    if metrics.get('author_num') != author_count:
+        logger.debug('Replacing author_num %s with author_count %s for %s',
+                     metrics.get('author_num'), author_count, metrics.get('bibcode'))
+        metrics['author_num'] = author_count
+    auth_norm = 1.0 / author_count
+    for citation in metrics.get('rn_citation_data') or []:
+        if isinstance(citation, dict) and 'auth_norm' in citation:
+            citation['auth_norm'] = auth_norm
+    return metrics
+
+
 def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True, update_links=True, commit=False,
                     ignore_checksums=False, solr_targets=None, update_processed=True, priority=0):
     """Receives bibcodes that need production store updated
@@ -352,9 +382,10 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
         # Optimization: load only fields that will be used
         fields = ['bibcode', 'augments_updated', 'bib_data_updated', 'fulltext_updated', 'metrics_updated', 'nonbib_data_updated', 'orcid_claims_updated', 'processed']
         if update_metrics:
-            fields += ['metrics', 'metrics_checksum']
+            fields += ['metrics', 'metrics_checksum', 'bib_data']
         if update_links:
             fields += ['nonbib_data', 'bib_data', 'datalinks_checksum']
+        fields = list(dict.fromkeys(fields))
 
     # check if we have complete record
     for bibcode in bibcodes:
@@ -410,7 +441,7 @@ def reindex_records(bibcodes, force=False, update_solr=True, update_metrics=True
 
             # get data for metrics
             if update_metrics:
-                metrics_payload = r.get('metrics', None)
+                metrics_payload = _reconcile_author_num(r.get('metrics', None), r.get('bib_data', None))
                 metrics_checksum = app.checksum(metrics_payload or '')
                 if (metrics_payload and ignore_checksums) or (metrics_payload and r.get('metrics_checksum', None) != metrics_checksum):
                     metrics_payload['bibcode'] = bibcode

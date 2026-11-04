@@ -492,7 +492,17 @@ def transform_json_record(db_record):
         "bibgroup_facet", None
     ):
         out["bibgroup_facet"] = db_record["nonbib_data"]["bibgroup_facet"]
-    
+
+    # override citation_count_norm: nonbib computes it with a stale author count,
+    # the author_count in bib data is authoritative (see tasks._reconcile_author_num)
+    if db_record.get("nonbib_data", None) and db_record.get("bib_data", None):
+        try:
+            author_count = int(db_record["bib_data"].get("author_count", 0) or 0)
+        except (TypeError, ValueError):
+            author_count = 0
+        if author_count > 0:
+            out["citation_count_norm"] = out.get("citation_count", 0) / float(author_count)
+
     # if only bib data is available, use it to compute property
     if db_record.get("nonbib_data", None) is None and db_record.get("bib_data", None):
         links_data = db_record["bib_data"].get("links_data", None)

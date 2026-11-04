@@ -706,6 +706,78 @@ class TestWorkers(unittest.TestCase):
             tasks.task_index_records(["noMetrics"], ignore_checksums=True)
             x.assert_not_called()
 
+    def test_reconcile_author_num(self):
+        """author_count from bib_data replaces author_num and auth_norm is recomputed"""
+        def metrics(author_num):
+            return {
+                "bibcode": "test",
+                "author_num": author_num,
+                "rn_citation_data": [
+                    {"bibcode": "a", "ref_norm": 0.5, "auth_norm": 1.0 / author_num},
+                    {"bibcode": "b", "ref_norm": 0.1, "auth_norm": 1.0 / author_num},
+                ],
+            }
+
+        # missing facet entry: author_num defaulted to 1
+        m = tasks._reconcile_author_num(metrics(1), {"author_count": 4})
+        self.assertEqual(m["author_num"], 4)
+        self.assertEqual([c["auth_norm"] for c in m["rn_citation_data"]], [0.25, 0.25])
+        self.assertEqual([c["ref_norm"] for c in m["rn_citation_data"]], [0.5, 0.1])
+
+        # outdated facet entry: authoritative variant also lowers the count
+        m = tasks._reconcile_author_num(metrics(5), {"author_count": 2})
+        self.assertEqual(m["author_num"], 2)
+        self.assertEqual([c["auth_norm"] for c in m["rn_citation_data"]], [0.5, 0.5])
+
+        # no usable author_count: metrics are left untouched
+        for bib_data in (None, {}, {"author_count": 0}, {"author_count": "x"}):
+            m = tasks._reconcile_author_num(metrics(3), bib_data)
+            self.assertEqual(m, metrics(3))
+
+        # no metrics
+        self.assertIsNone(tasks._reconcile_author_num(None, {"author_count": 2}))
+        self.assertEqual(tasks._reconcile_author_num({"author_num": 1}, {"author_count": 3}),
+                         {"author_num": 3})
+
+    def test_index_metrics_reconciles_author_num(self):
+        """metrics sent to the metrics db carry author_count, and the checksum reflects it"""
+        n = datetime.now()
+        future_year = n.year + 1
+        stale_metrics = {"bibcode": "authortest", "refereed": False, "author_num": 1,
+                         "rn_citation_data": [{"bibcode": "a", "ref_norm": 1.0, "auth_norm": 1.0}]}
+        stale_checksum = self.app.checksum(copy.deepcopy(stale_metrics))
+        with patch.object(
+            self.app,
+            "get_record",
+            return_value={
+                "bibcode": "authortest",
+                "bib_data": {"author_count": 3},
+                "bib_data_updated": get_date(),
+                "metrics": stale_metrics,
+                "processed": get_date(str(future_year)),
+                "metrics_checksum": stale_checksum,
+            },
+        ), patch(
+            "adsmp.tasks.task_index_metrics.apply_async",
+            wraps=unwind_task_index_metrics_apply_async,
+        ), patch.object(
+            self.app, "index_metrics", return_value=(["authortest"], None)
+        ) as u:
+            tasks.task_index_records(
+                ["authortest"],
+                update_solr=False,
+                update_metrics=True,
+                update_links=False,
+                force=True,
+                ignore_checksums=False,
+            )
+            # stored checksum was for the stale record, so the corrected one is sent
+            self.assertEqual(u.call_count, 1)
+            sent = u.call_args[0][0][0]
+            self.assertEqual(sent["author_num"], 3)
+            self.assertAlmostEqual(sent["rn_citation_data"][0]["auth_norm"], 1.0 / 3)
+            self.assertNotEqual(u.call_args[0][1][0], stale_checksum)
+
     def test_task_update_scixid(self):
         self.app.update_storage("bibcode", "bib_data", {"title": "abc test 123"})
         self.assertEqual(
