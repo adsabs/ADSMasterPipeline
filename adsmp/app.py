@@ -806,20 +806,9 @@ class ADSMasterPipelineCelery(ADSCelery):
 
     def _get_info_for_boost_entry(self, bibcode):
         rec = self.get_record(bibcode) or {}
-        metrics = {}
-        try:
-            metrics = self.get_metrics(bibcode) or {}
-        except Exception:
-            # get_metrics raises when METRICS_SQLALCHEMY_URL is not configured
-            pass
-
-        if not metrics:
-            # Fall back to the metrics stored on the record itself. The metrics
-            # pipeline writes these via task_update_record, and they carry the
-            # refereed flag that the Boost Pipeline needs; without this the
-            # refereed boost is always 0 wherever the metrics db is not set up.
+        if rec:
             metrics = rec.get('metrics') or {}
-
+ 
         # Collections come from the classifier and are stored on the record.
         # classifications is in Records._json_fields, so toJSON returns it
         # already decoded; guard anyway in case a raw string comes through.
