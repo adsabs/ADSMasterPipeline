@@ -461,7 +461,7 @@ class TestSolrUpdater(unittest.TestCase):
                     "2016ITED...63..197G",
                 ],
                 "citation_count": 6,
-                "citation_count_norm": 0.2,
+                "citation_count_norm": 1.5,  # citation_count / author_count, overrides nonbib's 0.2
                 "cite_read_boost": 0.1899999976158142,
                 "credit": [
                     "1981psd..book.....S",
@@ -698,6 +698,30 @@ class TestSolrUpdater(unittest.TestCase):
         }
         solr_record = solr_updater.transform_json_record(db_record)
         self.assertTrue("property" not in solr_record)
+
+    def test_citation_count_norm_override(self):
+        def db_record(bib_data, nonbib_data):
+            return {
+                "bibcode": "foo",
+                "bib_data": bib_data,
+                "bib_data_updated": datetime.now(),
+                "nonbib_data": nonbib_data,
+                "nonbib_data_updated": datetime.now(),
+            }
+
+        # stale nonbib value (author count defaulted to 1) is replaced
+        nonbib = {"citation_count": 6, "citation_count_norm": 6.0}
+        solr_record = solr_updater.transform_json_record(db_record({"author_count": 3}, nonbib))
+        self.assertEqual(solr_record["citation_count_norm"], 2.0)
+
+        # no usable author_count: nonbib value is kept
+        for bib_data in ({"title": ["t"]}, {"author_count": 0}, {"author_count": "x"}):
+            solr_record = solr_updater.transform_json_record(db_record(bib_data, nonbib))
+            self.assertEqual(solr_record["citation_count_norm"], 6.0)
+
+        # no nonbib data: no citation_count_norm is made up
+        solr_record = solr_updater.transform_json_record(db_record({"author_count": 3}, None))
+        self.assertTrue("citation_count_norm" not in solr_record)
 
     def test_extract_data_pipeline(self):
         nonbib = {
